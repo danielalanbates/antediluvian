@@ -6,10 +6,18 @@ class MainScene extends Phaser.Scene {
         super('MainScene');
     }
 
+    preload() {
+        // Ensure Phaser is ready
+    }
+
     create() {
         this.score = 0;
         this.gameSpeed = 200;
         this.isGameOver = false;
+
+        // Get dimensions
+        this.gameWidth = this.scale.width;
+        this.gameHeight = this.scale.height;
 
         // Create background gradient
         this.createBackground();
@@ -84,14 +92,14 @@ class MainScene extends Phaser.Scene {
     createVolcanoes() {
         const graphics = this.add.graphics();
         graphics.fillStyle(0x2a0a3e, 1);
-        
+
         // Draw volcano silhouettes
         for (let i = 0; i < 5; i++) {
-            const x = Phaser.Math.Between(0, this.scale.width);
-            const y = this.scale.height - 50;
+            const x = Phaser.Math.Between(0, this.gameWidth);
+            const y = this.gameHeight - 50;
             const width = Phaser.Math.Between(80, 150);
             const height = Phaser.Math.Between(100, 200);
-            
+
             graphics.beginPath();
             graphics.moveTo(x - width/2, y);
             graphics.lineTo(x, y - height);
@@ -103,12 +111,12 @@ class MainScene extends Phaser.Scene {
 
     createPlayer() {
         // Player is a prehistoric creature (simple shape for now)
-        const width = Math.min(60, this.scale.width * 0.15);
+        const width = Math.min(60, this.gameWidth * 0.15);
         const height = width;
 
         this.player = this.physics.add.circle(
-            this.scale.width / 2,
-            this.scale.height - 150,
+            this.gameWidth / 2,
+            this.gameHeight - 150,
             width / 2,
             0x00ff88
         );
@@ -125,7 +133,7 @@ class MainScene extends Phaser.Scene {
             0.3
         );
         playerGlow.setStrokeStyle(2, 0x00ff88);
-        
+
         // Store reference for updates
         this.playerGlow = playerGlow;
     }
@@ -163,7 +171,7 @@ class MainScene extends Phaser.Scene {
         if (this.meteors) {
             this.meteors.getChildren().forEach(meteor => {
                 meteor.y += 3;
-                if (meteor.y > this.scale.height) {
+                if (meteor.y > this.gameHeight) {
                     meteor.destroy();
                 }
             });
@@ -175,10 +183,10 @@ class MainScene extends Phaser.Scene {
 
         const types = ['meteor', 'lava', 'pterodactyl'];
         const type = Phaser.Math.RND.pick(types);
-        const x = Phaser.Math.Between(50, this.scale.width - 50);
+        const x = Phaser.Math.Between(50, this.gameWidth - 50);
 
         let obstacle;
-        
+
         switch(type) {
             case 'meteor':
                 obstacle = this.physics.add.circle(x, -50, 25, 0xff4400);
@@ -200,7 +208,7 @@ class MainScene extends Phaser.Scene {
     spawnPowerup() {
         if (this.isGameOver) return;
 
-        const x = Phaser.Math.Between(50, this.scale.width - 50);
+        const x = Phaser.Math.Between(50, this.gameWidth - 50);
         const types = [
             { color: 0xffff00, name: 'star' },
             { color: 0x0088ff, name: 'shield' },
@@ -214,7 +222,7 @@ class MainScene extends Phaser.Scene {
     }
 
     spawnBackgroundMeteor() {
-        const x = Phaser.Math.Between(0, this.scale.width);
+        const x = Phaser.Math.Between(0, this.gameWidth);
         const meteor = this.add.circle(x, -10, 3, 0xff6633, 0.6);
         this.meteors.add(meteor);
     }
