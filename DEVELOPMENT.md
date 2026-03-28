@@ -1,5 +1,27 @@
 # Antediluvian Development Log
 
+## 2026-03-28 - GitHub Pages Deployment
+
+### Deployment Status
+- ✅ Repository made public: `github.com/danielalanbates/antediluvian`
+- ✅ GitHub Pages enabled on `main` branch
+- ✅ CNAME configured: `antediluvian.batesai.org`
+- ✅ GitHub Actions workflow created for auto-deployment
+- ✅ Pages build successful (commit: c8dc4a9)
+- ⏳ DNS propagation pending for `antediluvian.batesai.org`
+
+### URLs
+- **GitHub:** https://github.com/danielalanbates/antediluvian
+- **GitHub Pages:** https://danielalanbates.github.io/antediluvian/
+- **Custom Domain:** http://antediluvian.batesai.org/ (DNS pending)
+
+### Notes
+The site is live on GitHub Pages. The custom domain `antediluvian.batesai.org` requires DNS configuration:
+- Add CNAME record: `antediluvian.batesai.org → danielalanbates.github.io`
+- DNS propagation can take 24-48 hours
+
+---
+
 ## 2026-03-28 - Initial Game Creation
 
 ### Created
