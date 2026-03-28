@@ -320,9 +320,19 @@ function restartGame() {
     }
 }
 
-// Event listeners
-document.getElementById('start-btn').addEventListener('click', startGame);
-document.getElementById('restart-btn').addEventListener('click', restartGame);
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const startBtn = document.getElementById('start-btn');
+    const restartBtn = document.getElementById('restart-btn');
+    
+    if (startBtn) {
+        startBtn.addEventListener('click', startGame);
+    }
+    
+    if (restartBtn) {
+        restartBtn.addEventListener('click', restartGame);
+    }
+});
 
 // Handle window resize
 window.addEventListener('resize', () => {
