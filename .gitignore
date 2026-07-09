@@ -1,6 +1,7 @@
+/target
+**/target
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 .DS_Store
-node_modules/
-*.log
-.env
-dist/
-build/
+node_modules

@@ -1,0 +1,17 @@
+[package]
+name = "antediluvia-client-bevy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The original half-baked single-player Bevy prototype ("we started in Rust").
+# Kept as the seed of the graphical client. NOT part of the default workspace
+# build (Bevy is a heavy compile) — build explicitly:
+#     cargo build -p antediluvia-client-bevy
+[[bin]]
+name = "antediluvia-client-bevy"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { version = "0.15", features = ["jpeg", "png"] }
+rand = "0.8"
