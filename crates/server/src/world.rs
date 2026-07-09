@@ -261,6 +261,13 @@ impl World {
             .filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
             .map(|e| (e.id, e.pos))
             .collect();
+        // Harvestable resource nodes, for melee harvesting.
+        let resources: Vec<(EntityId, Vec2)> = zone
+            .entities
+            .values()
+            .filter(|e| e.kind == EntityKind::Resource)
+            .map(|e| (e.id, e.pos))
+            .collect();
 
         // (target_id, damage, attacker_owner_entity_if_player_source)
         let mut damage: Vec<(EntityId, i32, Option<EntityId>)> = Vec::new();
@@ -307,6 +314,15 @@ impl World {
                             let d = to.length();
                             if d <= MELEE_RANGE && d > 0.01 && to.normalize().dot(facing) >= MELEE_ARC_DOT {
                                 damage.push((*eid, e.damage, Some(e.id)));
+                            }
+                        }
+                        // A swing also harvests a resource node in front of you
+                        // (nodes have 1 HP, so one hit fells them).
+                        for (rid, rpos) in &resources {
+                            let to = *rpos - e.pos;
+                            let d = to.length();
+                            if d <= MELEE_RANGE && d > 0.01 && to.normalize().dot(facing) >= MELEE_ARC_DOT {
+                                damage.push((*rid, 1, Some(e.id)));
                             }
                         }
                     }
@@ -392,36 +408,46 @@ impl World {
             }
         }
 
-        // Resolve kills: enemies grant xp to their killer and respawn a replacement.
+        // Resolve kills. Enemies grant xp + a trophy and respawn a replacement;
+        // harvested resource nodes grant a material and respawn elsewhere.
         for (target_id, attacker_ent) in killed {
-            let (is_enemy, xp_value, etag) = match zone.entities.get(&target_id) {
-                Some(t) if t.kind == EntityKind::Enemy => (true, t.xp_value, t.tag.clone()),
-                _ => (false, 0, None),
+            let (kind, xp_value, etag) = match zone.entities.get(&target_id) {
+                Some(t) if t.kind == EntityKind::Enemy => (EntityKind::Enemy, t.xp_value, t.tag.clone()),
+                Some(t) if t.kind == EntityKind::Resource => (EntityKind::Resource, 0, t.tag.clone()),
+                _ => continue,
             };
-            if !is_enemy {
-                continue;
-            }
             zone.entities.remove(&target_id);
 
-            // Replacement enemy elsewhere so the zone stays populated.
+            // Respawn a replacement elsewhere so the zone stays populated.
             let pos = rng.point(WORLD_BOUNDS * 0.9);
-            let tag = etag.as_deref().unwrap_or("serpent");
             let nid = self_next_id(&mut next_id);
-            zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+            let (reward_item, xp) = match kind {
+                EntityKind::Enemy => {
+                    let tag = etag.as_deref().unwrap_or("serpent");
+                    zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+                    (format!("{tag}_trophy"), xp_value)
+                }
+                EntityKind::Resource => {
+                    let tag = etag.as_deref().unwrap_or("tree");
+                    zone.entities.insert(nid, make_resource(nid, pos, tag));
+                    let material = if tag == "rock" { "stone" } else { "wood" };
+                    (material.to_string(), 0)
+                }
+                _ => continue,
+            };
 
-            // Award xp + loot to the killer.
+            // Award xp + loot to the killer/harvester.
             if let Some(owner_ent) = attacker_ent {
                 if let Some(p) = zone.entities.get_mut(&owner_ent) {
                     if let Some(o) = p.owner {
-                        if award_xp(p, xp_value) {
+                        if xp > 0 && award_xp(p, xp) {
                             let lvl = p.sheet.as_ref().map(|s| s.level).unwrap_or(1);
                             events.push(SimEvent::LevelUp { owner: o, level: lvl });
                         }
                         if let Some(s) = p.sheet.as_mut() {
                             if s.inventory.len() < 40 {
-                                let item = format!("{}_trophy", tag);
-                                s.inventory.push(item.clone());
-                                events.push(SimEvent::Loot { owner: o, item });
+                                s.inventory.push(reward_item.clone());
+                                events.push(SimEvent::Loot { owner: o, item: reward_item });
                             }
                         }
                     }
@@ -464,6 +490,32 @@ impl World {
     pub fn zone_snapshot(&self, act: Act) -> (u64, Vec<EntityState>) {
         let z = &self.zones[&act];
         (z.tick, z.entities.values().map(|e| e.to_state()).collect())
+    }
+
+    /// A player's current position (for area-of-interest culling).
+    pub fn player_pos(&self, act: Act, id: EntityId) -> Option<Vec2> {
+        self.zones.get(&act)?.entities.get(&id).map(|e| e.pos)
+    }
+
+    /// Area-of-interest snapshot: only entities within `radius` of `center`.
+    /// This is the bandwidth control for the MMO — a client never receives the
+    /// whole zone, only what's near it. The player's own entity is always at the
+    /// center, so it is always included.
+    pub fn zone_snapshot_around(
+        &self,
+        act: Act,
+        center: Vec2,
+        radius: f32,
+    ) -> (u64, Vec<EntityState>) {
+        let z = &self.zones[&act];
+        let r2 = radius * radius;
+        let ents = z
+            .entities
+            .values()
+            .filter(|e| e.pos.distance_squared(center) <= r2)
+            .map(|e| e.to_state())
+            .collect();
+        (z.tick, ents)
     }
 }
 
@@ -591,6 +643,87 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
         p.health = s.health;
     }
     leveled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A player who swings with a resource node in front of them harvests it and
+    /// gains a material (wood/stone), and the node is replaced.
+    #[test]
+    fn attacking_a_resource_harvests_a_material() {
+        let mut w = World::new(42);
+        // Find a resource node in Eden and its tag.
+        let (res_id, res_pos, tag) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Resource)
+                .expect("eden has resource nodes");
+            (e.id, e.pos, e.tag.clone().unwrap())
+        };
+        let expected = if tag == "rock" { "stone" } else { "wood" };
+
+        // Spawn a player just to the -x side so the node is directly in front
+        // (player faces +x by default).
+        let mut sheet = new_character("Harvester");
+        sheet.x = res_pos.x - 12.0;
+        sheet.y = res_pos.y;
+        let pid = w.spawn_player(7, sheet);
+
+        w.queue_attack(Act::Eden, pid);
+        w.step();
+
+        let after = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(
+            after.inventory.iter().any(|i| i == expected),
+            "expected a '{expected}' in inventory, got {:?}",
+            after.inventory
+        );
+        // The original node id is gone (harvested + replaced).
+        assert!(
+            !w.zones[&Act::Eden].entities.contains_key(&res_id),
+            "harvested node should be removed"
+        );
+    }
+
+    /// Killing an enemy grants xp and a trophy.
+    #[test]
+    fn killing_an_enemy_grants_xp_and_trophy() {
+        let mut w = World::new(7);
+        let (eid, epos, etag) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z.entities.values().find(|e| e.kind == EntityKind::Enemy).unwrap();
+            (e.id, e.pos, e.tag.clone().unwrap())
+        };
+        // Make the enemy killable in one hit by placing the player on top-ish.
+        let mut sheet = new_character("Slayer");
+        sheet.x = epos.x - 12.0;
+        sheet.y = epos.y;
+        let pid = w.spawn_player(9, sheet);
+        // Enough swings to drop a 40 HP serpent at 12 dmg (respawns don't matter;
+        // the *first* killed enemy is the original `eid`).
+        let mut killed_original = false;
+        for _ in 0..300 {
+            w.queue_attack(Act::Eden, pid);
+            w.set_intent(Act::Eden, pid, Vec2::ZERO);
+            w.step();
+            if !w.zones[&Act::Eden].entities.contains_key(&eid) {
+                killed_original = true;
+                break;
+            }
+        }
+        assert!(killed_original, "should have killed the original enemy");
+        let after = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(after.xp > 0 || after.level > 1, "should have gained xp");
+        assert!(
+            after.inventory.iter().any(|i| i == &format!("{etag}_trophy")),
+            "expected a {etag}_trophy, got {:?}",
+            after.inventory
+        );
+    }
 }
 
 /// A fresh level-1 character at Eden's entry point.

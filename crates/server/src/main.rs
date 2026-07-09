@@ -282,16 +282,23 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
     }
 }
 
-/// Send each logged-in client a full snapshot of the zone it's in. Snapshots
-/// are built once per zone and shared across all clients there.
+/// Radius (world units) a client is told about. Entities beyond this are culled
+/// from that player's snapshot — the core MMO bandwidth control.
+const AOI_RADIUS: f32 = 1400.0;
+
+/// Send each logged-in client an area-of-interest snapshot centered on its own
+/// player: only the entities near it, not the whole zone.
 fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
-    let mut cache: HashMap<Act, (u64, Vec<antediluvia_protocol::EntityState>)> = HashMap::new();
     for c in conns.values() {
         if !c.logged_in {
             continue;
         }
-        let entry = cache.entry(c.act).or_insert_with(|| world.zone_snapshot(c.act));
-        c.send(ServerMsg::Snapshot { act: c.act, tick: entry.0, entities: entry.1.clone() });
+        let Some(ent) = c.entity else { continue };
+        let (tick, entities) = match world.player_pos(c.act, ent) {
+            Some(pos) => world.zone_snapshot_around(c.act, pos, AOI_RADIUS),
+            None => world.zone_snapshot(c.act),
+        };
+        c.send(ServerMsg::Snapshot { act: c.act, tick, entities });
     }
 }
 

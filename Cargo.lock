@@ -163,8 +163,12 @@ dependencies = [
 name = "antediluvia-client-bevy"
 version = "0.1.0"
 dependencies = [
+ "antediluvia-protocol",
  "bevy",
- "rand",
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

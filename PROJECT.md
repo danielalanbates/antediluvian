@@ -18,9 +18,10 @@ server plus a Rust client. The TypeScript detour is archived under
 - **Server:** `tokio` async runtime, `tokio-tungstenite` WebSocket transport,
   `serde_json` wire format, `rusqlite` (bundled SQLite) persistence,
   `glam` math. No external RNG — a deterministic xorshift in the sim.
-- **Client (graphical):** `bevy` 0.15 (2D). This is the revived original
-  prototype (`crates/client-bevy`), currently single-player; being wired to the
-  server next.
+- **Client (graphical):** `bevy` 0.15 (2D), `crates/client-bevy`. A *thin*
+  networked client — it holds no game logic; it connects over WebSocket, sends
+  input intents, and renders the server's snapshots. A background thread runs a
+  tokio runtime and bridges to Bevy via tokio mpsc channels.
 - **Test client:** a headless `tokio` WebSocket bot (`crates/test-client`).
 
 ## Workspace layout
@@ -48,16 +49,29 @@ cargo run -p antediluvia-client-bevy
 Env: `ANTEDILUVIA_BIND` (default `127.0.0.1:8787`), `ANTEDILUVIA_DB`
 (default `antediluvia.sqlite`).
 
-## Status (2026-07-09)
-**Server MVP — verified end-to-end:** auth (name-based auto-register), character
-persistence, five simulated zones, enemy/wildlife AI, melee combat, XP/leveling,
-death/respawn, zone travel, zone chat. Two concurrent bots confirmed movement,
-combat both directions, kill attribution, loot, and SQLite save on disconnect.
+## Status (2026-07-09) — playable networked MMORPG
 
-**Client:** Bevy prototype revived into the workspace; still single-player, not
-yet networked to the server.
+**Done & verified:**
+- **Authoritative server:** name-based auth + auto-register, SQLite persistence,
+  five simulated zones, enemy/wildlife AI, melee combat, XP/leveling,
+  death/respawn, zone travel (`Travel`), zone chat. (E2E: two concurrent bots —
+  movement, combat both directions, kill attribution, loot, save on disconnect.)
+- **Networked Bevy client:** connects, logs in, renders server snapshots, sends
+  input, camera-follows the player. (E2E: client connected + server logged the
+  login + ran with no panic; character persisted.)
+- **Area-of-interest snapshots:** each client is sent only entities within
+  `AOI_RADIUS` (1400u) of its player — the MMO bandwidth control. (Verified:
+  a bot's per-tick entity count varies 14–21 vs the full 30 as it moves.)
+- **Resource harvesting:** a melee swing also fells a tree/rock in front,
+  granting `wood`/`stone` and respawning the node. (Verified: unit test
+  `attacking_a_resource_harvests_a_material`.)
+- **Tests:** `cargo test -p antediluvia-server` (harvest + enemy-kill/xp/trophy).
 
-## Next
-- Net the Bevy client to the server (replace its local world with server snapshots).
-- Real auth (passwords), binary/delta-compressed snapshots + area-of-interest culling.
-- Resource harvesting, NPC dialogue/quests, act-transition gates.
+**Deliberately deferred (honest gaps, not started):**
+- **Password auth.** Login is still name-only. Not faking it with a weak hash —
+  wants a real password-hashing crate (argon2/bcrypt). Deferred, not "done."
+- **Binary / delta-compressed snapshots.** Snapshots are full JSON of the AoI set
+  each tick. AoI already bounds bandwidth for the MVP; delta+binary is a later
+  optimization.
+- **NPC dialogue / quests**, act-transition gates beyond free `Travel`,
+  client-side sprites/animation polish (client currently draws colored circles).

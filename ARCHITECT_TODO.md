@@ -8,3 +8,15 @@ _Worker rules: NEVER delete source code (only venv/node_modules/target/.build/__
 ## Steps
 1. Delete `target/`, `node_modules/`, `dist/` from this iCloud copy.
 2. Read Cargo.toml + top of src/; write `PROJECT.md`: what the game is, engine, how to run. Report a 5-line summary to Daniel.
+
+## Resolution (2026-07-09) — DONE
+Both steps complete, and the game was carried well past "map it":
+1. ✅ Build artifacts cleared; project moved off iCloud to `~/Documents/Antediluvia`
+   (git repo → `github.com/danielalanbates/antediluvian`). TypeScript detour
+   archived to `archive_typescript_2026-07-09/`.
+2. ✅ `PROJECT.md` written (what/engine/layout/how-to-run).
+
+Direction (chosen by Daniel): **full Rust MMORPG**. Delivered a working,
+verified vertical slice — authoritative headless server + networked Bevy client
++ area-of-interest snapshots + resource harvesting + tests. See `PROJECT.md`
+"Status" for done-vs-deferred.

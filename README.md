@@ -60,6 +60,12 @@ contract in `crates/protocol` stays the same.
 
 ## Status
 
-MVP backend: auth + character persistence, five simulated zones, enemy/wildlife
-AI, melee combat, XP/leveling, death/respawn, zone travel, zone chat. Verified
-end-to-end with the test client (see `VERIFY.md` once run).
+Playable networked MMORPG (MVP). Done & verified: authoritative server (auth +
+persistence, 5 zones, AI, combat, XP, death/respawn, travel, chat),
+**area-of-interest snapshots**, **resource harvesting**, and a **networked Bevy
+client** (`crates/client-bevy`) that renders the server world. Server has unit
+tests (`cargo test -p antediluvia-server`).
+
+Deliberately deferred: real password auth (name-only today), binary/delta
+snapshot compression (AoI bounds bandwidth for now), NPC quests, client sprite
+polish (draws colored circles). See `PROJECT.md` for the full breakdown.
