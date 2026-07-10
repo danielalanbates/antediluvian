@@ -812,6 +812,12 @@ impl World {
                         if xp > 0 && award_xp(p, xp) {
                             let lvl = p.sheet.as_ref().map(|s| s.level).unwrap_or(1);
                             events.push(SimEvent::LevelUp { owner: o, level: lvl });
+                            events.push(SimEvent::Combat {
+                                act,
+                                kind: EventKind::LevelUp,
+                                src: owner_ent,
+                                dst: None,
+                            });
                         }
                         if let Some(s) = p.sheet.as_mut() {
                             match kind {

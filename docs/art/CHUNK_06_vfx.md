@@ -1,6 +1,15 @@
 # CHUNK 06 — Spell & combat VFX
 
-**Status: todo** (do after CHUNK_02 — VFX keys off its combat events)
+**Status: DONE 2026-07-10.** Hand-rolled particles (`vfx.rs`, no deps):
+unlit alpha-blend spheres w/ golden-angle spread, gravity, shrink, despawn;
+cached mesh+palette in `VfxAssets`. Hooks in `apply_combat_events`: Cast →
+orange burst at src, Hit → red flash at dst, Die → gray puff, LevelUp (new
+`EventKind::LevelUp`, proto v4, emitted at the award_xp site) → gold column.
+Inn ring alpha-pulses (`pulse_inn_ring`). Projectile lerp deferred.
+Also fixed a real race this exposed: `attach_rigs` B0003 panic when a scene
+despawns the same frame its AnimationPlayer appears — now `try_insert`.
+Verified on screen: mage cast burst + big debug burst; no panics.
+Gotcha: particles under ~7u radius are invisible at gameplay zoom.
 
 ## Goal
 Casts, hits, and level-ups read visually: firebolts fly, heals sparkle,

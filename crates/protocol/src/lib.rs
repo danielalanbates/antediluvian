@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -20,6 +20,7 @@ pub enum EventKind {
     Cast,
     Hit,
     Die,
+    LevelUp,
 }
 
 /// Playable classes. Chosen once per character (level 1) via `SelectClass`;

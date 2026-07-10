@@ -18,9 +18,11 @@
 
 mod net;
 mod terrain;
+mod vfx;
 
 use antediluvia_protocol::{Act, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg};
 use terrain::{build_terrain_mesh, terrain_height};
+use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
@@ -67,7 +69,7 @@ fn main() {
         .insert_resource(Orbit::default())
         .insert_resource(Session { name, ..default() })
         .add_event::<CombatEvt>()
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, init_vfx))
         .add_systems(
             Update,
             (
@@ -79,6 +81,8 @@ fn main() {
                 animate_movement,
                 trigger_attack_anim,
                 apply_combat_events,
+                update_vfx,
+                pulse_inn_ring,
             ),
         )
         .run();
@@ -123,6 +127,7 @@ struct RigClips {
 struct CombatEvt {
     kind: EventKind,
     src: u64,
+    dst: Option<u64>,
 }
 
 /// Added to the SceneRoot entity once its `AnimationPlayer` is wired up:
@@ -445,16 +450,18 @@ fn setup(
     // Terrain + inn + decor (rebuilt on zone travel).
     spawn_act_scenery(&mut commands, &mut meshes, &mut materials, &asset_server, Act::Eden);
 
-    // Inn ring at the zone entry (the rest / auction-house area).
+    // Inn ring at the zone entry (the rest / auction-house area). Pulses.
+    let ring_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.95, 0.82, 0.30, 0.35),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
     commands.spawn((
         Mesh3d(meshes.add(Cylinder::new(220.0, 0.6))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgba(0.95, 0.82, 0.30, 0.35),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        })),
+        MeshMaterial3d(ring_mat.clone()),
         Transform::from_xyz(0.0, 0.4, 0.0),
+        InnRing(ring_mat),
     ));
 
     let assets = RenderAssets {
@@ -685,8 +692,8 @@ fn receive_from_server(
             ServerMsg::Auctions { listings } => {
                 session.notice = format!("{} auction lots", listings.len());
             }
-            ServerMsg::Event { kind, src, .. } => {
-                combat.send(CombatEvt { kind, src });
+            ServerMsg::Event { kind, src, dst, .. } => {
+                combat.send(CombatEvt { kind, src, dst });
             }
             ServerMsg::Pong => {}
         }
@@ -896,10 +903,12 @@ fn attach_rigs(
         ]);
         let mut transitions = AnimationTransitions::new();
         transitions.play(&mut player, nodes[0], Duration::ZERO).repeat();
+        // The scene can be despawned (AoI cull / zone travel) in the same frame
+        // its AnimationPlayer appears — try_insert instead of panicking (B0003).
         commands
             .entity(ent)
-            .insert((AnimationGraphHandle(graphs.add(graph)), transitions));
-        commands.entity(rig_ent).insert(RigAnim {
+            .try_insert((AnimationGraphHandle(graphs.add(graph)), transitions));
+        commands.entity(rig_ent).try_insert(RigAnim {
             player: ent,
             idle: nodes[0],
             run: nodes[1],
@@ -971,15 +980,53 @@ fn trigger_attack_anim(
 /// instantly on key-press.
 fn apply_combat_events(
     time: Res<Time>,
+    mut commands: Commands,
     mut evs: EventReader<CombatEvt>,
     session: Res<Session>,
     mut map: ResMut<EntityMap>,
     mut movers: Query<&mut Mover>,
     rigs: Query<&RigAnim>,
     mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    transforms: Query<&Transform>,
+    vfx: Res<VfxAssets>,
 ) {
     let now = time.elapsed_secs();
+    // World position of a mirrored entity's root (chest height for bursts).
+    let pos_of = |map: &EntityMap, id: u64, transforms: &Query<&Transform>| {
+        map.0
+            .get(&id)
+            .and_then(|m| transforms.get(m.root).ok())
+            .map(|t| t.translation + Vec3::Y * 30.0)
+    };
     for ev in evs.read() {
+        // Purely visual bursts (also for our own events — they read well).
+        match ev.kind {
+            EventKind::Cast => {
+                if let Some(p) = pos_of(&map, ev.src, &transforms) {
+                    spawn_burst(&mut commands, &vfx, vfx.cast.clone(), p, 22, 120.0, 0.65, 0.3);
+                }
+            }
+            EventKind::Hit => {
+                if let Some(id) = ev.dst {
+                    if let Some(p) = pos_of(&map, id, &transforms) {
+                        spawn_burst(&mut commands, &vfx, vfx.hit.clone(), p, 14, 100.0, 0.45, 0.2);
+                    }
+                }
+            }
+            EventKind::Die => {
+                if let Some(p) = pos_of(&map, ev.src, &transforms) {
+                    spawn_burst(&mut commands, &vfx, vfx.die.clone(), p, 18, 70.0, 0.7, 0.5);
+                }
+            }
+            EventKind::LevelUp => {
+                if let Some(p) = pos_of(&map, ev.src, &transforms) {
+                    // Gold column: strong upward bias, slow fade.
+                    spawn_burst(&mut commands, &vfx, vfx.levelup.clone(), p, 26, 150.0, 1.0, 0.85);
+                }
+                continue; // no rig change
+            }
+            EventKind::Attack => {}
+        }
         if session.my_id == Some(ev.src)
             && matches!(ev.kind, EventKind::Attack | EventKind::Cast)
         {
@@ -1002,7 +1049,7 @@ fn apply_combat_events(
                 // Longer than the corpse-linger so movement never re-takes the rig.
                 mv.attack_until = now + 2.5;
             }
-            EventKind::Hit => {}
+            EventKind::Hit | EventKind::LevelUp => {}
         }
     }
 }
