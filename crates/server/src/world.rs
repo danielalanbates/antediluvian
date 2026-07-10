@@ -997,6 +997,21 @@ impl World {
                 s.health = e.health;
                 Ok("You eat the bread and recover 40 health.".into())
             }
+            "fruit" => {
+                s.inventory.remove(idx);
+                s.wakefulness = (s.wakefulness + 10.0).min(100.0);
+                Ok("You eat the fruit and feel slightly more awake.".into())
+            }
+            "golden_apple" => {
+                s.inventory.remove(idx);
+                s.wakefulness = 100.0;
+                Ok("You consume the Golden Apple. Your exhaustion completely vanishes!".into())
+            }
+            "energy_drink" => {
+                s.inventory.remove(idx);
+                s.wakefulness = (s.wakefulness + 50.0).min(100.0);
+                Ok("You chug the premium energy drink and feel a massive surge of stamina.".into())
+            }
             _ => Err("You can't use that.".into()),
         }
     }
