@@ -364,7 +364,8 @@ impl World {
             rot: 0.0,
             health: sheet.health,
             max_health: sheet.max_health,
-            tag: None,
+            // Class rides the tag so clients can pick the right character model.
+            tag: sheet.class.map(|c| c.as_str().to_string()),
             name: Some(sheet.name.clone()),
             speed: PLAYER_SPEED,
             origin: pos,
@@ -875,6 +876,7 @@ impl World {
         s.mana = s.max_mana;
         e.max_health = s.max_health;
         e.health = s.health;
+        e.tag = Some(class.as_str().to_string());
         Ok(format!("You are now a {}.", class.as_str()))
     }
 

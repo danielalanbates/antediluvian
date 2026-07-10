@@ -6,9 +6,10 @@
 //! All movement, AI, combat and progression happen server-side.
 //!
 //! Presentation: third-person orbit camera (right-drag to rotate, scroll to
-//! zoom), low-poly 3D world (capsule characters, cone-canopy trees, boulder
-//! rocks), floating health bars over every living thing, an inn ring at the
-//! zone entry, and a class action bar (keys 1/2) once a class is chosen.
+//! zoom), rigged & animated glTF characters (KayKit CC0 packs — adventurers
+//! for players/NPCs, skeletons for enemies) with an Idle/Run/Attack animation
+//! state machine, low-poly environment, floating health bars, an inn ring at
+//! the zone entry, and a class action bar (keys 1/2) once a class is chosen.
 //!
 //! The server world is top-down 2D; it maps into 3D as (x, height, y).
 //!
@@ -18,10 +19,13 @@
 mod net;
 
 use antediluvia_protocol::{Class, ClientMsg, EntityKind, EntityState, ServerMsg};
+use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use net::{start_network, NetRx, NetTx};
 use std::collections::{HashMap, HashSet};
+use std::f32::consts::FRAC_PI_2;
+use std::time::Duration;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -31,16 +35,27 @@ fn main() {
     // Start the network thread before the app so login is already in flight.
     let (tx, rx) = start_network(url, name.clone());
 
+    // Asset root is the workspace-level assets/ dir, independent of cwd.
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets")
+        .canonicalize()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "assets".into());
+
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Antediluvia".into(),
-                resolution: (1600.0, 900.0).into(),
-                resizable: true,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin { file_path: assets_dir, ..default() })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Antediluvia".into(),
+                        resolution: (1600.0, 900.0).into(),
+                        resizable: true,
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         // Sky.
         .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
         .insert_resource(AmbientLight { color: Color::WHITE, brightness: 300.0 })
@@ -57,7 +72,9 @@ fn main() {
                 send_input,
                 orbit_camera,
                 face_billboards,
-                animate_walk,
+                attach_rigs,
+                animate_movement,
+                trigger_attack_anim,
             ),
         )
         .run();
@@ -86,20 +103,35 @@ struct ActionBarText;
 #[derive(Component)]
 struct Billboard;
 
-/// Articulated limb holders for a humanoid rig (pivot at shoulder/hip).
-#[derive(Component)]
-struct Limbs {
-    arm_l: Entity,
-    arm_r: Entity,
-    leg_l: Entity,
-    leg_r: Entity,
+/// On the SceneRoot entity of a character: the animation clips this rig uses.
+/// `attach_rigs` finds this by walking up from the scene's `AnimationPlayer`.
+#[derive(Component, Clone)]
+struct RigClips {
+    idle: Handle<AnimationClip>,
+    run: Handle<AnimationClip>,
+    attack: Handle<AnimationClip>,
 }
 
-/// Walk-cycle state; phase advances with distance travelled.
-#[derive(Component, Default)]
-struct Walker {
-    phase: f32,
+/// Added to the SceneRoot entity once its `AnimationPlayer` is wired up:
+/// graph node indices plus the entity that owns the `AnimationPlayer`.
+#[derive(Component)]
+struct RigAnim {
+    player: Entity,
+    idle: AnimationNodeIndex,
+    run: AnimationNodeIndex,
+    attack: AnimationNodeIndex,
+}
+
+/// On a character's root: movement-derived animation state. `rig` points at
+/// the SceneRoot entity (which carries `RigClips`/`RigAnim`).
+#[derive(Component)]
+struct Mover {
+    rig: Entity,
     last: Vec3,
+    moving: bool,
+    /// While `time.elapsed_secs()` is below this, an attack one-shot owns the rig.
+    attack_until: f32,
+    was_attacking: bool,
 }
 
 /// Per-server-entity bookkeeping: scene root (translation only), the rotating
@@ -136,34 +168,67 @@ impl Default for Orbit {
     }
 }
 
-/// Cached meshes + materials so we don't allocate per entity.
+/// Cached meshes + materials for the non-character environment pieces.
 #[derive(Resource)]
 struct RenderAssets {
-    torso: Handle<Mesh>,
-    head: Handle<Mesh>,
-    arm: Handle<Mesh>,
-    leg: Handle<Mesh>,
     beast: Handle<Mesh>,
     trunk: Handle<Mesh>,
     canopy: Handle<Mesh>,
     rock: Handle<Mesh>,
-    nose: Handle<Mesh>,
     bar: Handle<Mesh>,
-    m_me: Handle<StandardMaterial>,
-    m_player: Handle<StandardMaterial>,
-    m_enemy: Handle<StandardMaterial>,
     m_wildlife: Handle<StandardMaterial>,
     m_trunk: Handle<StandardMaterial>,
     m_canopy: Handle<StandardMaterial>,
     m_rock: Handle<StandardMaterial>,
-    m_npc: Handle<StandardMaterial>,
     m_bar_bg: Handle<StandardMaterial>,
     m_bar_hp: Handle<StandardMaterial>,
 }
 
 /// Height of a character's health bar above the ground.
-const BAR_HEIGHT: f32 = 52.0;
+const BAR_HEIGHT: f32 = 64.0;
 const BAR_WIDTH: f32 = 34.0;
+
+/// World-units scale for the ~1.8-unit-tall KayKit rigs.
+const CHAR_SCALE: f32 = 30.0;
+/// Boss ("alpha") enemies render half again as large.
+const ALPHA_SCALE: f32 = 45.0;
+
+/// Which glTF file + animation indices + scale a snapshot entity renders with.
+///
+/// Animation indices are stable per pack (verified against the shipped GLBs):
+/// adventurers: Idle=36 Running_A=48 1H_slice=1 2H_chop=8 Spellcast_Shoot=62;
+/// skeletons:   Idle=40 Running_A=54 1H_slice=2 2H_chop=9 Spellcast_Shoot=77.
+fn rig_for(e: &EntityState) -> (&'static str, [usize; 3], f32) {
+    const ADV: [usize; 2] = [36, 48]; // idle, run
+    const SKEL: [usize; 2] = [40, 54];
+    match e.kind {
+        EntityKind::Player => {
+            let (file, attack) = match e.tag.as_deref() {
+                Some("warrior") => ("models/characters/Barbarian.glb", 8),
+                Some("hunter") => ("models/characters/Rogue.glb", 1),
+                Some("priest") => ("models/characters/Knight.glb", 62),
+                Some("mage") => ("models/characters/Mage.glb", 62),
+                _ => ("models/characters/Knight.glb", 1),
+            };
+            (file, [ADV[0], ADV[1], attack], CHAR_SCALE)
+        }
+        EntityKind::Npc => ("models/characters/Rogue_Hooded.glb", [ADV[0], ADV[1], 1], CHAR_SCALE),
+        _ => {
+            let tag = e.tag.as_deref().unwrap_or("");
+            if tag.ends_with("_alpha") {
+                return ("models/enemies/Skeleton_Warrior.glb", [SKEL[0], SKEL[1], 9], ALPHA_SCALE);
+            }
+            // Deterministic variety: hash the species tag onto the minion set.
+            let h = tag.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+            let (file, attack) = match h % 3 {
+                0 => ("models/enemies/Skeleton_Minion.glb", 2),
+                1 => ("models/enemies/Skeleton_Rogue.glb", 2),
+                _ => ("models/enemies/Skeleton_Mage.glb", 77),
+            };
+            (file, [SKEL[0], SKEL[1], attack], CHAR_SCALE)
+        }
+    }
+}
 
 /// The two ability keys per class (action-bar slots 1 and 2).
 fn class_abilities(class: Class) -> [&'static str; 2] {
@@ -190,7 +255,7 @@ fn setup(
 
     // Sun.
     commands.spawn((
-        DirectionalLight { illuminance: 12_000.0, shadows_enabled: false, ..default() },
+        DirectionalLight { illuminance: 12_000.0, shadows_enabled: true, ..default() },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.6, 0.0)),
     ));
 
@@ -218,24 +283,15 @@ fn setup(
     ));
 
     let assets = RenderAssets {
-        torso: meshes.add(Cuboid::new(16.0, 20.0, 9.0)),
-        head: meshes.add(Sphere::new(7.0)),
-        arm: meshes.add(Cuboid::new(5.0, 18.0, 5.0)),
-        leg: meshes.add(Cuboid::new(6.0, 20.0, 6.0)),
         beast: meshes.add(Sphere::new(9.0)),
         trunk: meshes.add(Cylinder::new(4.5, 26.0)),
         canopy: meshes.add(Cone { radius: 17.0, height: 34.0 }),
         rock: meshes.add(Sphere::new(11.0)),
-        nose: meshes.add(Cuboid::new(10.0, 4.0, 4.0)),
         bar: meshes.add(Rectangle::new(1.0, 4.0)),
-        m_me: materials.add(Color::srgb(0.25, 0.55, 0.95)),
-        m_player: materials.add(Color::srgb(0.35, 0.80, 0.45)),
-        m_enemy: materials.add(Color::srgb(0.80, 0.20, 0.18)),
         m_wildlife: materials.add(Color::srgb(0.72, 0.60, 0.38)),
         m_trunk: materials.add(Color::srgb(0.38, 0.26, 0.14)),
         m_canopy: materials.add(Color::srgb(0.12, 0.42, 0.16)),
         m_rock: materials.add(Color::srgb(0.52, 0.52, 0.55)),
-        m_npc: materials.add(Color::srgb(0.90, 0.82, 0.30)),
         m_bar_bg: materials.add(StandardMaterial {
             base_color: Color::srgb(0.10, 0.10, 0.10),
             unlit: true,
@@ -282,6 +338,7 @@ fn setup(
 fn spawn_visual(
     commands: &mut Commands,
     assets: &RenderAssets,
+    asset_server: &AssetServer,
     e: &EntityState,
     is_me: bool,
 ) -> Mirrored {
@@ -297,48 +354,39 @@ fn spawn_visual(
         .id();
     match e.kind {
         EntityKind::Player | EntityKind::Enemy | EntityKind::Npc => {
-            let mat = match e.kind {
-                EntityKind::Player if is_me => assets.m_me.clone(),
-                EntityKind::Player => assets.m_player.clone(),
-                EntityKind::Enemy => assets.m_enemy.clone(),
-                _ => assets.m_npc.clone(),
+            let (file, [i_idle, i_run, i_attack], scale) = rig_for(e);
+            let clips = RigClips {
+                idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
+                run: asset_server.load(GltfAssetLabel::Animation(i_run).from_asset(file)),
+                attack: asset_server.load(GltfAssetLabel::Animation(i_attack).from_asset(file)),
             };
-            // Articulated humanoid: torso + head + four limbs pivoted at
-            // shoulder/hip so a walk cycle can swing them.
+            let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(file));
             let mut m = Entity::PLACEHOLDER;
-            let (mut al, mut ar, mut ll, mut lr) =
-                (Entity::PLACEHOLDER, Entity::PLACEHOLDER, Entity::PLACEHOLDER, Entity::PLACEHOLDER);
+            let mut rig = Entity::PLACEHOLDER;
             commands.entity(root).with_children(|p| {
                 m = p
                     .spawn((Transform::default().with_rotation(rot), Visibility::default()))
-                    .with_children(|body| {
-                        body.spawn((Mesh3d(assets.torso.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 34.0, 0.0)));
-                        body.spawn((Mesh3d(assets.head.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 51.0, 0.0)));
-                        // A small nose block so facing is visible.
-                        body.spawn((Mesh3d(assets.nose.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(7.0, 51.0, 0.0)));
-                        // Pivot at the top of each limb; z is sideways in
-                        // model space (x is the facing axis).
-                        let mut limb = |y: f32, z: f32, mesh: &Handle<Mesh>| {
-                            body.spawn((Transform::from_xyz(0.0, y, z), Visibility::default()))
-                                .with_children(|holder| {
-                                    holder.spawn((
-                                        Mesh3d(mesh.clone()),
-                                        MeshMaterial3d(mat.clone()),
-                                        Transform::from_xyz(0.0, -8.0, 0.0),
-                                    ));
-                                })
-                                .id()
-                        };
-                        al = limb(42.0, -10.5, &assets.arm);
-                        ar = limb(42.0, 10.5, &assets.arm);
-                        ll = limb(22.0, -4.5, &assets.leg);
-                        lr = limb(22.0, 4.5, &assets.leg);
+                    .with_children(|yaw| {
+                        // glTF rigs face +Z; the server's facing convention is
+                        // +X, hence the baked quarter-turn.
+                        rig = yaw
+                            .spawn((
+                                SceneRoot(scene),
+                                Transform::from_scale(Vec3::splat(scale))
+                                    .with_rotation(Quat::from_rotation_y(FRAC_PI_2)),
+                                clips,
+                            ))
+                            .id();
                     })
                     .id();
             });
-            commands
-                .entity(root)
-                .insert((Limbs { arm_l: al, arm_r: ar, leg_l: ll, leg_r: lr }, Walker::default()));
+            commands.entity(root).insert(Mover {
+                rig,
+                last: pos,
+                moving: false,
+                attack_until: 0.0,
+                was_attacking: false,
+            });
             model = Some(m);
         }
         EntityKind::Wildlife => {
@@ -411,6 +459,7 @@ fn receive_from_server(
     mut map: ResMut<EntityMap>,
     mut session: ResMut<Session>,
     assets: Res<RenderAssets>,
+    asset_server: Res<AssetServer>,
     mut transforms: Query<&mut Transform>,
     mut hud: Query<&mut Text, (With<HudText>, Without<ActionBarText>)>,
     mut bar: Query<&mut Text, (With<ActionBarText>, Without<HudText>)>,
@@ -428,6 +477,12 @@ fn receive_from_server(
                 );
             }
             ServerMsg::Stats { character } => {
+                // A class choice changes our model: force a respawn of our rig.
+                if session.class != character.class {
+                    if let Some(m) = session.my_id.and_then(|id| map.0.remove(&id)) {
+                        commands.entity(m.root).despawn_recursive();
+                    }
+                }
                 session.class = character.class;
                 session.hud = format!(
                     "{} — Lv {}  HP {}/{}  MP {}/{}  XP {}/{}  {}g{}  in {}",
@@ -480,7 +535,7 @@ fn receive_from_server(
                     }
                 }
                 None => {
-                    let m = spawn_visual(&mut commands, &assets, e, is_me);
+                    let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me);
                     map.0.insert(e.id, m);
                 }
             }
@@ -616,30 +671,104 @@ fn orbit_camera(
     *cam_t = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
 }
 
-/// Swing arms and legs while an entity moves: the walk phase advances with
-/// distance travelled, so speed naturally sets the stride rate, and eases back
-/// to rest when standing.
-fn animate_walk(
-    mut walkers: Query<(&Transform, &mut Walker, &Limbs), With<ServerEnt>>,
-    mut limbs: Query<&mut Transform, Without<ServerEnt>>,
+/// When a spawned glTF scene's `AnimationPlayer` appears, walk up its ancestry
+/// to the `RigClips` scene root, build a three-node animation graph
+/// (idle/run/attack), start Idle looping, and record the node indices so the
+/// movement/attack systems can drive the rig.
+fn attach_rigs(
+    mut commands: Commands,
+    mut added: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+    parents: Query<&Parent>,
+    clips: Query<&RigClips>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    for (t, mut w, l) in walkers.iter_mut() {
-        let moved = (t.translation - w.last).length();
-        w.last = t.translation;
-        let swing = if moved > 0.01 {
-            w.phase += moved * 0.045;
-            (w.phase.sin()) * 0.75
-        } else {
-            w.phase = 0.0;
-            0.0
-        };
-        for (ent, dir) in [(l.arm_l, 1.0), (l.arm_r, -1.0), (l.leg_l, -1.0), (l.leg_r, 1.0)] {
-            if let Ok(mut lt) = limbs.get_mut(ent) {
-                // Limbs swing around the sideways (z) axis in model space.
-                lt.rotation = Quat::from_rotation_z(swing * dir);
+    for (ent, mut player) in added.iter_mut() {
+        // Ascend to the SceneRoot entity carrying this rig's clip handles.
+        let mut cur = ent;
+        let rig_ent = loop {
+            if clips.get(cur).is_ok() {
+                break Some(cur);
             }
+            match parents.get(cur) {
+                Ok(p) => cur = p.get(),
+                Err(_) => break None,
+            }
+        };
+        let Some(rig_ent) = rig_ent else { continue };
+        let Ok(rc) = clips.get(rig_ent) else { continue };
+
+        let (graph, nodes) = AnimationGraph::from_clips([
+            rc.idle.clone(),
+            rc.run.clone(),
+            rc.attack.clone(),
+        ]);
+        let mut transitions = AnimationTransitions::new();
+        transitions.play(&mut player, nodes[0], Duration::ZERO).repeat();
+        commands
+            .entity(ent)
+            .insert((AnimationGraphHandle(graphs.add(graph)), transitions));
+        commands.entity(rig_ent).insert(RigAnim {
+            player: ent,
+            idle: nodes[0],
+            run: nodes[1],
+            attack: nodes[2],
+        });
+    }
+}
+
+/// Crossfade each character between Idle and Running based on how far its
+/// root actually moved (server-authoritative positions), unless an attack
+/// one-shot currently owns the rig.
+fn animate_movement(
+    time: Res<Time>,
+    mut movers: Query<(&Transform, &mut Mover), With<ServerEnt>>,
+    rigs: Query<&RigAnim>,
+    mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+) {
+    let now = time.elapsed_secs();
+    for (t, mut mv) in movers.iter_mut() {
+        let moved = (t.translation - mv.last).length();
+        mv.last = t.translation;
+        let Ok(rig) = rigs.get(mv.rig) else { continue };
+        let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { continue };
+
+        if now < mv.attack_until {
+            mv.was_attacking = true;
+            continue;
+        }
+        let want_run = moved > 0.05;
+        if want_run != mv.moving || mv.was_attacking {
+            mv.moving = want_run;
+            mv.was_attacking = false;
+            let node = if want_run { rig.run } else { rig.idle };
+            trans
+                .play(&mut player, node, Duration::from_millis(150))
+                .repeat();
         }
     }
+}
+
+/// Play the local player's attack animation as a one-shot when an attack or
+/// cast key is pressed. (Remote attacks aren't evented by the server yet —
+/// documented as art-chunk follow-up work.)
+fn trigger_attack_anim(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut me: Query<&mut Mover, With<PlayerTag>>,
+    rigs: Query<&RigAnim>,
+    mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+) {
+    let swung = keys.just_pressed(KeyCode::Space)
+        || keys.just_pressed(KeyCode::Digit1)
+        || keys.just_pressed(KeyCode::Digit2);
+    if !swung {
+        return;
+    }
+    let Ok(mut mv) = me.get_single_mut() else { return };
+    let Ok(rig) = rigs.get(mv.rig) else { return };
+    let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { return };
+    trans.play(&mut player, rig.attack, Duration::from_millis(100));
+    mv.attack_until = time.elapsed_secs() + 0.9;
 }
 
 /// Keep health bars facing the camera. Bars are children of translation-only
