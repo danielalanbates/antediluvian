@@ -1,6 +1,15 @@
 # CHUNK 02 — Combat events → remote animations
 
-**Status: todo**
+**Status: DONE 2026-07-10.** Protocol v3 `ServerMsg::Event` + `EventKind`
+(attack/cast/hit/die); server emits `SimEvent::Combat` at swing/cast/enemy-
+attack/hit/death sites, fanned out zone-wide in `dispatch_events`. Client:
+death clip is the 4th graph node (adventurers 23, skeletons 24),
+`apply_combat_events` plays remote one-shots (local Attack/Cast deduped by
+src == my_id), `Mirrored.dying_until` keeps corpses 1.5 s past their last
+snapshot. Verified: cross-client swing screenshot, scripted ws client observed
+attack/hit/die events live, 13 server tests green, no client panics.
+Note: `Hit` events carry src=0 for enemy attackers (sim stores only player
+attackers); client currently ignores Hit — hook for CHUNK_06 VFX.
 
 ## Goal
 Everyone sees everyone's swings, hits, and deaths. Today only the *local*

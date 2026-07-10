@@ -5,7 +5,7 @@
 //! zone; each zone owns its entities. The whole sim runs single-threaded on the
 //! game loop, so there are no locks in the hot path.
 
-use antediluvia_protocol::{Act, CharacterSheet, Class, EntityId, EntityKind, EntityState};
+use antediluvia_protocol::{Act, CharacterSheet, Class, EntityId, EntityKind, EntityState, EventKind};
 use glam::Vec2;
 use std::collections::HashMap;
 
@@ -279,6 +279,9 @@ pub enum SimEvent {
     Loot { owner: u64, item: String },
     /// Generic per-player info line (cast failures, duel results, PvP kills).
     Info { owner: u64, text: String },
+    /// Cosmetic combat event, broadcast to every client in the act (drives
+    /// remote-entity swing/hit/death animations).
+    Combat { act: Act, kind: EventKind, src: EntityId, dst: Option<EntityId> },
 }
 
 impl World {
@@ -523,6 +526,12 @@ impl World {
                         .collect();
                     if e.attack_queued && e.attack_cooldown <= 0.0 {
                         e.attack_cooldown = ATTACK_COOLDOWN;
+                        events.push(SimEvent::Combat {
+                            act,
+                            kind: EventKind::Attack,
+                            src: e.id,
+                            dst: None,
+                        });
                         let facing = Vec2::new(e.rot.cos(), e.rot.sin());
                         let melee_dmg = ((e.damage + melee_bonus) as f32 * dmg_mult).round() as i32;
                         for (eid, epos) in enemies.iter().chain(pvp_targets.iter()) {
@@ -569,6 +578,12 @@ impl World {
                         }
                         e.gcd = GCD_SECS;
                         e.cooldowns.insert(ab.id.to_string(), ab.cooldown);
+                        events.push(SimEvent::Combat {
+                            act,
+                            kind: EventKind::Cast,
+                            src: e.id,
+                            dst: None,
+                        });
                         if let Some(s) = e.sheet.as_mut() {
                             s.mana -= ab.mana;
                         }
@@ -628,6 +643,12 @@ impl World {
                             } else if e.attack_cooldown <= 0.0 {
                                 e.attack_cooldown = ATTACK_COOLDOWN;
                                 damage.push((pid, e.damage, None));
+                                events.push(SimEvent::Combat {
+                                    act,
+                                    kind: EventKind::Attack,
+                                    src: e.id,
+                                    dst: Some(pid),
+                                });
                             }
                         }
                         _ => {
@@ -685,6 +706,14 @@ impl World {
                     continue;
                 }
                 t.health -= dmg;
+                if t.health > 0 {
+                    events.push(SimEvent::Combat {
+                        act,
+                        kind: EventKind::Hit,
+                        src: attacker.unwrap_or(0),
+                        dst: Some(target),
+                    });
+                }
                 if t.health <= 0 {
                     if t.kind == EntityKind::Player {
                         if let (Some(partner), Some(att)) = (t.duel_with, attacker) {
@@ -699,6 +728,12 @@ impl World {
                         }
                         t.dead_timer = RESPAWN_SECS;
                     }
+                    events.push(SimEvent::Combat {
+                        act,
+                        kind: EventKind::Die,
+                        src: target,
+                        dst: attacker,
+                    });
                     killed.push((target, attacker));
                 }
             }

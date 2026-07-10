@@ -600,11 +600,22 @@ fn send_stats(world: &World, conns: &HashMap<u64, Conn>, id: u64) {
 /// along with a refreshed stat block.
 fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<SimEvent>) {
     for ev in events {
+        // Combat events are cosmetic and zone-wide: fan out to every client in
+        // the act (same pattern as zone chat) rather than to one owner.
+        if let SimEvent::Combat { act, kind, src, dst } = ev {
+            for c in conns.values() {
+                if c.logged_in && c.act == act {
+                    c.send(ServerMsg::Event { act, kind, src, dst });
+                }
+            }
+            continue;
+        }
         let owner = match &ev {
             SimEvent::LevelUp { owner, .. } => *owner,
             SimEvent::Died { owner } => *owner,
             SimEvent::Loot { owner, .. } => *owner,
             SimEvent::Info { owner, .. } => *owner,
+            SimEvent::Combat { .. } => unreachable!(),
         };
         let Some(c) = conns.get(&owner) else { continue };
         match ev {
@@ -620,6 +631,7 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
             SimEvent::Info { text, .. } => {
                 c.send(ServerMsg::Notice { text });
             }
+            SimEvent::Combat { .. } => unreachable!(),
         }
         if let Some(ent) = c.entity {
             if let Some(sheet) = world.player_sheet(c.act, ent) {

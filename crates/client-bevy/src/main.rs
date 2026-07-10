@@ -18,7 +18,7 @@
 
 mod net;
 
-use antediluvia_protocol::{Class, ClientMsg, EntityKind, EntityState, ServerMsg};
+use antediluvia_protocol::{Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
@@ -64,6 +64,7 @@ fn main() {
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
         .insert_resource(Session { name, ..default() })
+        .add_event::<CombatEvt>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -75,6 +76,7 @@ fn main() {
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
+                apply_combat_events,
             ),
         )
         .run();
@@ -110,6 +112,15 @@ struct RigClips {
     idle: Handle<AnimationClip>,
     run: Handle<AnimationClip>,
     attack: Handle<AnimationClip>,
+    death: Handle<AnimationClip>,
+}
+
+/// A `ServerMsg::Event` forwarded out of the network drain for the animation
+/// systems (remote swings, casts, deaths).
+#[derive(Event)]
+struct CombatEvt {
+    kind: EventKind,
+    src: u64,
 }
 
 /// Added to the SceneRoot entity once its `AnimationPlayer` is wired up:
@@ -120,6 +131,7 @@ struct RigAnim {
     idle: AnimationNodeIndex,
     run: AnimationNodeIndex,
     attack: AnimationNodeIndex,
+    death: AnimationNodeIndex,
 }
 
 /// On a character's root: movement-derived animation state. `rig` points at
@@ -140,6 +152,9 @@ struct Mirrored {
     root: Entity,
     model: Option<Entity>,
     bar_fill: Option<Entity>,
+    /// While `time.elapsed_secs()` is below this, the entity is playing its
+    /// death animation — keep the corpse visible even if it left the snapshot.
+    dying_until: f32,
 }
 
 #[derive(Resource, Default)]
@@ -198,9 +213,9 @@ const ALPHA_SCALE: f32 = 45.0;
 /// Animation indices are stable per pack (verified against the shipped GLBs):
 /// adventurers: Idle=36 Running_A=48 1H_slice=1 2H_chop=8 Spellcast_Shoot=62;
 /// skeletons:   Idle=40 Running_A=54 1H_slice=2 2H_chop=9 Spellcast_Shoot=77.
-fn rig_for(e: &EntityState) -> (&'static str, [usize; 3], f32) {
-    const ADV: [usize; 2] = [36, 48]; // idle, run
-    const SKEL: [usize; 2] = [40, 54];
+fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
+    const ADV: [usize; 3] = [36, 48, 23]; // idle, run, death
+    const SKEL: [usize; 3] = [40, 54, 24];
     match e.kind {
         EntityKind::Player => {
             let (file, attack) = match e.tag.as_deref() {
@@ -210,13 +225,19 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 3], f32) {
                 Some("mage") => ("models/characters/Mage.glb", 62),
                 _ => ("models/characters/Knight.glb", 1),
             };
-            (file, [ADV[0], ADV[1], attack], CHAR_SCALE)
+            (file, [ADV[0], ADV[1], attack, ADV[2]], CHAR_SCALE)
         }
-        EntityKind::Npc => ("models/characters/Rogue_Hooded.glb", [ADV[0], ADV[1], 1], CHAR_SCALE),
+        EntityKind::Npc => {
+            ("models/characters/Rogue_Hooded.glb", [ADV[0], ADV[1], 1, ADV[2]], CHAR_SCALE)
+        }
         _ => {
             let tag = e.tag.as_deref().unwrap_or("");
             if tag.ends_with("_alpha") {
-                return ("models/enemies/Skeleton_Warrior.glb", [SKEL[0], SKEL[1], 9], ALPHA_SCALE);
+                return (
+                    "models/enemies/Skeleton_Warrior.glb",
+                    [SKEL[0], SKEL[1], 9, SKEL[2]],
+                    ALPHA_SCALE,
+                );
             }
             // Deterministic variety: hash the species tag onto the minion set.
             let h = tag.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
@@ -225,7 +246,7 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 3], f32) {
                 1 => ("models/enemies/Skeleton_Rogue.glb", 2),
                 _ => ("models/enemies/Skeleton_Mage.glb", 77),
             };
-            (file, [SKEL[0], SKEL[1], attack], CHAR_SCALE)
+            (file, [SKEL[0], SKEL[1], attack, SKEL[2]], CHAR_SCALE)
         }
     }
 }
@@ -354,11 +375,12 @@ fn spawn_visual(
         .id();
     match e.kind {
         EntityKind::Player | EntityKind::Enemy | EntityKind::Npc => {
-            let (file, [i_idle, i_run, i_attack], scale) = rig_for(e);
+            let (file, [i_idle, i_run, i_attack, i_death], scale) = rig_for(e);
             let clips = RigClips {
                 idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
                 run: asset_server.load(GltfAssetLabel::Animation(i_run).from_asset(file)),
                 attack: asset_server.load(GltfAssetLabel::Animation(i_attack).from_asset(file)),
+                death: asset_server.load(GltfAssetLabel::Animation(i_death).from_asset(file)),
             };
             let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(file));
             let mut m = Entity::PLACEHOLDER;
@@ -449,7 +471,7 @@ fn spawn_visual(
     if is_me {
         commands.entity(root).insert(PlayerTag);
     }
-    Mirrored { root, model, bar_fill }
+    Mirrored { root, model, bar_fill, dying_until: 0.0 }
 }
 
 /// Drain server messages, reconcile the entity set, update the HUD.
@@ -463,6 +485,8 @@ fn receive_from_server(
     mut transforms: Query<&mut Transform>,
     mut hud: Query<&mut Text, (With<HudText>, Without<ActionBarText>)>,
     mut bar: Query<&mut Text, (With<ActionBarText>, Without<HudText>)>,
+    mut combat: EventWriter<CombatEvt>,
+    time: Res<Time>,
 ) {
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
@@ -505,6 +529,9 @@ fn receive_from_server(
             ServerMsg::Auctions { listings } => {
                 session.notice = format!("{} auction lots", listings.len());
             }
+            ServerMsg::Event { kind, src, .. } => {
+                combat.send(CombatEvt { kind, src });
+            }
             ServerMsg::Pong => {}
         }
     }
@@ -540,8 +567,15 @@ fn receive_from_server(
                 }
             }
         }
-        // Despawn entities that left the AoI / zone / died.
-        let gone: Vec<u64> = map.0.keys().copied().filter(|id| !seen.contains(id)).collect();
+        // Despawn entities that left the AoI / zone / died — but let anything
+        // mid-death-animation linger as a corpse until its timer runs out.
+        let now = time.elapsed_secs();
+        let gone: Vec<u64> = map
+            .0
+            .iter()
+            .filter(|(id, m)| !seen.contains(id) && now >= m.dying_until)
+            .map(|(id, _)| *id)
+            .collect();
         for id in gone {
             if let Some(m) = map.0.remove(&id) {
                 commands.entity(m.root).despawn_recursive();
@@ -701,6 +735,7 @@ fn attach_rigs(
             rc.idle.clone(),
             rc.run.clone(),
             rc.attack.clone(),
+            rc.death.clone(),
         ]);
         let mut transitions = AnimationTransitions::new();
         transitions.play(&mut player, nodes[0], Duration::ZERO).repeat();
@@ -712,6 +747,7 @@ fn attach_rigs(
             idle: nodes[0],
             run: nodes[1],
             attack: nodes[2],
+            death: nodes[3],
         });
     }
 }
@@ -769,6 +805,49 @@ fn trigger_attack_anim(
     let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { return };
     trans.play(&mut player, rig.attack, Duration::from_millis(100));
     mv.attack_until = time.elapsed_secs() + 0.9;
+}
+
+/// Animate remote entities from server combat events: swings/casts play the
+/// attack one-shot, deaths play the death one-shot and pin the corpse in place
+/// for a moment before the despawn logic reclaims it. The local player's own
+/// Attack/Cast events are skipped — `trigger_attack_anim` already played them
+/// instantly on key-press.
+fn apply_combat_events(
+    time: Res<Time>,
+    mut evs: EventReader<CombatEvt>,
+    session: Res<Session>,
+    mut map: ResMut<EntityMap>,
+    mut movers: Query<&mut Mover>,
+    rigs: Query<&RigAnim>,
+    mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+) {
+    let now = time.elapsed_secs();
+    for ev in evs.read() {
+        if session.my_id == Some(ev.src)
+            && matches!(ev.kind, EventKind::Attack | EventKind::Cast)
+        {
+            continue;
+        }
+        let Some(m) = map.0.get_mut(&ev.src) else { continue };
+        if ev.kind == EventKind::Die {
+            m.dying_until = now + 1.5;
+        }
+        let Ok(mut mv) = movers.get_mut(m.root) else { continue };
+        let Ok(rig) = rigs.get(mv.rig) else { continue };
+        let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { continue };
+        match ev.kind {
+            EventKind::Attack | EventKind::Cast => {
+                trans.play(&mut player, rig.attack, Duration::from_millis(100));
+                mv.attack_until = now + 0.9;
+            }
+            EventKind::Die => {
+                trans.play(&mut player, rig.death, Duration::from_millis(80));
+                // Longer than the corpse-linger so movement never re-takes the rig.
+                mv.attack_until = now + 2.5;
+            }
+            EventKind::Hit => {}
+        }
+    }
 }
 
 /// Keep health bars facing the camera. Bars are children of translation-only

@@ -57,6 +57,17 @@ systems ✅, (2) Bevy 3D client migration ✅, (3) content — quests/NPCs/bosse
 itemization ✅ first pass (below), (4) art pass (modeled characters/creatures,
 richer animation, terrain variety — the long tail).
 
+## Status (2026-07-10) — art pass CHUNK_02: combat events → remote animations
+- Protocol v3: `ServerMsg::Event` + `EventKind` (attack/cast/hit/die) broadcast
+  zone-wide each tick; server emits at melee-swing, ability-cast, enemy-attack,
+  hit and death sites (`SimEvent::Combat`).
+- Client plays remote one-shots (swings/casts) and a death animation (4th
+  graph node) on every rigged character; corpses linger 1.5 s past their last
+  snapshot instead of popping out. Local player's own swings stay instant.
+- Verified live with two windowed clients + a scripted ws observer (events on
+  the wire, cross-client swing screenshot); 13 server tests green.
+- Art-pass work queue lives in `docs/art/` (CHUNK_01 ✅, CHUNK_02 ✅).
+
 ## Status (2026-07-09 late night) — content layer first pass
 - **Quests + NPCs:** an Elder questgiver stands at every act's inn. `Talk` (key
   E in the client) accepts the act's kill-quest, reports progress, and turns it

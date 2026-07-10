@@ -9,7 +9,18 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// A broadcast combat event, for client-side animation of *remote* entities
+/// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventKind {
+    Attack,
+    Cast,
+    Hit,
+    Die,
+}
 
 /// Playable classes. Chosen once per character (level 1) via `SelectClass`;
 /// gates which abilities and talents are available.
@@ -235,5 +246,8 @@ pub enum ServerMsg {
     Auctions { listings: Vec<AuctionListing> },
     /// Guild roster (on join/create/query).
     GuildInfo { name: String, members: Vec<String> },
+    /// A combat event in the player's zone: `src` swung/cast/was hit/died.
+    /// Drives remote-entity animations; safe to ignore.
+    Event { act: Act, kind: EventKind, src: EntityId, dst: Option<EntityId> },
     Pong,
 }
