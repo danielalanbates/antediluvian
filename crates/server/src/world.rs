@@ -5,7 +5,7 @@
 //! zone; each zone owns its entities. The whole sim runs single-threaded on the
 //! game loop, so there are no locks in the hot path.
 
-use antediluvia_protocol::{Act, CharacterSheet, EntityId, EntityKind, EntityState};
+use antediluvia_protocol::{Act, CharacterSheet, Class, EntityId, EntityKind, EntityState};
 use glam::Vec2;
 use std::collections::HashMap;
 
@@ -24,6 +24,87 @@ const ATTACK_COOLDOWN: f32 = 0.8;
 const RESPAWN_SECS: f32 = 6.0;
 const HEALTH_REGEN_PER_SEC: f32 = 2.0;
 const MANA_REGEN_PER_SEC: f32 = 4.0;
+/// Global cooldown between ability casts (WoW-style GCD).
+const GCD_SECS: f32 = 1.0;
+/// Radius around a zone's entry point that counts as the inn (rest area).
+pub const INN_RADIUS: f32 = 220.0;
+/// Rested XP gained per second while at an inn, and its cap.
+const RESTED_PER_SEC: u32 = 20;
+const RESTED_CAP: u32 = 2000;
+const PROFESSION_CAP: u32 = 300;
+
+// ─── Class abilities ─────────────────────────────────────────────────────────
+
+pub enum AbilityEffect {
+    /// Single-target damage to the nearest valid target in range & arc.
+    Damage(i32),
+    /// Damage to every valid target within the radius.
+    Aoe(i32, f32),
+    /// Heal self.
+    Heal(i32),
+}
+
+pub struct Ability {
+    pub id: &'static str,
+    pub class: Class,
+    pub min_level: u32,
+    pub mana: i32,
+    pub cooldown: f32,
+    pub range: f32,
+    pub effect: AbilityEffect,
+}
+
+pub const ABILITIES: &[Ability] = &[
+    Ability { id: "heroic_strike", class: Class::Warrior, min_level: 1, mana: 5,  cooldown: 3.0,  range: 90.0,  effect: AbilityEffect::Damage(22) },
+    Ability { id: "whirlwind",     class: Class::Warrior, min_level: 4, mana: 12, cooldown: 8.0,  range: 140.0, effect: AbilityEffect::Aoe(16, 140.0) },
+    Ability { id: "aimed_shot",    class: Class::Hunter,  min_level: 1, mana: 6,  cooldown: 4.0,  range: 320.0, effect: AbilityEffect::Damage(20) },
+    Ability { id: "multi_shot",    class: Class::Hunter,  min_level: 4, mana: 14, cooldown: 8.0,  range: 160.0, effect: AbilityEffect::Aoe(12, 160.0) },
+    Ability { id: "smite",         class: Class::Priest,  min_level: 1, mana: 6,  cooldown: 3.0,  range: 260.0, effect: AbilityEffect::Damage(16) },
+    Ability { id: "heal",          class: Class::Priest,  min_level: 2, mana: 12, cooldown: 5.0,  range: 0.0,   effect: AbilityEffect::Heal(35) },
+    Ability { id: "firebolt",      class: Class::Mage,    min_level: 1, mana: 6,  cooldown: 2.5,  range: 280.0, effect: AbilityEffect::Damage(24) },
+    Ability { id: "frost_nova",    class: Class::Mage,    min_level: 4, mana: 15, cooldown: 10.0, range: 150.0, effect: AbilityEffect::Aoe(12, 150.0) },
+];
+
+pub fn ability(id: &str) -> Option<&'static Ability> {
+    ABILITIES.iter().find(|a| a.id == id)
+}
+
+/// Talent ids are `<class>_<branch>`; each has `TALENT_MAX_RANK` ranks.
+/// power: +4% damage/rank · toughness: +12 max HP/rank · spirit: +6% healing/rank.
+pub const TALENT_BRANCHES: [&str; 3] = ["power", "toughness", "spirit"];
+pub const TALENT_MAX_RANK: u32 = 5;
+
+fn damage_mult(sheet: &CharacterSheet) -> f32 {
+    let rank = sheet
+        .class
+        .and_then(|c| sheet.talents.get(&format!("{}_power", c.as_str())))
+        .copied()
+        .unwrap_or(0);
+    1.0 + 0.04 * rank as f32
+}
+
+fn heal_mult(sheet: &CharacterSheet) -> f32 {
+    let rank = sheet
+        .class
+        .and_then(|c| sheet.talents.get(&format!("{}_spirit", c.as_str())))
+        .copied()
+        .unwrap_or(0);
+    1.0 + 0.06 * rank as f32
+}
+
+/// Crafting recipes: (id, required (profession, skill), inputs, output).
+pub struct Recipe {
+    pub id: &'static str,
+    pub needs: Option<(&'static str, u32)>,
+    pub inputs: &'static [(&'static str, usize)],
+    pub output: &'static str,
+}
+
+pub const RECIPES: &[Recipe] = &[
+    Recipe { id: "bread",     needs: None,                    inputs: &[("wood", 2)],               output: "bread" },
+    Recipe { id: "stone_axe", needs: Some(("mining", 5)),     inputs: &[("stone", 2), ("wood", 1)], output: "stone_axe" },
+    Recipe { id: "oak_staff", needs: Some(("woodcutting", 5)), inputs: &[("wood", 3)],              output: "oak_staff" },
+];
 
 /// A tiny xorshift RNG so the sim has no external rand dependency and stays
 /// deterministic given a seed (useful for reproducible tests / replays).
@@ -84,6 +165,16 @@ pub struct Entity {
     pub attack_queued: bool,
     pub attack_timer: f32,
     pub dead_timer: f32,
+    /// Ability id queued for this tick (players).
+    pub cast_queued: Option<String>,
+    /// Global cooldown remaining.
+    pub gcd: f32,
+    /// Per-ability cooldowns remaining.
+    pub cooldowns: HashMap<String, f32>,
+    /// Live duel partner, if dueling.
+    pub duel_with: Option<EntityId>,
+    /// Fractional-second accumulator for inn rested-XP accrual.
+    pub rest_accum: f32,
     /// For a player entity, the owning connection id.
     pub owner: Option<u64>,
     /// For a player, its persistent sheet (kept in sync so we can save it).
@@ -126,6 +217,8 @@ pub enum SimEvent {
     LevelUp { owner: u64, level: u32 },
     Died { owner: u64 },
     Loot { owner: u64, item: String },
+    /// Generic per-player info line (cast failures, duel results, PvP kills).
+    Info { owner: u64, text: String },
 }
 
 impl World {
@@ -212,6 +305,11 @@ impl World {
             attack_queued: false,
             attack_timer: 0.0,
             dead_timer: 0.0,
+            cast_queued: None,
+            gcd: 0.0,
+            cooldowns: HashMap::new(),
+            duel_with: None,
+            rest_accum: 0.0,
             owner: Some(owner),
             sheet: Some(sheet),
         };
@@ -248,13 +346,19 @@ impl World {
         let zone = self.zones.get_mut(&act).unwrap();
         zone.tick += 1;
 
-        // Snapshots of live players and enemies (id, pos) for cross-entity AI/combat.
-        let players: Vec<(EntityId, Vec2)> = zone
+        // Snapshots of live players and enemies for cross-entity AI/combat.
+        // (id, pos, pvp-flagged, duel partner)
+        let player_info: Vec<(EntityId, Vec2, bool, Option<EntityId>)> = zone
             .entities
             .values()
             .filter(|e| e.kind == EntityKind::Player && e.health > 0)
-            .map(|e| (e.id, e.pos))
+            .map(|e| {
+                let pvp = e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
+                (e.id, e.pos, pvp, e.duel_with)
+            })
             .collect();
+        let players: Vec<(EntityId, Vec2)> =
+            player_info.iter().map(|(id, p, _, _)| (*id, *p)).collect();
         let enemies: Vec<(EntityId, Vec2)> = zone
             .entities
             .values()
@@ -296,6 +400,13 @@ impl World {
                         e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
                         e.rot = dir.y.atan2(dir.x);
                     }
+                    if e.gcd > 0.0 {
+                        e.gcd -= DT;
+                    }
+                    for cd in e.cooldowns.values_mut() {
+                        *cd -= DT;
+                    }
+                    e.cooldowns.retain(|_, cd| *cd > 0.0);
                     if let Some(s) = e.sheet.as_mut() {
                         let regen = (HEALTH_REGEN_PER_SEC * DT).round() as i32;
                         if e.health < e.max_health {
@@ -305,15 +416,45 @@ impl World {
                         if s.mana < s.max_mana {
                             s.mana = (s.mana + (MANA_REGEN_PER_SEC * DT).round() as i32).min(s.max_mana);
                         }
+                        // Inn: resting near the zone entry banks rested XP.
+                        if e.pos.distance(entry) <= INN_RADIUS && s.rested_xp < RESTED_CAP {
+                            e.rest_accum += DT;
+                            if e.rest_accum >= 1.0 {
+                                e.rest_accum -= 1.0;
+                                s.rested_xp = (s.rested_xp + RESTED_PER_SEC).min(RESTED_CAP);
+                            }
+                        }
                     }
+                    // Talent/gear damage bonuses.
+                    let (dmg_mult, melee_bonus, spell_bonus) = match e.sheet.as_ref() {
+                        Some(s) => (
+                            damage_mult(s),
+                            if s.inventory.iter().any(|i| i == "stone_axe") { 5 } else { 0 },
+                            if s.inventory.iter().any(|i| i == "oak_staff") { 5 } else { 0 },
+                        ),
+                        None => (1.0, 0, 0),
+                    };
+                    // A player may be hit by another player only in a mutual
+                    // duel or when both are PvP-flagged.
+                    let my_pvp = e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
+                    let pvp_targets: Vec<(EntityId, Vec2)> = player_info
+                        .iter()
+                        .filter(|(pid, _, ppvp, pduel)| {
+                            *pid != e.id
+                                && (e.duel_with == Some(*pid) && *pduel == Some(e.id)
+                                    || (my_pvp && *ppvp))
+                        })
+                        .map(|(pid, ppos, _, _)| (*pid, *ppos))
+                        .collect();
                     if e.attack_queued && e.attack_cooldown <= 0.0 {
                         e.attack_cooldown = ATTACK_COOLDOWN;
                         let facing = Vec2::new(e.rot.cos(), e.rot.sin());
-                        for (eid, epos) in &enemies {
+                        let melee_dmg = ((e.damage + melee_bonus) as f32 * dmg_mult).round() as i32;
+                        for (eid, epos) in enemies.iter().chain(pvp_targets.iter()) {
                             let to = *epos - e.pos;
                             let d = to.length();
                             if d <= MELEE_RANGE && d > 0.01 && to.normalize().dot(facing) >= MELEE_ARC_DOT {
-                                damage.push((*eid, e.damage, Some(e.id)));
+                                damage.push((*eid, melee_dmg, Some(e.id)));
                             }
                         }
                         // A swing also harvests a resource node in front of you
@@ -327,6 +468,74 @@ impl World {
                         }
                     }
                     e.attack_queued = false;
+                    // Resolve a queued ability cast.
+                    if let Some(ab_id) = e.cast_queued.take() {
+                        let owner = e.owner.unwrap_or(0);
+                        let fail = |events: &mut Vec<SimEvent>, text: &str| {
+                            events.push(SimEvent::Info { owner, text: text.to_string() });
+                        };
+                        let Some(ab) = ability(&ab_id) else {
+                            fail(events, "Unknown ability.");
+                            continue;
+                        };
+                        let sheet_ok = e.sheet.as_ref().map(|s| {
+                            (s.class == Some(ab.class), s.level >= ab.min_level, s.mana >= ab.mana)
+                        });
+                        match sheet_ok {
+                            Some((true, true, true)) => {}
+                            Some((false, _, _)) => { fail(events, "That ability is not of your class."); continue; }
+                            Some((_, false, _)) => { fail(events, "You are not high enough level."); continue; }
+                            Some((_, _, false)) => { fail(events, "Not enough mana."); continue; }
+                            None => continue,
+                        }
+                        if e.gcd > 0.0 || e.cooldowns.get(ab.id).copied().unwrap_or(0.0) > 0.0 {
+                            fail(events, "Ability not ready.");
+                            continue;
+                        }
+                        e.gcd = GCD_SECS;
+                        e.cooldowns.insert(ab.id.to_string(), ab.cooldown);
+                        if let Some(s) = e.sheet.as_mut() {
+                            s.mana -= ab.mana;
+                        }
+                        match ab.effect {
+                            AbilityEffect::Damage(base) => {
+                                let dmg = ((base + spell_bonus) as f32 * dmg_mult).round() as i32;
+                                let facing = Vec2::new(e.rot.cos(), e.rot.sin());
+                                // Nearest valid target in range, roughly in front.
+                                let target = enemies
+                                    .iter()
+                                    .chain(pvp_targets.iter())
+                                    .filter_map(|(tid, tpos)| {
+                                        let to = *tpos - e.pos;
+                                        let d = to.length();
+                                        (d <= ab.range && d > 0.01 && to.normalize().dot(facing) >= 0.0)
+                                            .then_some((*tid, d))
+                                    })
+                                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                match target {
+                                    Some((tid, _)) => damage.push((tid, dmg, Some(e.id))),
+                                    None => fail(events, "No target in range."),
+                                }
+                            }
+                            AbilityEffect::Aoe(base, radius) => {
+                                let dmg = ((base + spell_bonus) as f32 * dmg_mult).round() as i32;
+                                for (tid, tpos) in enemies.iter().chain(pvp_targets.iter()) {
+                                    if e.pos.distance(*tpos) <= radius {
+                                        damage.push((*tid, dmg, Some(e.id)));
+                                    }
+                                }
+                            }
+                            AbilityEffect::Heal(base) => {
+                                let amount = (base as f32
+                                    * e.sheet.as_ref().map(heal_mult).unwrap_or(1.0))
+                                .round() as i32;
+                                e.health = (e.health + amount).min(e.max_health);
+                                if let Some(s) = e.sheet.as_mut() {
+                                    s.health = e.health;
+                                }
+                            }
+                        }
+                    }
                 }
                 EntityKind::Enemy => {
                     if e.health <= 0 {
@@ -391,8 +600,10 @@ impl World {
             }
         }
 
-        // Apply damage; collect kills.
+        // Apply damage; collect kills. A dueling player never dies to duel
+        // damage — at 0 HP the duel ends and they stay at 1 HP.
         let mut killed: Vec<(EntityId, Option<EntityId>)> = Vec::new();
+        let mut duel_over: Vec<(EntityId, EntityId)> = Vec::new(); // (loser, winner)
         for (target, dmg, attacker) in damage {
             if let Some(t) = zone.entities.get_mut(&target) {
                 if t.health <= 0 {
@@ -400,10 +611,36 @@ impl World {
                 }
                 t.health -= dmg;
                 if t.health <= 0 {
-                    killed.push((target, attacker));
                     if t.kind == EntityKind::Player {
+                        if let (Some(partner), Some(att)) = (t.duel_with, attacker) {
+                            if partner == att {
+                                t.health = 1;
+                                if let Some(s) = t.sheet.as_mut() {
+                                    s.health = 1;
+                                }
+                                duel_over.push((target, partner));
+                                continue;
+                            }
+                        }
                         t.dead_timer = RESPAWN_SECS;
                     }
+                    killed.push((target, attacker));
+                }
+            }
+        }
+        for (loser, winner) in duel_over {
+            for (id, other) in [(loser, winner), (winner, loser)] {
+                if let Some(p) = zone.entities.get_mut(&id) {
+                    p.duel_with = None;
+                    if let Some(o) = p.owner {
+                        let text = if id == winner {
+                            "You won the duel!".to_string()
+                        } else {
+                            "You lost the duel.".to_string()
+                        };
+                        events.push(SimEvent::Info { owner: o, text });
+                    }
+                    let _ = other;
                 }
             }
         }
@@ -414,6 +651,16 @@ impl World {
             let (kind, xp_value, etag) = match zone.entities.get(&target_id) {
                 Some(t) if t.kind == EntityKind::Enemy => (EntityKind::Enemy, t.xp_value, t.tag.clone()),
                 Some(t) if t.kind == EntityKind::Resource => (EntityKind::Resource, 0, t.tag.clone()),
+                Some(t) if t.kind == EntityKind::Player => {
+                    // World-PvP kill: victim respawns via dead_timer; killer
+                    // gets a notice but no XP (no farming players for levels).
+                    if let Some(att) = attacker_ent.and_then(|a| zone.entities.get(&a)) {
+                        if let Some(o) = att.owner {
+                            events.push(SimEvent::Info { owner: o, text: "Honorable kill!".into() });
+                        }
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             zone.entities.remove(&target_id);
@@ -445,6 +692,22 @@ impl World {
                             events.push(SimEvent::LevelUp { owner: o, level: lvl });
                         }
                         if let Some(s) = p.sheet.as_mut() {
+                            match kind {
+                                // Enemy kills also pay gold.
+                                EntityKind::Enemy => {
+                                    let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
+                                    s.gold += 2 + tier * 2;
+                                }
+                                // Harvesting levels the matching profession.
+                                EntityKind::Resource => {
+                                    let prof = if reward_item == "stone" { "mining" } else { "woodcutting" };
+                                    let skill = s.professions.entry(prof.to_string()).or_insert(0);
+                                    if *skill < PROFESSION_CAP {
+                                        *skill += 1;
+                                    }
+                                }
+                                _ => {}
+                            }
                             if s.inventory.len() < 40 {
                                 s.inventory.push(reward_item.clone());
                                 events.push(SimEvent::Loot { owner: o, item: reward_item });
@@ -473,6 +736,191 @@ impl World {
             if let Some(e) = z.entities.get_mut(&id) {
                 e.attack_queued = true;
             }
+        }
+    }
+
+    pub fn queue_cast(&mut self, act: Act, id: EntityId, ability: String) {
+        if let Some(e) = self.entity_mut(act, id) {
+            e.cast_queued = Some(ability);
+        }
+    }
+
+    fn entity_mut(&mut self, act: Act, id: EntityId) -> Option<&mut Entity> {
+        self.zones.get_mut(&act)?.entities.get_mut(&id)
+    }
+
+    fn sheet_mut(&mut self, act: Act, id: EntityId) -> Option<&mut CharacterSheet> {
+        self.entity_mut(act, id)?.sheet.as_mut()
+    }
+
+    /// Choose a class (once). Applies the class's base-stat kit.
+    pub fn select_class(&mut self, act: Act, id: EntityId, class: Class) -> Result<String, String> {
+        let e = self.entity_mut(act, id).ok_or("no such player")?;
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        if s.class.is_some() {
+            return Err("You have already chosen a class.".into());
+        }
+        s.class = Some(class);
+        let (hp, mana) = match class {
+            Class::Warrior => (40, 0),
+            Class::Hunter => (20, 15),
+            Class::Priest => (10, 40),
+            Class::Mage => (0, 50),
+        };
+        s.max_health += hp;
+        s.health = s.max_health;
+        s.max_mana += mana;
+        s.mana = s.max_mana;
+        e.max_health = s.max_health;
+        e.health = s.health;
+        Ok(format!("You are now a {}.", class.as_str()))
+    }
+
+    /// Spend one talent point on `talent` (id `<class>_<branch>`).
+    pub fn learn_talent(&mut self, act: Act, id: EntityId, talent: &str) -> Result<String, String> {
+        let e = self.entity_mut(act, id).ok_or("no such player")?;
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        let class = s.class.ok_or("Choose a class first.")?;
+        let valid = TALENT_BRANCHES
+            .iter()
+            .any(|b| talent == format!("{}_{}", class.as_str(), b));
+        if !valid {
+            return Err(format!("Unknown talent for your class: {talent}"));
+        }
+        if s.talent_points == 0 {
+            return Err("No unspent talent points.".into());
+        }
+        let rank = s.talents.entry(talent.to_string()).or_insert(0);
+        if *rank >= TALENT_MAX_RANK {
+            return Err("That talent is already at max rank.".into());
+        }
+        *rank += 1;
+        let rank = *rank;
+        s.talent_points -= 1;
+        if talent.ends_with("_toughness") {
+            s.max_health += 12;
+            s.health = s.max_health.min(s.health + 12);
+            e.max_health = s.max_health;
+            e.health = e.health.max(s.health);
+        }
+        Ok(format!("Learned {talent} (rank {rank})."))
+    }
+
+    /// Craft a recipe: checks profession skill, consumes inputs, adds output.
+    pub fn craft(&mut self, act: Act, id: EntityId, recipe: &str) -> Result<String, String> {
+        let r = RECIPES.iter().find(|r| r.id == recipe).ok_or("Unknown recipe.")?;
+        let s = self.sheet_mut(act, id).ok_or("no sheet")?;
+        if let Some((prof, min)) = r.needs {
+            let skill = s.professions.get(prof).copied().unwrap_or(0);
+            if skill < min {
+                return Err(format!("Requires {prof} {min} (you have {skill})."));
+            }
+        }
+        for (item, n) in r.inputs {
+            let have = s.inventory.iter().filter(|i| i.as_str() == *item).count();
+            if have < *n {
+                return Err(format!("Requires {n}x {item} (you have {have})."));
+            }
+        }
+        for (item, n) in r.inputs {
+            for _ in 0..*n {
+                let idx = s.inventory.iter().position(|i| i == item).unwrap();
+                s.inventory.remove(idx);
+            }
+        }
+        s.inventory.push(r.output.to_string());
+        Ok(format!("You craft a {}.", r.output))
+    }
+
+    /// Use a consumable from the inventory.
+    pub fn use_item(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
+        let e = self.entity_mut(act, id).ok_or("no such player")?;
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        let idx = s.inventory.iter().position(|i| i == item).ok_or("You don't have that.")?;
+        match item {
+            "bread" => {
+                s.inventory.remove(idx);
+                e.health = (e.health + 40).min(e.max_health);
+                s.health = e.health;
+                Ok("You eat the bread and recover 40 health.".into())
+            }
+            _ => Err("You can't use that.".into()),
+        }
+    }
+
+    /// Toggle the PvP flag; returns the new state.
+    pub fn toggle_pvp(&mut self, act: Act, id: EntityId) -> Option<bool> {
+        let s = self.sheet_mut(act, id)?;
+        s.pvp = !s.pvp;
+        Some(s.pvp)
+    }
+
+    /// Pair two players in a duel (both must be live in the same zone).
+    pub fn start_duel(&mut self, act: Act, a: EntityId, b: EntityId) -> bool {
+        let z = match self.zones.get_mut(&act) {
+            Some(z) => z,
+            None => return false,
+        };
+        if !z.entities.contains_key(&a) || !z.entities.contains_key(&b) {
+            return false;
+        }
+        z.entities.get_mut(&a).unwrap().duel_with = Some(b);
+        z.entities.get_mut(&b).unwrap().duel_with = Some(a);
+        true
+    }
+
+    /// Remove an item from a player's inventory (for auction listing). True on success.
+    pub fn take_item(&mut self, act: Act, id: EntityId, item: &str) -> bool {
+        match self.sheet_mut(act, id) {
+            Some(s) => match s.inventory.iter().position(|i| i == item) {
+                Some(idx) => {
+                    s.inventory.remove(idx);
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        }
+    }
+
+    pub fn give_item(&mut self, act: Act, id: EntityId, item: String) -> bool {
+        match self.sheet_mut(act, id) {
+            Some(s) if s.inventory.len() < 40 => {
+                s.inventory.push(item);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn set_guild(&mut self, act: Act, id: EntityId, guild: Option<String>) {
+        if let Some(s) = self.sheet_mut(act, id) {
+            s.guild = guild;
+        }
+    }
+
+    pub fn add_gold(&mut self, act: Act, id: EntityId, amount: u32) {
+        if let Some(s) = self.sheet_mut(act, id) {
+            s.gold += amount;
+        }
+    }
+
+    /// Deduct gold if the player can afford it. True on success.
+    pub fn try_spend_gold(&mut self, act: Act, id: EntityId, amount: u32) -> bool {
+        match self.sheet_mut(act, id) {
+            Some(s) if s.gold >= amount => {
+                s.gold -= amount;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Is the player inside the inn / rest area (required for auction house)?
+    pub fn at_inn(&self, act: Act, id: EntityId) -> bool {
+        match (self.zones.get(&act), self.player_pos(act, id)) {
+            (Some(z), Some(pos)) => pos.distance(z.entry) <= INN_RADIUS,
+            _ => false,
         }
     }
 
@@ -553,6 +1001,11 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         attack_queued: false,
         attack_timer: 0.0,
         dead_timer: 0.0,
+        cast_queued: None,
+        gcd: 0.0,
+        cooldowns: HashMap::new(),
+        duel_with: None,
+        rest_accum: 0.0,
         owner: None,
         sheet: None,
     }
@@ -582,6 +1035,11 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         attack_queued: false,
         attack_timer: 0.0,
         dead_timer: 0.0,
+        cast_queued: None,
+        gcd: 0.0,
+        cooldowns: HashMap::new(),
+        duel_with: None,
+        rest_accum: 0.0,
         owner: None,
         sheet: None,
     }
@@ -611,6 +1069,11 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         attack_queued: false,
         attack_timer: 0.0,
         dead_timer: 0.0,
+        cast_queued: None,
+        gcd: 0.0,
+        cooldowns: HashMap::new(),
+        duel_with: None,
+        rest_accum: 0.0,
         owner: None,
         sheet: None,
     }
@@ -623,10 +1086,13 @@ fn nearest_of(players: &[(EntityId, Vec2)], from: Vec2) -> Option<(EntityId, Vec
         .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
 }
 
-/// Grant xp, applying level-ups. Returns true if the player leveled at least once.
+/// Grant xp, applying level-ups. Rested XP (banked at inns) doubles kill XP
+/// until the bank runs out, WoW-style. Returns true if the player leveled.
 fn award_xp(p: &mut Entity, xp: u32) -> bool {
     let Some(s) = p.sheet.as_mut() else { return false };
-    s.xp += xp;
+    let rested_bonus = xp.min(s.rested_xp);
+    s.rested_xp -= rested_bonus;
+    s.xp += xp + rested_bonus;
     let mut leveled = false;
     while s.xp >= s.max_xp {
         s.xp -= s.max_xp;
@@ -636,6 +1102,7 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
         s.max_mana += 8;
         s.health = s.max_health;
         s.mana = s.max_mana;
+        s.talent_points += 1;
         leveled = true;
     }
     if leveled {
@@ -724,6 +1191,166 @@ mod tests {
             after.inventory
         );
     }
+
+    /// Spawn a player at (x, y) in Eden with a chosen class, positioned so a
+    /// test can drive it directly.
+    fn spawn_at(w: &mut World, owner: u64, name: &str, x: f32, y: f32) -> EntityId {
+        let mut sheet = new_character(name);
+        sheet.x = x;
+        sheet.y = y;
+        w.spawn_player(owner, sheet)
+    }
+
+    #[test]
+    fn class_select_and_cast_damages_target_and_costs_mana() {
+        let mut w = World::new(3);
+        let (eid, epos) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy)
+                .unwrap();
+            (e.id, e.pos)
+        };
+        let pid = spawn_at(&mut w, 1, "Magus", epos.x - 100.0, epos.y);
+        w.select_class(Act::Eden, pid, Class::Mage).unwrap();
+        // Second class pick is rejected.
+        assert!(w.select_class(Act::Eden, pid, Class::Warrior).is_err());
+
+        let before_hp = w.zones[&Act::Eden].entities[&eid].health;
+        let mana_before = w.player_sheet(Act::Eden, pid).unwrap().mana;
+        w.queue_cast(Act::Eden, pid, "firebolt".into());
+        w.step();
+        let after_hp = w.zones[&Act::Eden].entities[&eid].health;
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(after_hp < before_hp, "firebolt should damage the enemy");
+        assert!(s.mana < mana_before, "cast should cost mana");
+
+        // Immediately recasting fails: GCD + cooldown.
+        w.queue_cast(Act::Eden, pid, "firebolt".into());
+        w.step();
+        let hp2 = w.zones[&Act::Eden].entities[&eid].health;
+        assert_eq!(hp2, after_hp, "cooldown should block the second cast");
+    }
+
+    #[test]
+    fn wrong_class_ability_is_rejected() {
+        let mut w = World::new(4);
+        let pid = spawn_at(&mut w, 1, "Tank", 0.0, 0.0);
+        w.select_class(Act::Eden, pid, Class::Warrior).unwrap();
+        let mana_before = w.player_sheet(Act::Eden, pid).unwrap().mana;
+        w.queue_cast(Act::Eden, pid, "firebolt".into());
+        w.step();
+        assert_eq!(
+            w.player_sheet(Act::Eden, pid).unwrap().mana,
+            mana_before,
+            "cross-class cast must not consume mana"
+        );
+    }
+
+    #[test]
+    fn talents_require_points_and_boost_stats() {
+        let mut w = World::new(5);
+        let pid = spawn_at(&mut w, 1, "Vet", 0.0, 0.0);
+        w.select_class(Act::Eden, pid, Class::Warrior).unwrap();
+        // No points yet.
+        assert!(w.learn_talent(Act::Eden, pid, "warrior_toughness").is_err());
+        // Grant a point by hand (level-ups grant 1 each; tested via award path elsewhere).
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap().talent_points = 1;
+        }
+        let hp_before = w.player_sheet(Act::Eden, pid).unwrap().max_health;
+        w.learn_talent(Act::Eden, pid, "warrior_toughness").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.max_health, hp_before + 12);
+        assert_eq!(s.talent_points, 0);
+        assert!(w.learn_talent(Act::Eden, pid, "mage_power").is_err(), "wrong class talent");
+    }
+
+    #[test]
+    fn unflagged_players_cannot_hurt_each_other_but_duelists_can() {
+        let mut w = World::new(6);
+        // Far corner: no enemies wander at exactly the entry in tick 1; place
+        // the pair away from everything.
+        let a = spawn_at(&mut w, 1, "Cain", 500.0, 500.0);
+        let b = spawn_at(&mut w, 2, "Abel", 540.0, 500.0);
+        // Not flagged, not dueling: melee does nothing to the other player.
+        w.queue_attack(Act::Eden, a);
+        w.step();
+        let b_hp = w.zones[&Act::Eden].entities[&b].health;
+        assert_eq!(b_hp, 100, "unflagged players must be immune to PvP damage");
+        // Duel on: damage lands, and the loser ends at 1 HP, never dead.
+        assert!(w.start_duel(Act::Eden, a, b));
+        let mut b_hp_last = b_hp;
+        for _ in 0..600 {
+            w.queue_attack(Act::Eden, a);
+            w.step();
+            b_hp_last = w.zones[&Act::Eden].entities[&b].health;
+            if w.zones[&Act::Eden].entities[&b].duel_with.is_none() {
+                break;
+            }
+        }
+        assert_eq!(b_hp_last, 1, "duel loser should survive at 1 HP");
+        assert!(w.zones[&Act::Eden].entities[&a].duel_with.is_none(), "duel should end");
+    }
+
+    #[test]
+    fn crafting_consumes_materials_and_checks_skill() {
+        let mut w = World::new(8);
+        let pid = spawn_at(&mut w, 1, "Smith", 0.0, 0.0);
+        // No materials.
+        assert!(w.craft(Act::Eden, pid, "bread").is_err());
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.inventory = vec!["wood".into(), "wood".into(), "stone".into(), "stone".into(), "wood".into()];
+        }
+        // stone_axe needs mining 5.
+        assert!(w.craft(Act::Eden, pid, "stone_axe").is_err());
+        w.craft(Act::Eden, pid, "bread").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.inventory.iter().any(|i| i == "bread"));
+        assert_eq!(s.inventory.iter().filter(|i| i.as_str() == "wood").count(), 1);
+        // Level mining and craft the axe.
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.professions.insert("mining".into(), 5);
+        }
+        w.craft(Act::Eden, pid, "stone_axe").unwrap();
+        assert!(w.player_sheet(Act::Eden, pid).unwrap().inventory.iter().any(|i| i == "stone_axe"));
+    }
+
+    #[test]
+    fn resting_at_inn_banks_rested_xp() {
+        let mut w = World::new(9);
+        let pid = spawn_at(&mut w, 1, "Sleepy", 0.0, 0.0); // entry = inn
+        for _ in 0..(TICK_HZ * 3) {
+            w.step();
+        }
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.rested_xp > 0, "3s at the inn should bank rested XP, got {}", s.rested_xp);
+    }
+
+    #[test]
+    fn harvesting_levels_the_profession() {
+        let mut w = World::new(42);
+        let (res_pos, tag) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Resource)
+                .unwrap();
+            (e.pos, e.tag.clone().unwrap())
+        };
+        let prof = if tag == "rock" { "mining" } else { "woodcutting" };
+        let pid = spawn_at(&mut w, 1, "Gatherer", res_pos.x - 12.0, res_pos.y);
+        w.queue_attack(Act::Eden, pid);
+        w.step();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.professions.get(prof).copied().unwrap_or(0), 1);
+    }
 }
 
 /// A fresh level-1 character at Eden's entry point.
@@ -741,5 +1368,13 @@ pub fn new_character(name: &str) -> CharacterSheet {
         mana: 50,
         max_mana: 50,
         inventory: Vec::new(),
+        class: None,
+        gold: 0,
+        talent_points: 0,
+        talents: Default::default(),
+        professions: Default::default(),
+        guild: None,
+        rested_xp: 0,
+        pvp: false,
     }
 }

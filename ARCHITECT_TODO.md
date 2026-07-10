@@ -20,3 +20,11 @@ Direction (chosen by Daniel): **full Rust MMORPG**. Delivered a working,
 verified vertical slice — authoritative headless server + networked Bevy client
 + area-of-interest snapshots + resource harvesting + tests. See `PROJECT.md`
 "Status" for done-vs-deferred.
+
+## GOAL (set by Daniel 2026-07-09) — WoW-Classic-class MMORPG in Rust
+Antediluvia is to become a Rust-based competitor to World of Warcraft, with
+**full WoW-Classic-style graphics and systems**: 3D world + character rendering,
+combat, class skills/spells, PvP, talent trees, guilds, professions, auction
+houses, inns/rest, and the rest of the classic feature set. The current 2D Bevy
+client is a stepping stone — the client must move to Bevy 3D. Server stays
+headless/authoritative. Track the roadmap in `PROJECT.md`.

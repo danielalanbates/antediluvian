@@ -5,11 +5,34 @@
 //! saves / disconnect — the hot simulation path never blocks on it.
 
 use anyhow::Result;
-use antediluvia_protocol::{Act, CharacterSheet};
+use antediluvia_protocol::{Act, AuctionListing, CharacterSheet, Class};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 pub struct Db {
     conn: Connection,
+}
+
+/// The WoW-systems extension of a character sheet, stored as one JSON column so
+/// adding fields never needs a schema migration.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SheetExt {
+    #[serde(default)]
+    class: Option<Class>,
+    #[serde(default)]
+    gold: u32,
+    #[serde(default)]
+    talent_points: u32,
+    #[serde(default)]
+    talents: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    professions: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    guild: Option<String>,
+    #[serde(default)]
+    rested_xp: u32,
+    #[serde(default)]
+    pvp: bool,
 }
 
 impl Db {
@@ -35,8 +58,34 @@ impl Db {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS guilds (
+                name_key TEXT PRIMARY KEY,
+                name     TEXT NOT NULL,
+                leader   TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS guild_members (
+                guild_key  TEXT NOT NULL,
+                member_key TEXT NOT NULL,
+                member     TEXT NOT NULL,
+                PRIMARY KEY (guild_key, member_key)
+            );
+            CREATE TABLE IF NOT EXISTS auctions (
+                id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller TEXT NOT NULL,
+                item   TEXT NOT NULL,
+                price  INTEGER NOT NULL
+            );
             "#,
         )?;
+        // v2 migration: add the JSON ext column to pre-existing v1 databases.
+        let has_ext: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name = 'ext'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_ext == 0 {
+            conn.execute("ALTER TABLE accounts ADD COLUMN ext TEXT NOT NULL DEFAULT '{}'", [])?;
+        }
         Ok(Self { conn })
     }
 
@@ -46,12 +95,14 @@ impl Db {
         let row = self
             .conn
             .query_row(
-                "SELECT name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory
+                "SELECT name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext
                  FROM accounts WHERE name_key = ?1",
                 params![key],
                 |r| {
                     let act_str: String = r.get(1)?;
                     let inv_str: String = r.get(11)?;
+                    let ext_str: String = r.get(12)?;
+                    let ext: SheetExt = serde_json::from_str(&ext_str).unwrap_or_default();
                     Ok(CharacterSheet {
                         name: r.get(0)?,
                         act: parse_act(&act_str),
@@ -65,6 +116,14 @@ impl Db {
                         mana: r.get(9)?,
                         max_mana: r.get(10)?,
                         inventory: inv_str.split('\u{1f}').filter(|s| !s.is_empty()).map(String::from).collect(),
+                        class: ext.class,
+                        gold: ext.gold,
+                        talent_points: ext.talent_points,
+                        talents: ext.talents,
+                        professions: ext.professions,
+                        guild: ext.guild,
+                        rested_xp: ext.rested_xp,
+                        pvp: ext.pvp,
                     })
                 },
             )
@@ -76,21 +135,128 @@ impl Db {
     pub fn save(&self, c: &CharacterSheet) -> Result<()> {
         let key = c.name.trim().to_lowercase();
         let inv = c.inventory.join("\u{1f}");
+        let ext = serde_json::to_string(&SheetExt {
+            class: c.class,
+            gold: c.gold,
+            talent_points: c.talent_points,
+            talents: c.talents.clone(),
+            professions: c.professions.clone(),
+            guild: c.guild.clone(),
+            rested_xp: c.rested_xp,
+            pvp: c.pvp,
+        })?;
         self.conn.execute(
             "INSERT INTO accounts
-                (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13, datetime('now'))
+                (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14, datetime('now'))
              ON CONFLICT(name_key) DO UPDATE SET
                 act=excluded.act, x=excluded.x, y=excluded.y, level=excluded.level,
                 xp=excluded.xp, max_xp=excluded.max_xp, health=excluded.health,
                 max_health=excluded.max_health, mana=excluded.mana, max_mana=excluded.max_mana,
-                inventory=excluded.inventory, updated_at=datetime('now')",
+                inventory=excluded.inventory, ext=excluded.ext, updated_at=datetime('now')",
             params![
                 key, c.name, c.act.as_str(), c.x, c.y,
                 c.level as i64, c.xp as i64, c.max_xp as i64,
-                c.health, c.max_health, c.mana, c.max_mana, inv
+                c.health, c.max_health, c.mana, c.max_mana, inv, ext
             ],
         )?;
+        Ok(())
+    }
+
+    // ── Guilds ───────────────────────────────────────────────────────────────
+
+    /// Create a guild with `leader` as its first member. Errors if the name is taken.
+    pub fn guild_create(&self, name: &str, leader: &str) -> Result<bool> {
+        let key = name.trim().to_lowercase();
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO guilds (name_key, name, leader) VALUES (?1, ?2, ?3)",
+            params![key, name.trim(), leader],
+        )?;
+        if n == 0 {
+            return Ok(false);
+        }
+        self.guild_add_member(name, leader)?;
+        Ok(true)
+    }
+
+    pub fn guild_add_member(&self, guild: &str, member: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO guild_members (guild_key, member_key, member) VALUES (?1, ?2, ?3)",
+            params![guild.trim().to_lowercase(), member.trim().to_lowercase(), member.trim()],
+        )?;
+        Ok(())
+    }
+
+    pub fn guild_remove_member(&self, guild: &str, member: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM guild_members WHERE guild_key = ?1 AND member_key = ?2",
+            params![guild.trim().to_lowercase(), member.trim().to_lowercase()],
+        )?;
+        Ok(())
+    }
+
+    pub fn guild_members(&self, guild: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT member FROM guild_members WHERE guild_key = ?1 ORDER BY member")?;
+        let rows = stmt.query_map(params![guild.trim().to_lowercase()], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<String>, _>>()?)
+    }
+
+    // ── Auction house ────────────────────────────────────────────────────────
+
+    pub fn auction_insert(&self, seller: &str, item: &str, price: u32) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO auctions (seller, item, price) VALUES (?1, ?2, ?3)",
+            params![seller, item, price as i64],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn auction_list(&self) -> Result<Vec<AuctionListing>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, seller, item, price FROM auctions ORDER BY id LIMIT 100")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(AuctionListing {
+                id: r.get(0)?,
+                seller: r.get(1)?,
+                item: r.get(2)?,
+                price: r.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Atomically remove and return a listing (the buy path).
+    pub fn auction_take(&self, id: i64) -> Result<Option<AuctionListing>> {
+        let listing = self
+            .conn
+            .query_row(
+                "SELECT id, seller, item, price FROM auctions WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(AuctionListing {
+                        id: r.get(0)?,
+                        seller: r.get(1)?,
+                        item: r.get(2)?,
+                        price: r.get::<_, i64>(3)? as u32,
+                    })
+                },
+            )
+            .optional()?;
+        if listing.is_some() {
+            self.conn.execute("DELETE FROM auctions WHERE id = ?1", params![id])?;
+        }
+        Ok(listing)
+    }
+
+    /// Credit gold to an offline character's saved sheet (auction proceeds).
+    pub fn credit_gold(&self, name: &str, amount: u32) -> Result<()> {
+        if let Some(mut sheet) = self.load(name)? {
+            sheet.gold += amount;
+            self.save(&sheet)?;
+        }
         Ok(())
     }
 }

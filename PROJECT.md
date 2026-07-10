@@ -49,6 +49,37 @@ cargo run -p antediluvia-client-bevy
 Env: `ANTEDILUVIA_BIND` (default `127.0.0.1:8787`), `ANTEDILUVIA_DB`
 (default `antediluvia.sqlite`).
 
+## Goal (set by Daniel 2026-07-09)
+A Rust-based competitor to **World of Warcraft Classic** — full classic-style
+graphics and systems: 3D world/characters, combat, class skills, PvP, talent
+trees, guilds, professions, auction houses, inns. Build order: (1) server
+systems ✅ (below), (2) Bevy 3D client migration, (3) content (quests, dungeons,
+itemization across the five acts).
+
+## Status (2026-07-09 late) — WoW systems layer live (proto v2)
+
+All server-authoritative; covered by 9 unit tests + 22 wire-level E2E checks
+(two live WebSocket clients):
+- **Classes:** warrior / hunter / priest / mage (`SelectClass`, once per
+  character; each applies a base-stat kit).
+- **Abilities:** 2 per class (`Cast`) — mana costs, per-ability cooldowns, 1s
+  global cooldown; single-target, AoE, and self-heal effects; damage scales
+  with talents and crafted gear (stone_axe/oak_staff).
+- **Talents:** 1 point per level-up; 3 branches per class (`<class>_power/_toughness/_spirit`),
+  5 ranks each (`LearnTalent`).
+- **PvP:** opt-in world-PvP flag (`TogglePvp`, both sides must be flagged) and
+  duels (`Duel`/`DuelAccept`; loser ends at 1 HP, never dies).
+- **Guilds:** create/invite/accept/leave, persisted roster, cross-zone `[G]` chat.
+- **Professions:** woodcutting/mining skill-ups from harvesting; crafting with
+  material + skill requirements (`Craft`); consumables (`UseItem` — bread heals).
+- **Economy:** gold from kills (scales by act tier); **auction house** usable at
+  any inn (`AuctionList`/`AuctionBrowse`/`AuctionBuy`) — listings persisted,
+  offline sellers credited on their saved sheet, double-buy rejected.
+- **Inns:** the `INN_RADIUS` around each zone entry banks rested XP (capped at
+  2000), which doubles kill XP until the bank is spent.
+- **Persistence:** new sheet fields ride a JSON `ext` column (v1 DBs
+  auto-migrate); guilds + auctions get their own tables.
+
 ## Status (2026-07-09) — playable networked MMORPG
 
 **Done & verified:**

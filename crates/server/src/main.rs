@@ -32,6 +32,12 @@ struct Conn {
     entity: Option<EntityId>,
     act: Act,
     logged_in: bool,
+    /// Live guild membership (mirrors the sheet, for chat routing).
+    guild: Option<String>,
+    /// Conn id of a player who challenged us to a duel.
+    pending_duel: Option<u64>,
+    /// Guild we've been invited to.
+    pending_guild_invite: Option<String>,
 }
 
 impl Conn {
@@ -120,7 +126,16 @@ fn handle_cmd(
 ) {
     match cmd {
         GameCmd::Connect { id, out } => {
-            conns.insert(id, Conn { out, name: None, entity: None, act: Act::Eden, logged_in: false });
+            conns.insert(id, Conn {
+                out,
+                name: None,
+                entity: None,
+                act: Act::Eden,
+                logged_in: false,
+                guild: None,
+                pending_duel: None,
+                pending_guild_invite: None,
+            });
         }
         GameCmd::Disconnect { id } => {
             if let Some(c) = conns.remove(&id) {
@@ -184,6 +199,7 @@ fn handle_client_msg(
                 }
             };
             let act = sheet.act;
+            let guild = sheet.guild.clone();
             let entity_id = world.spawn_player(id, sheet.clone());
             active_names.insert(key.clone());
             if let Some(c) = conns.get_mut(&id) {
@@ -191,6 +207,7 @@ fn handle_client_msg(
                 c.entity = Some(entity_id);
                 c.act = act;
                 c.logged_in = true;
+                c.guild = guild;
                 c.send(ServerMsg::Welcome { entity_id, character: sheet });
             }
             tracing::info!(conn = id, %name, act = act.as_str(), "login");
@@ -245,9 +262,321 @@ fn handle_client_msg(
                 }
             }
         }
+        ClientMsg::SelectClass { class } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.select_class(act, ent, class) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Cast { ability } => {
+            if let Some((act, ent)) = conn_entity(conns, id) {
+                world.queue_cast(act, ent, ability);
+            }
+        }
+        ClientMsg::LearnTalent { talent } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.learn_talent(act, ent, &talent) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::TogglePvp => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            if let Some(on) = world.toggle_pvp(act, ent) {
+                let text = if on {
+                    "You are now flagged for PvP.".to_string()
+                } else {
+                    "PvP flag removed.".to_string()
+                };
+                notice(conns, id, text);
+                send_stats(world, conns, id);
+            }
+        }
+        ClientMsg::Duel { player } => {
+            let Some((act, _)) = conn_entity(conns, id) else { return };
+            let from = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            let target = conns.iter().find_map(|(cid, c)| {
+                (*cid != id
+                    && c.logged_in
+                    && c.act == act
+                    && c.name.as_deref().map(|n| n.eq_ignore_ascii_case(&player)) == Some(true))
+                .then_some(*cid)
+            });
+            match target {
+                Some(tid) => {
+                    if let Some(t) = conns.get_mut(&tid) {
+                        t.pending_duel = Some(id);
+                        t.send(ServerMsg::Notice {
+                            text: format!("{from} challenges you to a duel! (accept to fight)"),
+                        });
+                    }
+                    notice(conns, id, format!("You challenge {player} to a duel."));
+                }
+                None => notice(conns, id, "No such player in this zone.".into()),
+            }
+        }
+        ClientMsg::DuelAccept => {
+            let challenger = match conns.get_mut(&id) {
+                Some(c) if c.logged_in => c.pending_duel.take(),
+                _ => return,
+            };
+            let Some(cid) = challenger else {
+                return notice(conns, id, "No pending duel challenge.".into());
+            };
+            let (my_act, my_ent) = match conn_entity(conns, id) {
+                Some(v) => v,
+                None => return,
+            };
+            let their = match conns.get(&cid) {
+                Some(c) if c.logged_in && c.act == my_act => c.entity,
+                _ => None,
+            };
+            match their {
+                Some(their_ent) if world.start_duel(my_act, my_ent, their_ent) => {
+                    notice(conns, id, "Duel started — fight!".into());
+                    notice(conns, cid, "Your duel challenge was accepted — fight!".into());
+                }
+                _ => notice(conns, id, "The challenger is no longer available.".into()),
+            }
+        }
+        ClientMsg::UseItem { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.use_item(act, ent, &item) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Craft { recipe } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.craft(act, ent, &recipe) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::GuildCreate { name } => {
+            let gname = name.trim().to_string();
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            if gname.is_empty() || gname.len() > 24 {
+                return notice(conns, id, "Guild name must be 1-24 characters.".into());
+            }
+            if conns.get(&id).map(|c| c.guild.is_some()).unwrap_or(false) {
+                return notice(conns, id, "You are already in a guild.".into());
+            }
+            let me = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            match db.guild_create(&gname, &me) {
+                Ok(true) => {
+                    world.set_guild(act, ent, Some(gname.clone()));
+                    if let Some(c) = conns.get_mut(&id) {
+                        c.guild = Some(gname.clone());
+                    }
+                    let members = db.guild_members(&gname).unwrap_or_default();
+                    if let Some(c) = conns.get(&id) {
+                        c.send(ServerMsg::GuildInfo { name: gname, members });
+                    }
+                    notice(conns, id, "Guild founded.".into());
+                }
+                Ok(false) => notice(conns, id, "That guild name is taken.".into()),
+                Err(e) => {
+                    tracing::error!("guild_create: {e}");
+                    notice(conns, id, "Server error creating guild.".into());
+                }
+            }
+        }
+        ClientMsg::GuildInvite { player } => {
+            let guild = match conns.get(&id) {
+                Some(c) if c.logged_in => c.guild.clone(),
+                _ => return,
+            };
+            let Some(guild) = guild else {
+                return notice(conns, id, "You are not in a guild.".into());
+            };
+            let from = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            let target = conns.iter().find_map(|(cid, c)| {
+                (*cid != id
+                    && c.logged_in
+                    && c.name.as_deref().map(|n| n.eq_ignore_ascii_case(&player)) == Some(true))
+                .then_some(*cid)
+            });
+            match target {
+                Some(tid) => {
+                    if let Some(t) = conns.get_mut(&tid) {
+                        t.pending_guild_invite = Some(guild.clone());
+                        t.send(ServerMsg::Notice {
+                            text: format!("{from} invites you to join <{guild}>."),
+                        });
+                    }
+                    notice(conns, id, format!("Invited {player} to the guild."));
+                }
+                None => notice(conns, id, "No such player online.".into()),
+            }
+        }
+        ClientMsg::GuildAccept => {
+            let invite = match conns.get_mut(&id) {
+                Some(c) if c.logged_in => c.pending_guild_invite.take(),
+                _ => return,
+            };
+            let Some(guild) = invite else {
+                return notice(conns, id, "No pending guild invite.".into());
+            };
+            if conns.get(&id).map(|c| c.guild.is_some()).unwrap_or(false) {
+                return notice(conns, id, "You are already in a guild.".into());
+            }
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            let me = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            if let Err(e) = db.guild_add_member(&guild, &me) {
+                tracing::error!("guild_add_member: {e}");
+                return notice(conns, id, "Server error joining guild.".into());
+            }
+            world.set_guild(act, ent, Some(guild.clone()));
+            if let Some(c) = conns.get_mut(&id) {
+                c.guild = Some(guild.clone());
+            }
+            let members = db.guild_members(&guild).unwrap_or_default();
+            if let Some(c) = conns.get(&id) {
+                c.send(ServerMsg::GuildInfo { name: guild.clone(), members });
+            }
+            // Tell the guild.
+            for c in conns.values() {
+                if c.logged_in && c.guild.as_deref() == Some(guild.as_str()) {
+                    c.send(ServerMsg::Notice { text: format!("{me} joined the guild.") });
+                }
+            }
+        }
+        ClientMsg::GuildLeave => {
+            let (guild, me) = match conns.get(&id) {
+                Some(c) if c.logged_in => (c.guild.clone(), c.name.clone().unwrap_or_default()),
+                _ => return,
+            };
+            let Some(guild) = guild else {
+                return notice(conns, id, "You are not in a guild.".into());
+            };
+            let _ = db.guild_remove_member(&guild, &me);
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            world.set_guild(act, ent, None);
+            if let Some(c) = conns.get_mut(&id) {
+                c.guild = None;
+            }
+            notice(conns, id, format!("You left <{guild}>."));
+        }
+        ClientMsg::GuildChat { text } => {
+            let (guild, from) = match conns.get(&id) {
+                Some(c) if c.logged_in => (c.guild.clone(), c.name.clone().unwrap_or_default()),
+                _ => return,
+            };
+            let Some(guild) = guild else {
+                return notice(conns, id, "You are not in a guild.".into());
+            };
+            let text = text.chars().take(240).collect::<String>();
+            for c in conns.values() {
+                if c.logged_in && c.guild.as_deref() == Some(guild.as_str()) {
+                    c.send(ServerMsg::Chat { from: format!("[G] {from}"), text: text.clone() });
+                }
+            }
+        }
+        ClientMsg::AuctionList { item, price } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            if !world.at_inn(act, ent) {
+                return notice(conns, id, "You must be at an inn to use the auction house.".into());
+            }
+            if price == 0 || price > 1_000_000 {
+                return notice(conns, id, "Price must be between 1 and 1,000,000 gold.".into());
+            }
+            if !world.take_item(act, ent, &item) {
+                return notice(conns, id, "You don't have that item.".into());
+            }
+            let me = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            match db.auction_insert(&me, &item, price) {
+                Ok(aid) => notice(conns, id, format!("Listed {item} for {price}g (lot #{aid}).")),
+                Err(e) => {
+                    tracing::error!("auction_insert: {e}");
+                    world.give_item(act, ent, item);
+                    notice(conns, id, "Server error listing item.".into());
+                }
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::AuctionBuy { id: lot } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            if !world.at_inn(act, ent) {
+                return notice(conns, id, "You must be at an inn to use the auction house.".into());
+            }
+            let listing = match db.auction_take(lot) {
+                Ok(Some(l)) => l,
+                Ok(None) => return notice(conns, id, "That lot is gone.".into()),
+                Err(e) => {
+                    tracing::error!("auction_take: {e}");
+                    return notice(conns, id, "Server error.".into());
+                }
+            };
+            if !world.try_spend_gold(act, ent, listing.price) {
+                // Put the lot back.
+                let _ = db.auction_insert(&listing.seller, &listing.item, listing.price);
+                return notice(conns, id, "You can't afford that.".into());
+            }
+            if !world.give_item(act, ent, listing.item.clone()) {
+                world.add_gold(act, ent, listing.price);
+                let _ = db.auction_insert(&listing.seller, &listing.item, listing.price);
+                return notice(conns, id, "Your bags are full.".into());
+            }
+            // Pay the seller — live sheet if online, saved sheet otherwise.
+            let seller_conn = conns.iter().find_map(|(cid, c)| {
+                (c.logged_in
+                    && c.name.as_deref().map(|n| n.eq_ignore_ascii_case(&listing.seller))
+                        == Some(true))
+                .then_some(*cid)
+            });
+            match seller_conn {
+                Some(scid) => {
+                    if let Some((sact, sent)) = conn_entity(conns, scid) {
+                        world.add_gold(sact, sent, listing.price);
+                    }
+                    notice(conns, scid, format!("Your {} sold for {}g.", listing.item, listing.price));
+                    send_stats(world, conns, scid);
+                }
+                None => {
+                    if let Err(e) = db.credit_gold(&listing.seller, listing.price) {
+                        tracing::error!("credit_gold: {e}");
+                    }
+                }
+            }
+            notice(conns, id, format!("You bought {} for {}g.", listing.item, listing.price));
+            send_stats(world, conns, id);
+        }
+        ClientMsg::AuctionBrowse => {
+            if let Some(c) = conns.get(&id) {
+                let listings = db.auction_list().unwrap_or_default();
+                c.send(ServerMsg::Auctions { listings });
+            }
+        }
         ClientMsg::Ping => {
             if let Some(c) = conns.get(&id) {
                 c.send(ServerMsg::Pong);
+            }
+        }
+    }
+}
+
+/// (act, entity) for a logged-in connection.
+fn conn_entity(conns: &HashMap<u64, Conn>, id: u64) -> Option<(Act, EntityId)> {
+    let c = conns.get(&id)?;
+    if !c.logged_in {
+        return None;
+    }
+    Some((c.act, c.entity?))
+}
+
+fn notice(conns: &HashMap<u64, Conn>, id: u64, text: String) {
+    if let Some(c) = conns.get(&id) {
+        c.send(ServerMsg::Notice { text });
+    }
+}
+
+fn send_stats(world: &World, conns: &HashMap<u64, Conn>, id: u64) {
+    if let Some(c) = conns.get(&id) {
+        if let Some(ent) = c.entity {
+            if let Some(sheet) = world.player_sheet(c.act, ent) {
+                c.send(ServerMsg::Stats { character: sheet });
             }
         }
     }
@@ -261,6 +590,7 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
             SimEvent::LevelUp { owner, .. } => *owner,
             SimEvent::Died { owner } => *owner,
             SimEvent::Loot { owner, .. } => *owner,
+            SimEvent::Info { owner, .. } => *owner,
         };
         let Some(c) = conns.get(&owner) else { continue };
         match ev {
@@ -272,6 +602,9 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
             }
             SimEvent::Loot { item, .. } => {
                 c.send(ServerMsg::Notice { text: format!("You collected {item}.") });
+            }
+            SimEvent::Info { text, .. } => {
+                c.send(ServerMsg::Notice { text });
             }
         }
         if let Some(ent) = c.entity {

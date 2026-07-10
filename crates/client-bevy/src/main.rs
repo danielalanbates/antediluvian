@@ -200,6 +200,12 @@ fn receive_from_server(
             ServerMsg::Notice { text } => session.notice = text,
             ServerMsg::Chat { from, text } => session.notice = format!("{from}: {text}"),
             ServerMsg::Snapshot { entities, .. } => latest = Some(entities),
+            ServerMsg::GuildInfo { name, members } => {
+                session.notice = format!("<{name}>: {}", members.join(", "));
+            }
+            ServerMsg::Auctions { listings } => {
+                session.notice = format!("{} auction lots", listings.len());
+            }
             ServerMsg::Pong => {}
         }
     }

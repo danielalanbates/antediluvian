@@ -9,7 +9,39 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Playable classes. Chosen once per character (level 1) via `SelectClass`;
+/// gates which abilities and talents are available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Class {
+    Warrior,
+    Hunter,
+    Priest,
+    Mage,
+}
+
+impl Class {
+    pub const ALL: [Class; 4] = [Class::Warrior, Class::Hunter, Class::Priest, Class::Mage];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Class::Warrior => "warrior",
+            Class::Hunter => "hunter",
+            Class::Priest => "priest",
+            Class::Mage => "mage",
+        }
+    }
+}
+
+/// One auction-house listing as sent to browsing clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuctionListing {
+    pub id: i64,
+    pub seller: String,
+    pub item: String,
+    pub price: u32,
+}
 
 /// A world coordinate. The world is top-down 2D (matching the original game),
 /// coordinates in "world units" (~pixels in the legacy client).
@@ -90,6 +122,30 @@ pub struct CharacterSheet {
     pub mana: i32,
     pub max_mana: i32,
     pub inventory: Vec<String>,
+    // ── WoW-style systems (all defaulted so v1 saves still load) ──
+    /// Chosen class; `None` until the player picks one.
+    #[serde(default)]
+    pub class: Option<Class>,
+    #[serde(default)]
+    pub gold: u32,
+    /// Unspent talent points (1 granted per level-up).
+    #[serde(default)]
+    pub talent_points: u32,
+    /// Learned talents: talent id → rank.
+    #[serde(default)]
+    pub talents: std::collections::BTreeMap<String, u32>,
+    /// Profession skill levels: profession id → skill (e.g. "woodcutting": 12).
+    #[serde(default)]
+    pub professions: std::collections::BTreeMap<String, u32>,
+    /// Guild membership, if any.
+    #[serde(default)]
+    pub guild: Option<String>,
+    /// Banked rested XP (accrued at inns; consumed as bonus XP on kills).
+    #[serde(default)]
+    pub rested_xp: u32,
+    /// World-PvP opt-in flag.
+    #[serde(default)]
+    pub pvp: bool,
 }
 
 // ─── Client → Server ─────────────────────────────────────────────────────────
@@ -109,6 +165,35 @@ pub enum ClientMsg {
     Travel { act: Act },
     /// Zone-local chat.
     Chat { text: String },
+    /// Choose a class (once, while still classless).
+    SelectClass { class: Class },
+    /// Cast a class ability by id (e.g. "heroic_strike"). Targeting is
+    /// server-side: offensive abilities hit what's in front / in range,
+    /// heals target self.
+    Cast { ability: String },
+    /// Spend one talent point on a talent id (e.g. "warrior_power").
+    LearnTalent { talent: String },
+    /// Toggle the world-PvP flag.
+    TogglePvp,
+    /// Challenge another player (by name, same zone) to a duel.
+    Duel { player: String },
+    /// Accept the most recent duel challenge.
+    DuelAccept,
+    /// Consume a usable inventory item (e.g. "bread").
+    UseItem { item: String },
+    /// Craft a recipe by id (consumes materials; may need profession skill).
+    Craft { recipe: String },
+    /// Guild management.
+    GuildCreate { name: String },
+    GuildInvite { player: String },
+    GuildAccept,
+    GuildLeave,
+    /// Guild-wide chat (crosses zones).
+    GuildChat { text: String },
+    /// Auction house (usable near a zone's inn/entry).
+    AuctionList { item: String, price: u32 },
+    AuctionBuy { id: i64 },
+    AuctionBrowse,
     /// Liveness; server replies `Pong`.
     Ping,
 }
@@ -132,5 +217,9 @@ pub enum ServerMsg {
     Chat { from: String, text: String },
     /// Server-side notice (level up, death, zone change).
     Notice { text: String },
+    /// Current auction-house listings (reply to `AuctionBrowse`).
+    Auctions { listings: Vec<AuctionListing> },
+    /// Guild roster (on join/create/query).
+    GuildInfo { name: String, members: Vec<String> },
     Pong,
 }
