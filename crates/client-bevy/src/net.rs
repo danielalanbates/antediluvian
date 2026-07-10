@@ -29,7 +29,7 @@ impl NetTx {
 pub struct NetRx(pub UnboundedReceiver<ServerMsg>);
 
 /// Spawn the network thread and return the Bevy-side channel ends.
-pub fn start_network(url: String, name: String) -> (NetTx, NetRx) {
+pub fn start_network(url: String, apple_id: String, character_name: Option<String>) -> (NetTx, NetRx) {
     let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
     let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
 
@@ -60,7 +60,8 @@ pub fn start_network(url: String, name: String) -> (NetTx, NetRx) {
                 // Authenticate immediately.
                 let login = ClientMsg::Login {
                     proto: PROTOCOL_VERSION,
-                    name,
+                    apple_id,
+                    character_name,
                 };
                 if let Ok(txt) = serde_json::to_string(&login) {
                     let _ = sink.send(Message::Text(txt.into())).await;

@@ -92,6 +92,16 @@ impl Db {
         if has_ext == 0 {
             conn.execute("ALTER TABLE accounts ADD COLUMN ext TEXT NOT NULL DEFAULT '{}'", [])?;
         }
+        
+        let has_apple: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name = 'apple_id'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_apple == 0 {
+            conn.execute("ALTER TABLE accounts ADD COLUMN apple_id TEXT", [])?;
+            conn.execute("CREATE UNIQUE INDEX idx_accounts_apple_id ON accounts(apple_id)", [])?;
+        }
         Ok(Self { conn })
     }
 
@@ -140,8 +150,26 @@ impl Db {
         Ok(row)
     }
 
+    /// Load a character by apple_id, or `None` if this Apple ID hasn't created a character.
+    pub fn load_by_apple_id(&self, apple_id: &str) -> Result<Option<CharacterSheet>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT name_key FROM accounts WHERE apple_id = ?1",
+                params![apple_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+            
+        if let Some(name_key) = row {
+            self.load(&name_key)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Insert or update a character sheet.
-    pub fn save(&self, c: &CharacterSheet) -> Result<()> {
+    pub fn save(&self, c: &CharacterSheet, apple_id: Option<&str>) -> Result<()> {
         let key = c.name.trim().to_lowercase();
         let inv = c.inventory.join("\u{1f}");
         let ext = serde_json::to_string(&SheetExt {
@@ -159,8 +187,8 @@ impl Db {
         })?;
         self.conn.execute(
             "INSERT INTO accounts
-                (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14, datetime('now'))
+                (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, updated_at, apple_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14, datetime('now'), ?15)
              ON CONFLICT(name_key) DO UPDATE SET
                 act=excluded.act, x=excluded.x, y=excluded.y, level=excluded.level,
                 xp=excluded.xp, max_xp=excluded.max_xp, health=excluded.health,
@@ -169,7 +197,7 @@ impl Db {
             params![
                 key, c.name, c.act.as_str(), c.x, c.y,
                 c.level as i64, c.xp as i64, c.max_xp as i64,
-                c.health, c.max_health, c.mana, c.max_mana, inv, ext
+                c.health, c.max_health, c.mana, c.max_mana, inv, ext, apple_id
             ],
         )?;
         Ok(())

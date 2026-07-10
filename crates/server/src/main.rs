@@ -141,7 +141,7 @@ fn handle_cmd(
             if let Some(c) = conns.remove(&id) {
                 if let (Some(ent), true) = (c.entity, c.logged_in) {
                     if let Some(sheet) = world.player_sheet(c.act, ent) {
-                        if let Err(e) = db.save(&sheet) {
+                        if let Err(e) = db.save(&sheet, None) {
                             tracing::error!("save on disconnect: {e}");
                         }
                     }
@@ -165,9 +165,8 @@ fn handle_client_msg(
     db: &Db,
 ) {
     match msg {
-        ClientMsg::Login { proto, name } => {
-            let name = name.trim().to_string();
-            let key = name.to_lowercase();
+        ClientMsg::Login { proto, apple_id, character_name } => {
+            let apple_id = apple_id.trim().to_string();
             let reject = |conns: &HashMap<u64, Conn>, reason: &str| {
                 if let Some(c) = conns.get(&id) {
                     c.send(ServerMsg::LoginRejected { reason: reason.into() });
@@ -176,28 +175,44 @@ fn handle_client_msg(
             if proto != PROTOCOL_VERSION {
                 return reject(conns, "protocol version mismatch");
             }
-            if name.is_empty() || name.len() > 24 {
-                return reject(conns, "name must be 1-24 characters");
-            }
             if conns.get(&id).map(|c| c.logged_in).unwrap_or(false) {
                 return reject(conns, "already logged in");
             }
-            if active_names.contains(&key) {
-                return reject(conns, "that name is already online");
-            }
-            // Load or create the character.
-            let sheet = match db.load(&name) {
+
+            // Load or create the character via apple_id
+            let sheet = match db.load_by_apple_id(&apple_id) {
                 Ok(Some(s)) => s,
                 Ok(None) => {
+                    // Account does not exist, need a character name
+                    let Some(name) = character_name else {
+                        return reject(conns, "New Apple account. Please provide a character name.");
+                    };
+                    let name = name.trim().to_string();
+                    if name.is_empty() || name.len() > 24 {
+                        return reject(conns, "name must be 1-24 characters");
+                    }
+                    if let Ok(Some(_)) = db.load(&name) {
+                        return reject(conns, "character name already taken");
+                    }
                     let s = new_character(&name);
-                    let _ = db.save(&s);
+                    if let Err(e) = db.save(&s, Some(&apple_id)) {
+                        tracing::error!("db save new: {e}");
+                        return reject(conns, "server error creating character");
+                    }
                     s
                 }
                 Err(e) => {
                     tracing::error!("db load: {e}");
-                    return reject(conns, "server error loading character");
+                    return reject(conns, "server error loading account");
                 }
             };
+
+            let name = sheet.name.clone();
+            let key = name.to_lowercase();
+            if active_names.contains(&key) {
+                return reject(conns, "that character is already online");
+            }
+
             let act = sheet.act;
             let guild = sheet.guild.clone();
             let entity_id = world.spawn_player(id, sheet.clone());
@@ -210,7 +225,7 @@ fn handle_client_msg(
                 c.guild = guild;
                 c.send(ServerMsg::Welcome { entity_id, character: sheet });
             }
-            tracing::info!(conn = id, %name, act = act.as_str(), "login");
+            tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
         }
         ClientMsg::Move { dx, dy } => {
             if let Some(c) = conns.get(&id) {
@@ -648,6 +663,9 @@ const AOI_RADIUS: f32 = 1400.0;
 /// Send each logged-in client an area-of-interest snapshot centered on its own
 /// player: only the entities near it, not the whole zone.
 fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f32();
+    let time_of_day = (now % 600.0) / 600.0;
+
     for c in conns.values() {
         if !c.logged_in {
             continue;
@@ -657,7 +675,7 @@ fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
             Some(pos) => world.zone_snapshot_around(c.act, pos, AOI_RADIUS),
             None => world.zone_snapshot(c.act),
         };
-        c.send(ServerMsg::Snapshot { act: c.act, tick, entities });
+        c.send(ServerMsg::Snapshot { act: c.act, tick, time_of_day, entities });
     }
 }
 
@@ -665,7 +683,7 @@ fn save_all(world: &World, conns: &HashMap<u64, Conn>, db: &Db) {
     for c in conns.values() {
         if let (true, Some(ent)) = (c.logged_in, c.entity) {
             if let Some(sheet) = world.player_sheet(c.act, ent) {
-                if let Err(e) = db.save(&sheet) {
+                if let Err(e) = db.save(&sheet, None) {
                     tracing::error!("periodic save: {e}");
                 }
             }

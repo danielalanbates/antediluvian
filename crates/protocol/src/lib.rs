@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -174,9 +174,9 @@ pub struct CharacterSheet {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
-    /// First message on a connection. Authenticates (or auto-registers) an
-    /// account by name and loads/creates its character.
-    Login { proto: u32, name: String },
+    /// First message on a connection. Authenticates an account via Apple ID.
+    /// If creating a new account, a character name must be provided.
+    Login { proto: u32, apple_id: String, character_name: Option<String> },
     /// Desired movement direction this tick, as a unit-ish vector. The server
     /// clamps magnitude and applies speed — the client never sets position.
     Move { dx: f32, dy: f32 },
@@ -236,7 +236,7 @@ pub enum ServerMsg {
     LoginRejected { reason: String },
     /// Full snapshot of every entity in the player's current zone. Sent each
     /// simulation tick. (Delta compression is a later optimization.)
-    Snapshot { act: Act, tick: u64, entities: Vec<EntityState> },
+    Snapshot { act: Act, tick: u64, time_of_day: f32, entities: Vec<EntityState> },
     /// The player's own live stats changed (xp gain, damage, level up).
     Stats { character: CharacterSheet },
     /// A chat line from another player (or the system) in the zone.

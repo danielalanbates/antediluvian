@@ -16,28 +16,40 @@
 //! Usage: antediluvia-client-bevy [name] [ws-url]
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
 
+mod atmosphere;
 mod net;
 mod terrain;
+mod ui;
 mod vfx;
 
-use antediluvia_protocol::{Act, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg};
+use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
+use antediluvia_protocol::{
+    Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
+};
 use terrain::{build_terrain_mesh, terrain_height};
+use ui::{spawn_ui, update_ui_frames, update_ui_panels, Cooldowns};
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use net::{start_network, NetRx, NetTx};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::f32::consts::FRAC_PI_2;
 use std::time::Duration;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let name = args.next().unwrap_or_else(|| "Adam".into());
-    let url = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
+    let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
+    let url_or_name = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
+    let (character_name, url) = if url_or_name.starts_with("ws://") || url_or_name.starts_with("wss://") {
+        (None, url_or_name)
+    } else {
+        (Some(url_or_name), args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into()))
+    };
 
     // Start the network thread before the app so login is already in flight.
-    let (tx, rx) = start_network(url, name.clone());
+    let (tx, rx) = start_network(url, apple_id, character_name);
 
     // Asset root is the workspace-level assets/ dir, independent of cwd.
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -67,6 +79,7 @@ fn main() {
         .insert_non_send_resource(rx)
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
+        .insert_resource(Cooldowns::default())
         .insert_resource(Session { name, ..default() })
         .add_event::<CombatEvt>()
         .add_systems(Startup, (setup, init_vfx))
@@ -75,14 +88,23 @@ fn main() {
             (
                 receive_from_server,
                 send_input,
+                chat_input,
                 orbit_camera,
                 face_billboards,
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
                 apply_combat_events,
                 update_vfx,
                 pulse_inn_ring,
+                update_ui_frames,
+                update_ui_panels,
+                update_atmosphere,
             ),
         )
         .run();
@@ -101,11 +123,7 @@ struct PlayerTag;
 #[derive(Component)]
 struct MainCamera;
 
-#[derive(Component)]
-struct HudText;
-
-#[derive(Component)]
-struct ActionBarText;
+// (HudText / ActionBarText markers replaced by ui.rs components.)
 
 /// A node that should always face the camera (health-bar holders).
 #[derive(Component)]
@@ -168,15 +186,23 @@ struct Mirrored {
 struct EntityMap(HashMap<u64, Mirrored>);
 
 #[derive(Resource)]
-struct Session {
-    name: String,
-    my_id: Option<u64>,
-    class: Option<Class>,
+pub struct Session {
+    pub name: String,
+    pub my_id: Option<u64>,
+    pub class: Option<Class>,
     /// Act whose terrain is currently built (server world is flat; this only
     /// drives presentation).
-    act: Act,
-    hud: String,
-    notice: String,
+    pub act: Act,
+    /// Full character sheet from the server (replaces old `hud` string).
+    pub sheet: Option<CharacterSheet>,
+    /// Rolling chat / notice log (last ~24 lines kept).
+    pub chat_log: VecDeque<String>,
+    /// Current text being typed (Enter-to-chat).
+    pub chat_input: String,
+    /// True while the chat input bar is focused.
+    pub chat_active: bool,
+    /// 0.0 to 1.0 time of day (driven by server).
+    pub time_of_day: f32,
 }
 
 impl Default for Session {
@@ -186,8 +212,11 @@ impl Default for Session {
             my_id: None,
             class: None,
             act: Act::Eden,
-            hud: String::new(),
-            notice: String::new(),
+            sheet: None,
+            chat_log: VecDeque::with_capacity(24),
+            chat_input: String::new(),
+            chat_active: false,
+            time_of_day: 0.5,
         }
     }
 }
@@ -285,7 +314,7 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
 }
 
 /// The two ability keys per class (action-bar slots 1 and 2).
-fn class_abilities(class: Class) -> [&'static str; 2] {
+pub fn class_abilities(class: Class) -> [&'static str; 2] {
     match class {
         Class::Warrior => ["heroic_strike", "whirlwind"],
         Class::Hunter => ["aimed_shot", "multi_shot"],
@@ -433,11 +462,19 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
 ) {
+    let initial_mood = act_mood(Act::Eden);
+
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 300.0, 420.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DistanceFog {
+            color: initial_mood.fog_color,
+            falloff: FogFalloff::Exponential { density: initial_mood.fog_density },
+            ..default()
+        },
         MainCamera,
     ));
 
@@ -445,7 +482,11 @@ fn setup(
     commands.spawn((
         DirectionalLight { illuminance: 12_000.0, shadows_enabled: true, ..default() },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.6, 0.0)),
+        Sun,
     ));
+
+    // Sky.
+    spawn_sky(&mut commands, &mut meshes, &mut materials, &mut images, &initial_mood);
 
     // Terrain + inn + decor (rebuilt on zone travel).
     spawn_act_scenery(&mut commands, &mut meshes, &mut materials, &asset_server, Act::Eden);
@@ -479,33 +520,8 @@ fn setup(
     };
     commands.insert_resource(assets);
 
-    // HUD line, top-left.
-    commands.spawn((
-        Text::new("Connecting…"),
-        TextFont { font_size: 18.0, ..default() },
-        TextColor(Color::srgb(0.95, 0.95, 0.90)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Px(14.0),
-            ..default()
-        },
-        HudText,
-    ));
-
-    // Action bar, bottom-center.
-    commands.spawn((
-        Text::new(""),
-        TextFont { font_size: 17.0, ..default() },
-        TextColor(Color::srgb(0.98, 0.90, 0.55)),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(16.0),
-            left: Val::Px(14.0),
-            ..default()
-        },
-        ActionBarText,
-    ));
+    // WoW-style HUD panels (unit frame, action bar, quest tracker, chat).
+    spawn_ui(&mut commands);
 }
 
 /// Spawn the 3D rig for a snapshot entity. Returns (root, health-bar fill).
@@ -617,6 +633,14 @@ fn spawn_visual(
     Mirrored { root, model, bar_fill, dying_until: 0.0 }
 }
 
+/// Push a line into the rolling chat log, keeping at most 24 entries.
+fn push_chat(session: &mut Session, line: String) {
+    if session.chat_log.len() >= 24 {
+        session.chat_log.pop_front();
+    }
+    session.chat_log.push_back(line);
+}
+
 /// Drain server messages, reconcile the entity set, update the HUD.
 fn receive_from_server(
     mut commands: Commands,
@@ -626,8 +650,6 @@ fn receive_from_server(
     assets: Res<RenderAssets>,
     asset_server: Res<AssetServer>,
     mut transforms: Query<&mut Transform>,
-    mut hud: Query<&mut Text, (With<HudText>, Without<ActionBarText>)>,
-    mut bar: Query<&mut Text, (With<ActionBarText>, Without<HudText>)>,
     mut combat: EventWriter<CombatEvt>,
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -656,11 +678,8 @@ fn receive_from_server(
                 session.my_id = Some(entity_id);
                 session.class = character.class;
                 set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
-                session.hud = format!(
-                    "{} — Lv {}  HP {}/{}  MP {}/{}  {}g  in {}",
-                    character.name, character.level, character.health, character.max_health,
-                    character.mana, character.max_mana, character.gold, character.act.as_str()
-                );
+                push_chat(&mut session, format!("Welcome to {}, {}!", character.act.as_str(), character.name));
+                session.sheet = Some(character);
             }
             ServerMsg::Stats { character } => {
                 // A class choice changes our model: force a respawn of our rig.
@@ -671,26 +690,22 @@ fn receive_from_server(
                 }
                 session.class = character.class;
                 set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
-                session.hud = format!(
-                    "{} — Lv {}  HP {}/{}  MP {}/{}  XP {}/{}  {}g{}  in {}",
-                    character.name, character.level, character.health, character.max_health,
-                    character.mana, character.max_mana, character.xp, character.max_xp,
-                    character.gold,
-                    if character.pvp { "  [PvP]" } else { "" },
-                    character.act.as_str()
-                );
+                session.sheet = Some(character);
             }
             ServerMsg::LoginRejected { reason } => {
-                session.notice = format!("login rejected: {reason}");
+                push_chat(&mut session, format!("Login rejected: {reason}"));
             }
-            ServerMsg::Notice { text } => session.notice = text,
-            ServerMsg::Chat { from, text } => session.notice = format!("{from}: {text}"),
-            ServerMsg::Snapshot { entities, .. } => latest = Some(entities),
+            ServerMsg::Notice { text } => push_chat(&mut session, text),
+            ServerMsg::Chat { from, text } => push_chat(&mut session, format!("{from}: {text}")),
+            ServerMsg::Snapshot { time_of_day, entities, .. } => {
+                session.time_of_day = time_of_day;
+                latest = Some(entities);
+            }
             ServerMsg::GuildInfo { name, members } => {
-                session.notice = format!("<{name}>: {}", members.join(", "));
+                push_chat(&mut session, format!("<{name}>: {}", members.join(", ")));
             }
             ServerMsg::Auctions { listings } => {
-                session.notice = format!("{} auction lots", listings.len());
+                push_chat(&mut session, format!("{} auction lots", listings.len()));
             }
             ServerMsg::Event { kind, src, dst, .. } => {
                 combat.send(CombatEvt { kind, src, dst });
@@ -746,40 +761,33 @@ fn receive_from_server(
             }
         }
     }
-
-    if let Ok(mut text) = hud.get_single_mut() {
-        let base = if session.hud.is_empty() {
-            format!("{} — connecting…", session.name)
-        } else {
-            session.hud.clone()
-        };
-        **text = if session.notice.is_empty() {
-            base
-        } else {
-            format!("{base}\n{}", session.notice)
-        };
-    }
-    if let Ok(mut text) = bar.get_single_mut() {
-        **text = match session.class {
-            Some(c) => {
-                let [a, b] = class_abilities(c);
-                format!("[Space] attack   [1] {a}   [2] {b}   [E] talk   |  {}  |  right-drag orbit · scroll zoom", c.as_str())
-            }
-            None => "No class — press F1 warrior · F2 hunter · F3 priest · F4 mage".into(),
-        };
-    }
 }
 
 /// Read the keyboard and send movement intent + attacks + casts. Movement is
 /// camera-relative (WoW-style) and only sent when the direction changes.
+/// Chat mode (Enter-to-chat) steals all keys while active.
 fn send_input(
     keys: Res<ButtonInput<KeyCode>>,
     tx: Res<NetTx>,
     orbit: Res<Orbit>,
     session: Res<Session>,
+    time: Res<Time>,
+    mut cooldowns: ResMut<Cooldowns>,
     mut last_dir: Local<(i8, i8)>,
     mut last_yaw: Local<f32>,
 ) {
+    // While chat is active, game keys are disabled.
+    if session.chat_active {
+        // Still send zero movement if we were moving.
+        if *last_dir != (0, 0) {
+            *last_dir = (0, 0);
+            tx.send(ClientMsg::Move { dx: 0.0, dy: 0.0 });
+        }
+        return;
+    }
+
+    let now = time.elapsed_secs();
+
     let mut f = 0i8; // forward/back
     let mut s = 0i8; // strafe
     if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
@@ -808,6 +816,7 @@ fn send_input(
     }
     if keys.just_pressed(KeyCode::Space) {
         tx.send(ClientMsg::Attack);
+        cooldowns.trigger(0, now);
     }
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
@@ -816,9 +825,11 @@ fn send_input(
         let [a, b] = class_abilities(class);
         if keys.just_pressed(KeyCode::Digit1) {
             tx.send(ClientMsg::Cast { ability: a.into() });
+            cooldowns.trigger(1, now);
         }
         if keys.just_pressed(KeyCode::Digit2) {
             tx.send(ClientMsg::Cast { ability: b.into() });
+            cooldowns.trigger(2, now);
         }
     } else {
         for (key, class) in [
@@ -830,6 +841,58 @@ fn send_input(
             if keys.just_pressed(key) {
                 tx.send(ClientMsg::SelectClass { class });
             }
+        }
+    }
+}
+
+/// Enter-to-chat: toggle chat mode, receive character input, send on Enter.
+fn chat_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut kb_events: EventReader<KeyboardInput>,
+    mut session: ResMut<Session>,
+    tx: Res<NetTx>,
+) {
+    if keys.just_pressed(KeyCode::Enter) {
+        if session.chat_active {
+            // Send the message if non-empty, then close chat.
+            let text = session.chat_input.trim().to_string();
+            if !text.is_empty() {
+                tx.send(ClientMsg::Chat { text });
+            }
+            session.chat_input.clear();
+            session.chat_active = false;
+        } else {
+            session.chat_active = true;
+        }
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) && session.chat_active {
+        session.chat_input.clear();
+        session.chat_active = false;
+        return;
+    }
+    if !session.chat_active {
+        // Drain so they don't pile up.
+        kb_events.clear();
+        return;
+    }
+    // Backspace.
+    if keys.just_pressed(KeyCode::Backspace) {
+        session.chat_input.pop();
+    }
+    // Character input via KeyboardInput logical_key.
+    for ev in kb_events.read() {
+        if !ev.state.is_pressed() {
+            continue;
+        }
+        if let bevy::input::keyboard::Key::Character(ref s) = ev.logical_key {
+            for ch in s.chars() {
+                if !ch.is_control() {
+                    session.chat_input.push(ch);
+                }
+            }
+        } else if ev.logical_key == bevy::input::keyboard::Key::Space {
+            session.chat_input.push(' ');
         }
     }
 }
