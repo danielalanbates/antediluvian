@@ -23,7 +23,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let send = |m: &ClientMsg| serde_json::to_string(m).unwrap();
     write
-        .send(Message::Text(send(&ClientMsg::Login { proto: PROTOCOL_VERSION, name: name.clone() }).into()))
+        .send(Message::Text(send(&ClientMsg::Login {
+            proto: PROTOCOL_VERSION,
+            apple_id: format!("test_{name}"),
+            character_name: Some(name.clone()),
+        }).into()))
         .await?;
 
     let mut my_id: Option<u64> = None;
@@ -51,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             ServerMsg::Notice { text } => println!("[notice] {text}"),
+            ServerMsg::Event { .. } => {}
             ServerMsg::Chat { from, text } => println!("[chat] {from}: {text}"),
             ServerMsg::Stats { character } => {
                 println!(

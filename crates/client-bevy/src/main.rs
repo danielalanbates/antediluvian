@@ -17,12 +17,14 @@
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
 
 mod atmosphere;
+mod equipment;
 mod net;
 mod terrain;
 mod ui;
 mod vfx;
 
 use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
+use equipment::{apply_loadouts, init_equip_assets, Loadout};
 use antediluvia_protocol::{
     Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
 };
@@ -83,7 +85,7 @@ fn main() {
         .insert_resource(Cooldowns::default())
         .insert_resource(Session { name: display_name, ..default() })
         .add_event::<CombatEvt>()
-        .add_systems(Startup, (setup, init_vfx))
+        .add_systems(Startup, (setup, init_vfx, init_equip_assets))
         .add_systems(
             Update,
             (
@@ -106,6 +108,7 @@ fn main() {
                 update_ui_frames,
                 update_ui_panels,
                 update_atmosphere,
+                apply_loadouts,
             ),
         )
         .run();
@@ -656,6 +659,7 @@ fn receive_from_server(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain_q: Query<Entity, With<Terrain>>,
+    loadouts: Query<&Loadout>,
 ) {
     // Rebuild the terrain when the character's act changes (login or travel).
     let set_act = |commands: &mut Commands,
@@ -723,6 +727,13 @@ fn receive_from_server(
             let is_me = Some(e.id) == my_id;
             match map.0.get(&e.id) {
                 Some(m) => {
+                    // Mirror the equipped weapon/chest onto the rig (players only).
+                    if e.kind == EntityKind::Player {
+                        let lo = Loadout { weapon: e.weapon.clone(), chest: e.chest.clone() };
+                        if loadouts.get(m.root).map_or(true, |cur| *cur != lo) {
+                            commands.entity(m.root).insert(lo);
+                        }
+                    }
                     if let Ok(mut t) = transforms.get_mut(m.root) {
                         t.translation.x = e.x;
                         t.translation.y = terrain_height(session.act, e.x, e.y);
@@ -743,6 +754,11 @@ fn receive_from_server(
                 }
                 None => {
                     let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act);
+                    if e.kind == EntityKind::Player {
+                        commands
+                            .entity(m.root)
+                            .insert(Loadout { weapon: e.weapon.clone(), chest: e.chest.clone() });
+                    }
                     map.0.insert(e.id, m);
                 }
             }

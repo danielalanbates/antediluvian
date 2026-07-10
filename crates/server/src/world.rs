@@ -253,6 +253,14 @@ impl Entity {
             max_health: self.max_health,
             tag: self.tag.clone(),
             name: self.name.clone(),
+            weapon: self
+                .sheet
+                .as_ref()
+                .and_then(|s| s.equipment.get("weapon").cloned()),
+            chest: self
+                .sheet
+                .as_ref()
+                .and_then(|s| s.equipment.get("chest").cloned()),
         }
     }
 }

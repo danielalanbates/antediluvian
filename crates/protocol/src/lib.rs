@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -117,6 +117,12 @@ pub struct EntityState {
     /// Display name (players, NPCs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Equipped weapon item id (players) — drives the visible held weapon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon: Option<String>,
+    /// Equipped chest item id (players) — drives armor presentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chest: Option<String>,
 }
 
 /// The persistent, player-owned character sheet.
