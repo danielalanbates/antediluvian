@@ -53,9 +53,24 @@ Env: `ANTEDILUVIA_BIND` (default `127.0.0.1:8787`), `ANTEDILUVIA_DB`
 A Rust-based competitor to **World of Warcraft Classic** — full classic-style
 graphics and systems: 3D world/characters, combat, class skills, PvP, talent
 trees, guilds, professions, auction houses, inns. Build order: (1) server
-systems ✅ (below), (2) Bevy 3D client migration ✅ first pass (below),
-(3) content (quests, dungeons, itemization across the five acts), (4) art pass
-(real character/creature models + animation to replace the low-poly primitives).
+systems ✅, (2) Bevy 3D client migration ✅, (3) content — quests/NPCs/bosses/
+itemization ✅ first pass (below), (4) art pass (modeled characters/creatures,
+richer animation, terrain variety — the long tail).
+
+## Status (2026-07-09 late night) — content layer first pass
+- **Quests + NPCs:** an Elder questgiver stands at every act's inn. `Talk` (key
+  E in the client) accepts the act's kill-quest, reports progress, and turns it
+  in for XP + gold + item rewards. Kill progress ticks live ("Quest: … 3/5").
+  All quest state persists on the sheet.
+- **Itemization:** equipment slots (weapon/chest) with stat bonuses
+  (stone_axe/oak_staff/bronze_sword/hide_vest); `Equip` swaps gear through the
+  inventory; damage/max-HP derive from what's worn.
+- **Bosses:** every act spawns an elite `<tag>_alpha` (4× HP, 2× damage, 5× XP,
+  guaranteed thick_hide drop → craftable hide_vest). Respawns as a boss.
+- **Client:** articulated humanoid characters (torso/head/limbs) with a
+  distance-driven walk cycle; gold Elder NPCs rendered; E-to-talk on the bar.
+- Verified: 13 unit tests, both wire E2E suites re-passed, and a live on-screen
+  session (F1 class pick → walk to Elder → E → quest offer in HUD).
 
 ## Status (2026-07-09 night) — client is 3D
 `crates/client-bevy` now renders a WoW-style 3D scene (verified live on screen:
