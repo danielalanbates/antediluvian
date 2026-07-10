@@ -1,6 +1,14 @@
 # CHUNK 03 — Terrain
 
-**Status: todo**
+**Status: DONE 2026-07-10.** `crates/client-bevy/src/terrain.rs`: seeded fBm
+(`noise` 0.9, seed = act index + 7) → `terrain_height`, flattened inside
+~240u of the origin; 128×128 vertex-colored mesh (height-banded per-act
+palette, colors converted sRGB→linear — raw values wash out), smooth normals.
+Character/NPC/resource roots get `translation.y = terrain_height(...)` at
+spawn and every snapshot; terrain rebuilds on act change (Welcome/Stats).
+Verified on screen: Eden grassland + Hermon foothills (distinct palettes),
+feet on slopes, flat inn disc, no panics. Known minor artifact: far entities
+can float a couple units where the 33u grid interpolates steep noise.
 
 ## Goal
 Replace the flat green plane with rolling, textured terrain per act, WoW-

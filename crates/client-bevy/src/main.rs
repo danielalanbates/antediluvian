@@ -17,8 +17,10 @@
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
 
 mod net;
+mod terrain;
 
-use antediluvia_protocol::{Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg};
+use antediluvia_protocol::{Act, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg};
+use terrain::{build_terrain_mesh, terrain_height};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
@@ -160,14 +162,34 @@ struct Mirrored {
 #[derive(Resource, Default)]
 struct EntityMap(HashMap<u64, Mirrored>);
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Session {
     name: String,
     my_id: Option<u64>,
     class: Option<Class>,
+    /// Act whose terrain is currently built (server world is flat; this only
+    /// drives presentation).
+    act: Act,
     hud: String,
     notice: String,
 }
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            my_id: None,
+            class: None,
+            act: Act::Eden,
+            hud: String::new(),
+            notice: String::new(),
+        }
+    }
+}
+
+/// Marker on the act's terrain mesh entity (rebuilt on zone travel).
+#[derive(Component)]
+struct Terrain;
 
 /// Third-person orbit camera state (WoW-style).
 #[derive(Resource)]
@@ -280,15 +302,16 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.6, 0.0)),
     ));
 
-    // Ground plane.
+    // Terrain (vertex-colored heightfield; rebuilt on zone travel).
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(4200.0, 4200.0))),
+        Mesh3d(meshes.add(build_terrain_mesh(Act::Eden))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.24, 0.42, 0.20),
+            base_color: Color::WHITE,
             perceptual_roughness: 1.0,
             ..default()
         })),
-        Transform::from_xyz(0.0, 0.0, 0.0),
+        Transform::default(),
+        Terrain,
     ));
 
     // Inn ring at the zone entry (the rest / auction-house area).
@@ -362,8 +385,9 @@ fn spawn_visual(
     asset_server: &AssetServer,
     e: &EntityState,
     is_me: bool,
+    act: Act,
 ) -> Mirrored {
-    let pos = Vec3::new(e.x, 0.0, e.y);
+    let pos = Vec3::new(e.x, terrain_height(act, e.x, e.y), e.y);
     let rot = Quat::from_rotation_y(-e.rot);
     let mut bar_fill = None;
     let mut model = None;
@@ -487,13 +511,41 @@ fn receive_from_server(
     mut bar: Query<&mut Text, (With<ActionBarText>, Without<HudText>)>,
     mut combat: EventWriter<CombatEvt>,
     time: Res<Time>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    terrain_q: Query<Entity, With<Terrain>>,
 ) {
+    // Rebuild the terrain when the character's act changes (login or travel).
+    let mut set_act = |commands: &mut Commands,
+                       session: &mut Session,
+                       meshes: &mut Assets<Mesh>,
+                       materials: &mut Assets<StandardMaterial>,
+                       act: Act| {
+        if session.act == act {
+            return;
+        }
+        session.act = act;
+        for t in terrain_q.iter() {
+            commands.entity(t).despawn_recursive();
+        }
+        commands.spawn((
+            Mesh3d(meshes.add(build_terrain_mesh(act))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                perceptual_roughness: 1.0,
+                ..default()
+            })),
+            Transform::default(),
+            Terrain,
+        ));
+    };
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
         match msg {
             ServerMsg::Welcome { entity_id, character } => {
                 session.my_id = Some(entity_id);
                 session.class = character.class;
+                set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
                 session.hud = format!(
                     "{} — Lv {}  HP {}/{}  MP {}/{}  {}g  in {}",
                     character.name, character.level, character.health, character.max_health,
@@ -508,6 +560,7 @@ fn receive_from_server(
                     }
                 }
                 session.class = character.class;
+                set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
                 session.hud = format!(
                     "{} — Lv {}  HP {}/{}  MP {}/{}  XP {}/{}  {}g{}  in {}",
                     character.name, character.level, character.health, character.max_health,
@@ -546,6 +599,7 @@ fn receive_from_server(
                 Some(m) => {
                     if let Ok(mut t) = transforms.get_mut(m.root) {
                         t.translation.x = e.x;
+                        t.translation.y = terrain_height(session.act, e.x, e.y);
                         t.translation.z = e.y;
                     }
                     if let Some(model) = m.model {
@@ -562,7 +616,7 @@ fn receive_from_server(
                     }
                 }
                 None => {
-                    let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me);
+                    let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act);
                     map.0.insert(e.id, m);
                 }
             }
