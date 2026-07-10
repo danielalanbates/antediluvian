@@ -208,9 +208,7 @@ impl Default for Orbit {
 /// Cached meshes + materials for the non-character environment pieces.
 #[derive(Resource)]
 struct RenderAssets {
-    beast: Handle<Mesh>,
     bar: Handle<Mesh>,
-    m_wildlife: Handle<StandardMaterial>,
     m_bar_bg: Handle<StandardMaterial>,
     m_bar_hp: Handle<StandardMaterial>,
 }
@@ -245,6 +243,20 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
         }
         EntityKind::Npc => {
             ("models/characters/Rogue_Hooded.glb", [ADV[0], ADV[1], 1, ADV[2]], CHAR_SCALE)
+        }
+        EntityKind::Wildlife => {
+            // Quaternius Animated Animals. Two clip orderings:
+            // herbivores (Alpaca/Bull/Deer): Attack_Headbutt=0 Death=2 Gallop=4 Idle=6
+            // predators (Fox/ShibaInu/Wolf): Attack=0 Death=1 Gallop=3 Idle=5
+            const HERB: [usize; 4] = [6, 4, 0, 2]; // idle, run, attack, death
+            const PRED: [usize; 4] = [5, 3, 0, 1];
+            match e.tag.as_deref() {
+                Some("goat") => ("models/wildlife/Alpaca.gltf", HERB, 22.0),
+                Some("boar") => ("models/wildlife/Bull.gltf", HERB, 26.0),
+                Some("dog") => ("models/wildlife/ShibaInu.gltf", PRED, 20.0),
+                Some("fox") => ("models/wildlife/Fox.gltf", PRED, 20.0),
+                _ => ("models/wildlife/Deer.gltf", HERB, 24.0),
+            }
         }
         _ => {
             let tag = e.tag.as_deref().unwrap_or("");
@@ -446,9 +458,7 @@ fn setup(
     ));
 
     let assets = RenderAssets {
-        beast: meshes.add(Sphere::new(9.0)),
         bar: meshes.add(Rectangle::new(1.0, 4.0)),
-        m_wildlife: materials.add(Color::srgb(0.72, 0.60, 0.38)),
         m_bar_bg: materials.add(StandardMaterial {
             base_color: Color::srgb(0.10, 0.10, 0.10),
             unlit: true,
@@ -511,7 +521,7 @@ fn spawn_visual(
         .spawn((Transform::from_translation(pos), Visibility::default(), ServerEnt(e.id)))
         .id();
     match e.kind {
-        EntityKind::Player | EntityKind::Enemy | EntityKind::Npc => {
+        EntityKind::Player | EntityKind::Enemy | EntityKind::Npc | EntityKind::Wildlife => {
             let (file, [i_idle, i_run, i_attack, i_death], scale) = rig_for(e);
             let clips = RigClips {
                 idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
@@ -545,18 +555,6 @@ fn spawn_visual(
                 moving: false,
                 attack_until: 0.0,
                 was_attacking: false,
-            });
-            model = Some(m);
-        }
-        EntityKind::Wildlife => {
-            let mut m = Entity::PLACEHOLDER;
-            commands.entity(root).with_children(|p| {
-                m = p
-                    .spawn((Transform::default().with_rotation(rot), Visibility::default()))
-                    .with_children(|body| {
-                        body.spawn((Mesh3d(assets.beast.clone()), MeshMaterial3d(assets.m_wildlife.clone()), Transform::from_xyz(0.0, 9.0, 0.0)));
-                    })
-                    .id();
             });
             model = Some(m);
         }

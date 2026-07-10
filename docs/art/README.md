@@ -86,7 +86,7 @@ ones landed.
 | 02 | CHUNK_02_combat_events.md | Server combat events → remote attack/hit/death anims | **DONE 2026-07-10** |
 | 03 | CHUNK_03_terrain.md | Per-act heightmap terrain, ground texture, water | **DONE 2026-07-10** |
 | 04 | CHUNK_04_environment.md | Real trees/rocks, inn building, per-act prop sets | **DONE 2026-07-10** |
-| 05 | CHUNK_05_wildlife.md | Animated wildlife + per-act enemy species models | todo |
+| 05 | CHUNK_05_wildlife.md | Animated wildlife + per-act enemy species models | **DONE 2026-07-10** (enemy variety deferred) |
 | 06 | CHUNK_06_vfx.md | Spell/hit particles (bevy_hanabi), cast beams | todo |
 | 07 | CHUNK_07_ui.md | WoW-style UI: unit frames, action bar, quest tracker | todo |
 | 08 | CHUNK_08_atmosphere.md | Sky, fog, day/night, per-act lighting mood | todo |

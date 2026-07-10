@@ -317,8 +317,8 @@ impl World {
             Act::Eden => (6, "serpent", "deer"),
             Act::Hermon => (10, "watcher", "goat"),
             Act::Nephilim => (14, "giant", "boar"),
-            Act::Enoch => (12, "shade", "raven"),
-            Act::Flood => (18, "leviathan", "fish"),
+            Act::Enoch => (12, "shade", "dog"),
+            Act::Flood => (18, "leviathan", "fox"),
         };
         let act = zone.act;
         for _ in 0..n_enemies {

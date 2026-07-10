@@ -1,6 +1,16 @@
 # CHUNK 05 — Wildlife & enemy species variety
 
-**Status: todo**
+**Status: DONE 2026-07-10** (wildlife + per-act species; enemy models remain
+the skeleton set from CHUNK_01 — full monster variety deferred).
+Quaternius Animated Animals (CC0, self-contained .gltf w/ data-URI buffers,
+via the pack's Google Drive; gdown) in `assets/models/wildlife/`: Deer,
+Alpaca, Bull, ShibaInu, Fox (+License.txt). Clip index orderings —
+herbivores (Alpaca/Bull/Deer): Attack_Headbutt=0 Death=2 Gallop=4 Idle=6;
+predators (Fox/ShibaInu/Wolf): Attack=0 Death=1 Gallop=3 Idle=5.
+Wildlife now uses the same rig/Mover pipeline as characters (sphere branch
+deleted). Server wildlife tags: enoch raven→dog, flood fish→fox (cosmetic;
+quests key on enemy tags). Verified on screen: Eden deer galloping, Flood
+fox; 13 tests green, no panics.
 
 ## Goal
 Animated animals instead of the beige sphere; per-act enemy identities so
