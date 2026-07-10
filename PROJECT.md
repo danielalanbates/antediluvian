@@ -53,8 +53,25 @@ Env: `ANTEDILUVIA_BIND` (default `127.0.0.1:8787`), `ANTEDILUVIA_DB`
 A Rust-based competitor to **World of Warcraft Classic** — full classic-style
 graphics and systems: 3D world/characters, combat, class skills, PvP, talent
 trees, guilds, professions, auction houses, inns. Build order: (1) server
-systems ✅ (below), (2) Bevy 3D client migration, (3) content (quests, dungeons,
-itemization across the five acts).
+systems ✅ (below), (2) Bevy 3D client migration ✅ first pass (below),
+(3) content (quests, dungeons, itemization across the five acts), (4) art pass
+(real character/creature models + animation to replace the low-poly primitives).
+
+## Status (2026-07-09 night) — client is 3D
+`crates/client-bevy` now renders a WoW-style 3D scene (verified live on screen:
+class select via F1–F4, action bar, HUD stat updates):
+- Third-person orbit camera — right-drag rotates, scroll zooms, follows the player.
+- Lit low-poly world: ground plane, directional sun + ambient, cone-canopy
+  trees, boulders, capsule characters with a facing "nose", sphere wildlife,
+  gold inn ring at the zone entry.
+- Camera-relative WASD movement (server still authoritative — client only sends
+  intent vectors).
+- Billboarded health bars over players/enemies/wildlife (translation-only roots
+  so plates never inherit body rotation).
+- Class action bar: F1–F4 pick a class when classless; keys 1/2 cast the two
+  class abilities; HUD shows level/HP/MP/XP/gold/PvP flag.
+- Honest gap: models are primitives (capsules/cones), no animation yet — that
+  is build-order step 4.
 
 ## Status (2026-07-09 late) — WoW systems layer live (proto v2)
 
