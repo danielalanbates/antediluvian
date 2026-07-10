@@ -104,7 +104,67 @@ pub const RECIPES: &[Recipe] = &[
     Recipe { id: "bread",     needs: None,                    inputs: &[("wood", 2)],               output: "bread" },
     Recipe { id: "stone_axe", needs: Some(("mining", 5)),     inputs: &[("stone", 2), ("wood", 1)], output: "stone_axe" },
     Recipe { id: "oak_staff", needs: Some(("woodcutting", 5)), inputs: &[("wood", 3)],              output: "oak_staff" },
+    Recipe { id: "hide_vest", needs: None,                    inputs: &[("thick_hide", 2)],         output: "hide_vest" },
 ];
+
+/// Equippable gear. Bonuses apply only while equipped.
+pub struct ItemDef {
+    pub id: &'static str,
+    pub slot: &'static str, // "weapon" | "chest"
+    pub melee: i32,
+    pub spell: i32,
+    pub hp: i32,
+}
+
+pub const ITEMS: &[ItemDef] = &[
+    ItemDef { id: "stone_axe",    slot: "weapon", melee: 5,  spell: 0, hp: 0 },
+    ItemDef { id: "oak_staff",    slot: "weapon", melee: 0,  spell: 5, hp: 0 },
+    ItemDef { id: "bronze_sword", slot: "weapon", melee: 8,  spell: 0, hp: 0 },
+    ItemDef { id: "hide_vest",    slot: "chest",  melee: 0,  spell: 0, hp: 30 },
+];
+
+pub fn item_def(id: &str) -> Option<&'static ItemDef> {
+    ITEMS.iter().find(|i| i.id == id)
+}
+
+fn gear_bonus(sheet: &CharacterSheet) -> (i32, i32) {
+    let mut melee = 0;
+    let mut spell = 0;
+    for item in sheet.equipment.values() {
+        if let Some(d) = item_def(item) {
+            melee += d.melee;
+            spell += d.spell;
+        }
+    }
+    (melee, spell)
+}
+
+/// One kill quest per act, offered by that act's Elder at the zone entry.
+pub struct Quest {
+    pub id: &'static str,
+    pub act: Act,
+    pub offer: &'static str,
+    pub target: &'static str,
+    pub count: u32,
+    pub xp: u32,
+    pub gold: u32,
+    pub item: Option<&'static str>,
+}
+
+pub const QUESTS: &[Quest] = &[
+    Quest { id: "serpents_in_the_garden", act: Act::Eden,     offer: "Serpents defile the garden. Slay 5 of them.",      target: "serpent",   count: 5, xp: 120, gold: 15, item: Some("bronze_sword") },
+    Quest { id: "watchers_on_the_mount",  act: Act::Hermon,   offer: "The Watchers descend on Hermon. Fell 5 of them.",  target: "watcher",   count: 5, xp: 220, gold: 25, item: None },
+    Quest { id: "giants_in_the_land",     act: Act::Nephilim, offer: "There were giants in those days. Bring down 5.",   target: "giant",     count: 5, xp: 350, gold: 40, item: None },
+    Quest { id: "shades_of_enoch",        act: Act::Enoch,    offer: "Shades haunt the city of Enoch. Banish 5.",        target: "shade",     count: 5, xp: 500, gold: 55, item: None },
+    Quest { id: "leviathan_hunt",         act: Act::Flood,    offer: "The deep sends leviathans. Hunt 3 before the end.", target: "leviathan", count: 3, xp: 800, gold: 90, item: Some("hide_vest") },
+];
+
+fn quest_for_act(act: Act) -> &'static Quest {
+    QUESTS.iter().find(|q| q.act == act).expect("every act has a quest")
+}
+
+/// Distance within which you can talk to an NPC.
+const TALK_RANGE: f32 = 140.0;
 
 /// A tiny xorshift RNG so the sim has no external rand dependency and stays
 /// deterministic given a seed (useful for reproducible tests / replays).
@@ -274,6 +334,21 @@ impl World {
             let tag = if self.rng.range(0.0, 1.0) < 0.6 { "tree" } else { "rock" };
             zone.entities.insert(id, make_resource(id, pos, tag));
         }
+        // The act's quest giver, by the inn.
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(90.0, 0.0), "Elder"));
+        // One elite "alpha" per act — the dungeon-boss placeholder. Guaranteed
+        // rare drop (thick_hide) and big XP.
+        let pos = self.rng.point(WORLD_BOUNDS * 0.7);
+        let id = self.alloc_id();
+        let mut boss = make_enemy(id, pos, enemy_tag, act);
+        boss.tag = Some(format!("{enemy_tag}_alpha"));
+        boss.max_health *= 4;
+        boss.health = boss.max_health;
+        boss.damage *= 2;
+        boss.xp_value *= 5;
+        boss.aggro_range = 300.0;
+        zone.entities.insert(id, boss);
     }
 
     /// Spawn a player entity into its zone from a character sheet. Returns the
@@ -427,11 +502,10 @@ impl World {
                     }
                     // Talent/gear damage bonuses.
                     let (dmg_mult, melee_bonus, spell_bonus) = match e.sheet.as_ref() {
-                        Some(s) => (
-                            damage_mult(s),
-                            if s.inventory.iter().any(|i| i == "stone_axe") { 5 } else { 0 },
-                            if s.inventory.iter().any(|i| i == "oak_staff") { 5 } else { 0 },
-                        ),
+                        Some(s) => {
+                            let (m, sp) = gear_bonus(s);
+                            (damage_mult(s), m, sp)
+                        }
                         None => (1.0, 0, 0),
                     };
                     // A player may be hit by another player only in a mutual
@@ -671,8 +745,20 @@ impl World {
             let (reward_item, xp) = match kind {
                 EntityKind::Enemy => {
                     let tag = etag.as_deref().unwrap_or("serpent");
-                    zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
-                    (format!("{tag}_trophy"), xp_value)
+                    if let Some(base) = tag.strip_suffix("_alpha") {
+                        // The act boss respawns as a boss and drops a rare.
+                        let mut boss = make_enemy(nid, pos, base, act);
+                        boss.tag = Some(tag.to_string());
+                        boss.max_health *= 4;
+                        boss.health = boss.max_health;
+                        boss.damage *= 2;
+                        boss.xp_value *= 5;
+                        zone.entities.insert(nid, boss);
+                        ("thick_hide".to_string(), xp_value)
+                    } else {
+                        zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+                        (format!("{tag}_trophy"), xp_value)
+                    }
                 }
                 EntityKind::Resource => {
                     let tag = etag.as_deref().unwrap_or("tree");
@@ -693,10 +779,26 @@ impl World {
                         }
                         if let Some(s) = p.sheet.as_mut() {
                             match kind {
-                                // Enemy kills also pay gold.
+                                // Enemy kills also pay gold and advance quests.
                                 EntityKind::Enemy => {
                                     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
                                     s.gold += 2 + tier * 2;
+                                    let q = quest_for_act(act);
+                                    let counts = etag
+                                        .as_deref()
+                                        .map(|t| t.starts_with(q.target))
+                                        .unwrap_or(false);
+                                    if counts {
+                                        if let Some(prog) = s.quests.get_mut(q.id) {
+                                            if *prog < q.count {
+                                                *prog += 1;
+                                                events.push(SimEvent::Info {
+                                                    owner: o,
+                                                    text: format!("Quest: {} — {}/{}", q.id, prog, q.count),
+                                                });
+                                            }
+                                        }
+                                    }
                                 }
                                 // Harvesting levels the matching profession.
                                 EntityKind::Resource => {
@@ -848,6 +950,71 @@ impl World {
         }
     }
 
+    /// Equip gear from the inventory into its slot, swapping out the old piece.
+    pub fn equip(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
+        let def = item_def(item).ok_or("That can't be equipped.")?;
+        let e = self.entity_mut(act, id).ok_or("no such player")?;
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        let idx = s.inventory.iter().position(|i| i == item).ok_or("You don't have that.")?;
+        s.inventory.remove(idx);
+        if let Some(old) = s.equipment.insert(def.slot.to_string(), item.to_string()) {
+            if let Some(old_def) = item_def(&old) {
+                s.max_health -= old_def.hp;
+            }
+            s.inventory.push(old);
+        }
+        s.max_health += def.hp;
+        s.health = s.health.min(s.max_health);
+        e.max_health = s.max_health;
+        e.health = s.health;
+        Ok(format!("You equip the {item}."))
+    }
+
+    /// Talk to the nearest NPC: quest offer / progress / turn-in.
+    pub fn talk(&mut self, act: Act, id: EntityId) -> Result<String, String> {
+        let z = self.zones.get(&act).ok_or("no zone")?;
+        let pos = z.entities.get(&id).map(|e| e.pos).ok_or("no such player")?;
+        let near_npc = z
+            .entities
+            .values()
+            .filter(|e| e.kind == EntityKind::Npc)
+            .any(|e| e.pos.distance(pos) <= TALK_RANGE);
+        if !near_npc {
+            return Err("There is no one nearby to talk to.".into());
+        }
+        let q = quest_for_act(act);
+        let e = self.entity_mut(act, id).unwrap();
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        if s.quests_done.iter().any(|d| d == q.id) {
+            return Ok("Elder: You have done all I asked. Go with peace.".into());
+        }
+        match s.quests.get(q.id).copied() {
+            None => {
+                s.quests.insert(q.id.to_string(), 0);
+                Ok(format!("Elder: {} (0/{})", q.offer, q.count))
+            }
+            Some(prog) if prog < q.count => {
+                Ok(format!("Elder: Not done yet — {}/{} slain.", prog, q.count))
+            }
+            Some(_) => {
+                // Turn-in: xp (through the normal leveling path), gold, item.
+                s.quests.remove(q.id);
+                s.quests_done.push(q.id.to_string());
+                s.gold += q.gold;
+                let mut text = format!("Elder: It is done! (+{} xp, +{}g", q.xp, q.gold);
+                if let Some(item) = q.item {
+                    if s.inventory.len() < 40 {
+                        s.inventory.push(item.to_string());
+                        text.push_str(&format!(", {item}"));
+                    }
+                }
+                text.push(')');
+                award_xp(e, q.xp);
+                Ok(text)
+            }
+        }
+    }
+
     /// Toggle the PvP flag; returns the new state.
     pub fn toggle_pvp(&mut self, act: Act, id: EntityId) -> Option<bool> {
         let s = self.sheet_mut(act, id)?;
@@ -996,6 +1163,40 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         attack_cooldown: 0.0,
         damage: 6 + tier * 3,
         xp_value: (15 + tier * 10) as u32,
+        wander_target: pos,
+        intent: Vec2::ZERO,
+        attack_queued: false,
+        attack_timer: 0.0,
+        dead_timer: 0.0,
+        cast_queued: None,
+        gcd: 0.0,
+        cooldowns: HashMap::new(),
+        duel_with: None,
+        rest_accum: 0.0,
+        owner: None,
+        sheet: None,
+    }
+}
+
+fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
+    Entity {
+        id,
+        kind: EntityKind::Npc,
+        pos,
+        rot: 0.0,
+        health: 1000,
+        max_health: 1000,
+        tag: Some("questgiver".to_string()),
+        name: Some(name.to_string()),
+        speed: 0.0,
+        origin: pos,
+        aggro_range: 0.0,
+        patrol_radius: 0.0,
+        state: AiState::Static,
+        state_timer: 0.0,
+        attack_cooldown: 0.0,
+        damage: 0,
+        xp_value: 0,
         wander_target: pos,
         intent: Vec2::ZERO,
         attack_queued: false,
@@ -1323,6 +1524,105 @@ mod tests {
     }
 
     #[test]
+    fn quest_accept_progress_and_turn_in() {
+        let mut w = World::new(11);
+        // Player at the inn: Elder stands at entry + (90, 0).
+        let pid = spawn_at(&mut w, 1, "Pilgrim", 60.0, 0.0);
+        // Accept.
+        let offer = w.talk(Act::Eden, pid).unwrap();
+        assert!(offer.contains("Serpents"), "{offer}");
+        // Not done yet.
+        assert!(w.talk(Act::Eden, pid).unwrap().contains("0/5"));
+        // Simulate 5 serpent kills via the sheet hook (combat path covered by
+        // other tests): count progress the way the sim does.
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.quests.insert("serpents_in_the_garden".into(), 5);
+        }
+        let done = w.talk(Act::Eden, pid).unwrap();
+        assert!(done.contains("It is done"), "{done}");
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.gold >= 15, "quest gold, got {}", s.gold);
+        assert!(s.xp > 0 || s.level > 1, "quest xp");
+        assert!(s.inventory.iter().any(|i| i == "bronze_sword"), "quest reward item");
+        assert!(s.quests_done.iter().any(|q| q == "serpents_in_the_garden"));
+        // Repeat talk: quest is done.
+        assert!(w.talk(Act::Eden, pid).unwrap().contains("peace"));
+    }
+
+    #[test]
+    fn kill_advances_quest_progress() {
+        let mut w = World::new(7);
+        let (eid, epos) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some("serpent"))
+                .unwrap();
+            (e.id, e.pos)
+        };
+        let mut sheet = new_character("Hunter");
+        sheet.x = epos.x - 12.0;
+        sheet.y = epos.y;
+        sheet.quests.insert("serpents_in_the_garden".into(), 0);
+        let pid = w.spawn_player(9, sheet);
+        for _ in 0..300 {
+            w.queue_attack(Act::Eden, pid);
+            w.step();
+            if !w.zones[&Act::Eden].entities.contains_key(&eid) {
+                break;
+            }
+        }
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
+    }
+
+    #[test]
+    fn equipping_gear_boosts_damage_and_swaps() {
+        let mut w = World::new(12);
+        let pid = spawn_at(&mut w, 1, "Squire", 0.0, 0.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.inventory = vec!["bronze_sword".into(), "stone_axe".into(), "hide_vest".into()];
+        }
+        assert!(w.equip(Act::Eden, pid, "serpent_trophy").is_err(), "non-gear rejected");
+        w.equip(Act::Eden, pid, "bronze_sword").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.equipment.get("weapon").map(String::as_str), Some("bronze_sword"));
+        // Swapping weapons returns the old one to the bags.
+        w.equip(Act::Eden, pid, "stone_axe").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.equipment.get("weapon").map(String::as_str), Some("stone_axe"));
+        assert!(s.inventory.iter().any(|i| i == "bronze_sword"));
+        // Chest piece adds max health.
+        let hp_before = s.max_health;
+        w.equip(Act::Eden, pid, "hide_vest").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.max_health, hp_before + 30);
+    }
+
+    #[test]
+    fn every_zone_has_an_elder_and_an_alpha() {
+        let w = World::new(13);
+        for act in Act::ALL {
+            let z = &w.zones[&act];
+            assert!(
+                z.entities.values().any(|e| e.kind == EntityKind::Npc),
+                "{} needs a questgiver",
+                act.as_str()
+            );
+            let boss = z
+                .entities
+                .values()
+                .find(|e| e.tag.as_deref().map(|t| t.ends_with("_alpha")) == Some(true))
+                .expect("act boss");
+            assert!(boss.max_health >= 160, "boss should be elite");
+        }
+    }
+
+    #[test]
     fn resting_at_inn_banks_rested_xp() {
         let mut w = World::new(9);
         let pid = spawn_at(&mut w, 1, "Sleepy", 0.0, 0.0); // entry = inn
@@ -1376,5 +1676,8 @@ pub fn new_character(name: &str) -> CharacterSheet {
         guild: None,
         rested_xp: 0,
         pvp: false,
+        quests: Default::default(),
+        quests_done: Vec::new(),
+        equipment: Default::default(),
     }
 }

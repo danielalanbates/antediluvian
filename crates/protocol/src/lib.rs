@@ -146,6 +146,15 @@ pub struct CharacterSheet {
     /// World-PvP opt-in flag.
     #[serde(default)]
     pub pvp: bool,
+    /// Active quests: quest id → kill progress.
+    #[serde(default)]
+    pub quests: std::collections::BTreeMap<String, u32>,
+    /// Completed quest ids.
+    #[serde(default)]
+    pub quests_done: Vec<String>,
+    /// Equipped gear: slot ("weapon"/"chest") → item id.
+    #[serde(default)]
+    pub equipment: std::collections::BTreeMap<String, String>,
 }
 
 // ─── Client → Server ─────────────────────────────────────────────────────────
@@ -181,6 +190,11 @@ pub enum ClientMsg {
     DuelAccept,
     /// Consume a usable inventory item (e.g. "bread").
     UseItem { item: String },
+    /// Equip a piece of gear from the inventory (swaps out the slot's current
+    /// item, if any).
+    Equip { item: String },
+    /// Talk to the nearest NPC (quest givers): offers, progress, or turn-in.
+    Talk,
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.

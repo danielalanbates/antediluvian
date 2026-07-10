@@ -347,6 +347,20 @@ fn handle_client_msg(
             }
             send_stats(world, conns, id);
         }
+        ClientMsg::Equip { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.equip(act, ent, &item) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Talk => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.talk(act, ent) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
         ClientMsg::Craft { recipe } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.craft(act, ent, &recipe) {

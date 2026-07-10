@@ -33,6 +33,12 @@ struct SheetExt {
     rested_xp: u32,
     #[serde(default)]
     pvp: bool,
+    #[serde(default)]
+    quests: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    quests_done: Vec<String>,
+    #[serde(default)]
+    equipment: std::collections::BTreeMap<String, String>,
 }
 
 impl Db {
@@ -124,6 +130,9 @@ impl Db {
                         guild: ext.guild,
                         rested_xp: ext.rested_xp,
                         pvp: ext.pvp,
+                        quests: ext.quests,
+                        quests_done: ext.quests_done,
+                        equipment: ext.equipment,
                     })
                 },
             )
@@ -144,6 +153,9 @@ impl Db {
             guild: c.guild.clone(),
             rested_xp: c.rested_xp,
             pvp: c.pvp,
+            quests: c.quests.clone(),
+            quests_done: c.quests_done.clone(),
+            equipment: c.equipment.clone(),
         })?;
         self.conn.execute(
             "INSERT INTO accounts

@@ -57,6 +57,7 @@ fn main() {
                 send_input,
                 orbit_camera,
                 face_billboards,
+                animate_walk,
             ),
         )
         .run();
@@ -84,6 +85,22 @@ struct ActionBarText;
 /// A node that should always face the camera (health-bar holders).
 #[derive(Component)]
 struct Billboard;
+
+/// Articulated limb holders for a humanoid rig (pivot at shoulder/hip).
+#[derive(Component)]
+struct Limbs {
+    arm_l: Entity,
+    arm_r: Entity,
+    leg_l: Entity,
+    leg_r: Entity,
+}
+
+/// Walk-cycle state; phase advances with distance travelled.
+#[derive(Component, Default)]
+struct Walker {
+    phase: f32,
+    last: Vec3,
+}
 
 /// Per-server-entity bookkeeping: scene root (translation only), the rotating
 /// model node, and the health-bar fill node.
@@ -122,7 +139,10 @@ impl Default for Orbit {
 /// Cached meshes + materials so we don't allocate per entity.
 #[derive(Resource)]
 struct RenderAssets {
-    body: Handle<Mesh>,
+    torso: Handle<Mesh>,
+    head: Handle<Mesh>,
+    arm: Handle<Mesh>,
+    leg: Handle<Mesh>,
     beast: Handle<Mesh>,
     trunk: Handle<Mesh>,
     canopy: Handle<Mesh>,
@@ -198,7 +218,10 @@ fn setup(
     ));
 
     let assets = RenderAssets {
-        body: meshes.add(Capsule3d::new(9.0, 22.0)),
+        torso: meshes.add(Cuboid::new(16.0, 20.0, 9.0)),
+        head: meshes.add(Sphere::new(7.0)),
+        arm: meshes.add(Cuboid::new(5.0, 18.0, 5.0)),
+        leg: meshes.add(Cuboid::new(6.0, 20.0, 6.0)),
         beast: meshes.add(Sphere::new(9.0)),
         trunk: meshes.add(Cylinder::new(4.5, 26.0)),
         canopy: meshes.add(Cone { radius: 17.0, height: 34.0 }),
@@ -280,17 +303,42 @@ fn spawn_visual(
                 EntityKind::Enemy => assets.m_enemy.clone(),
                 _ => assets.m_npc.clone(),
             };
+            // Articulated humanoid: torso + head + four limbs pivoted at
+            // shoulder/hip so a walk cycle can swing them.
             let mut m = Entity::PLACEHOLDER;
+            let (mut al, mut ar, mut ll, mut lr) =
+                (Entity::PLACEHOLDER, Entity::PLACEHOLDER, Entity::PLACEHOLDER, Entity::PLACEHOLDER);
             commands.entity(root).with_children(|p| {
                 m = p
                     .spawn((Transform::default().with_rotation(rot), Visibility::default()))
                     .with_children(|body| {
-                        body.spawn((Mesh3d(assets.body.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 22.0, 0.0)));
+                        body.spawn((Mesh3d(assets.torso.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 34.0, 0.0)));
+                        body.spawn((Mesh3d(assets.head.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 51.0, 0.0)));
                         // A small nose block so facing is visible.
-                        body.spawn((Mesh3d(assets.nose.clone()), MeshMaterial3d(mat), Transform::from_xyz(12.0, 30.0, 0.0)));
+                        body.spawn((Mesh3d(assets.nose.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(7.0, 51.0, 0.0)));
+                        // Pivot at the top of each limb; z is sideways in
+                        // model space (x is the facing axis).
+                        let mut limb = |y: f32, z: f32, mesh: &Handle<Mesh>| {
+                            body.spawn((Transform::from_xyz(0.0, y, z), Visibility::default()))
+                                .with_children(|holder| {
+                                    holder.spawn((
+                                        Mesh3d(mesh.clone()),
+                                        MeshMaterial3d(mat.clone()),
+                                        Transform::from_xyz(0.0, -8.0, 0.0),
+                                    ));
+                                })
+                                .id()
+                        };
+                        al = limb(42.0, -10.5, &assets.arm);
+                        ar = limb(42.0, 10.5, &assets.arm);
+                        ll = limb(22.0, -4.5, &assets.leg);
+                        lr = limb(22.0, 4.5, &assets.leg);
                     })
                     .id();
             });
+            commands
+                .entity(root)
+                .insert((Limbs { arm_l: al, arm_r: ar, leg_l: ll, leg_r: lr }, Walker::default()));
             model = Some(m);
         }
         EntityKind::Wildlife => {
@@ -462,7 +510,7 @@ fn receive_from_server(
         **text = match session.class {
             Some(c) => {
                 let [a, b] = class_abilities(c);
-                format!("[Space] attack   [1] {a}   [2] {b}   |  {}  |  right-drag orbit · scroll zoom", c.as_str())
+                format!("[Space] attack   [1] {a}   [2] {b}   [E] talk   |  {}  |  right-drag orbit · scroll zoom", c.as_str())
             }
             None => "No class — press F1 warrior · F2 hunter · F3 priest · F4 mage".into(),
         };
@@ -507,6 +555,9 @@ fn send_input(
     }
     if keys.just_pressed(KeyCode::Space) {
         tx.send(ClientMsg::Attack);
+    }
+    if keys.just_pressed(KeyCode::KeyE) {
+        tx.send(ClientMsg::Talk);
     }
     if let Some(class) = session.class {
         let [a, b] = class_abilities(class);
@@ -563,6 +614,32 @@ fn orbit_camera(
         orbit.dist * orbit.pitch.cos() * orbit.yaw.cos(),
     );
     *cam_t = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+}
+
+/// Swing arms and legs while an entity moves: the walk phase advances with
+/// distance travelled, so speed naturally sets the stride rate, and eases back
+/// to rest when standing.
+fn animate_walk(
+    mut walkers: Query<(&Transform, &mut Walker, &Limbs), With<ServerEnt>>,
+    mut limbs: Query<&mut Transform, Without<ServerEnt>>,
+) {
+    for (t, mut w, l) in walkers.iter_mut() {
+        let moved = (t.translation - w.last).length();
+        w.last = t.translation;
+        let swing = if moved > 0.01 {
+            w.phase += moved * 0.045;
+            (w.phase.sin()) * 0.75
+        } else {
+            w.phase = 0.0;
+            0.0
+        };
+        for (ent, dir) in [(l.arm_l, 1.0), (l.arm_r, -1.0), (l.leg_l, -1.0), (l.leg_r, 1.0)] {
+            if let Ok(mut lt) = limbs.get_mut(ent) {
+                // Limbs swing around the sideways (z) axis in model space.
+                lt.rotation = Quat::from_rotation_z(swing * dir);
+            }
+        }
+    }
 }
 
 /// Keep health bars facing the camera. Bars are children of translation-only
