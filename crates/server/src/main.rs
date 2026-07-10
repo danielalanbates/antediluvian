@@ -140,7 +140,8 @@ fn handle_cmd(
         GameCmd::Disconnect { id } => {
             if let Some(c) = conns.remove(&id) {
                 if let (Some(ent), true) = (c.entity, c.logged_in) {
-                    if let Some(sheet) = world.player_sheet(c.act, ent) {
+                    if let Some(mut sheet) = world.player_sheet(c.act, ent) {
+                        sheet.last_logout = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
                         if let Err(e) = db.save(&sheet, None) {
                             tracing::error!("save on disconnect: {e}");
                         }
@@ -180,8 +181,17 @@ fn handle_client_msg(
             }
 
             // Load or create the character via apple_id
-            let sheet = match db.load_by_apple_id(&apple_id) {
-                Ok(Some(s)) => s,
+            let mut sheet = match db.load_by_apple_id(&apple_id) {
+                Ok(Some(mut s)) => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                    if let Some(last) = s.last_logout {
+                        let diff = now.saturating_sub(last);
+                        // 8 hours (28800s) of sleep = 100% recovery
+                        let recovery = diff as f32 * 0.00347;
+                        s.wakefulness = (s.wakefulness + recovery).clamp(0.0, 100.0);
+                    }
+                    s
+                },
                 Ok(None) => {
                     // Account does not exist, need a character name
                     let Some(name) = character_name else {
@@ -663,8 +673,9 @@ const AOI_RADIUS: f32 = 1400.0;
 /// Send each logged-in client an area-of-interest snapshot centered on its own
 /// player: only the entities near it, not the whole zone.
 fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f32();
-    let time_of_day = (now % 600.0) / 600.0;
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    // 86400 seconds in a day. time_of_day = 0.0 at midnight UTC, 0.5 at noon UTC.
+    let time_of_day = (now_secs % 86400) as f32 / 86400.0;
 
     for c in conns.values() {
         if !c.logged_in {

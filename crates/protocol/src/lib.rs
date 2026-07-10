@@ -120,6 +120,8 @@ pub struct EntityState {
 }
 
 /// The persistent, player-owned character sheet.
+fn default_wakefulness() -> f32 { 100.0 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharacterSheet {
     pub name: String,
@@ -158,6 +160,12 @@ pub struct CharacterSheet {
     /// World-PvP opt-in flag.
     #[serde(default)]
     pub pvp: bool,
+    /// Wakefulness (100.0 = fully awake, 0.0 = exhausted). Decreases while logged in, increases while logged out.
+    #[serde(default = "default_wakefulness")]
+    pub wakefulness: f32,
+    /// Unix timestamp of last logout (used to calculate sleep/rest).
+    #[serde(default)]
+    pub last_logout: Option<u64>,
     /// Active quests: quest id → kill progress.
     #[serde(default)]
     pub quests: std::collections::BTreeMap<String, u32>,

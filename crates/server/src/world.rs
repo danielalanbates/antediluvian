@@ -473,9 +473,17 @@ impl World {
                         }
                         continue;
                     }
+                    let mut fatigue_penalty = 1.0;
+                    if let Some(sheet) = &mut e.sheet {
+                        // Drain wakefulness (100 -> 0 over 16 hours)
+                        sheet.wakefulness = (sheet.wakefulness - (DT * 0.001736)).max(0.0);
+                        if sheet.wakefulness < 5.0 {
+                            fatigue_penalty = 0.5; // 50% movement speed when exhausted
+                        }
+                    }
                     if e.intent.length_squared() > 0.0001 {
                         let dir = e.intent.normalize_or_zero();
-                        e.pos += dir * e.speed * DT;
+                        e.pos += dir * (e.speed * fatigue_penalty) * DT;
                         e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
                         e.rot = dir.y.atan2(dir.x);
                     }
@@ -1719,7 +1727,9 @@ pub fn new_character(name: &str) -> CharacterSheet {
         guild: None,
         rested_xp: 0,
         pvp: false,
-        quests: Default::default(),
+        wakefulness: 100.0,
+        last_logout: None,
+        quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),
         equipment: Default::default(),
     }
