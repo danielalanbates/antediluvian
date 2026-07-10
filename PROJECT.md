@@ -57,6 +57,16 @@ systems ✅, (2) Bevy 3D client migration ✅, (3) content — quests/NPCs/bosse
 itemization ✅ first pass (below), (4) art pass (modeled characters/creatures,
 richer animation, terrain variety — the long tail).
 
+## Work queues (for future AI sessions — START HERE)
+Two chunked work queues, each chunk sized for one small-context session:
+- **`docs/art/`** — presentation (CHUNK_01–08 ✅; 09 equipment, 10 performance remain).
+- **`docs/content/`** — gameplay content from the design docs (C01–C12, all todo):
+  quest engine → act quests → bestiary (2,500 mobs) → POIs → world scale →
+  mounts → taming → theme questlines → caves → factions → economy → audio.
+Read the queue README's protocol, do ONE chunk, verify with your eyes, update
+statuses, commit. Both READMEs carry hard-won gotchas (iCloud eviction,
+8 GB RAM, persistence three-place rule) — reread them each session.
+
 ## Status (2026-07-10) — art pass CHUNK_02: combat events → remote animations
 - Protocol v3: `ServerMsg::Event` + `EventKind` (attack/cast/hit/die) broadcast
   zone-wide each tick; server emits at melee-swing, ability-cast, enemy-attack,
