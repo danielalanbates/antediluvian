@@ -6,10 +6,10 @@ use bevy::prelude::*;
 
 #[derive(Component)]
 pub struct Particle {
-    vel: Vec3,
-    life: f32,
-    max_life: f32,
-    base_scale: f32,
+    pub vel: Vec3,
+    pub life: f32,
+    pub max_life: f32,
+    pub base_scale: f32,
 }
 
 /// Cached particle mesh + palette so bursts never allocate new assets.

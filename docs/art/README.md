@@ -88,7 +88,7 @@ ones landed.
 | 04 | CHUNK_04_environment.md | Real trees/rocks, inn building, per-act prop sets | **DONE 2026-07-10** |
 | 05 | CHUNK_05_wildlife.md | Animated wildlife + per-act enemy species models | **DONE 2026-07-10** (enemy variety deferred) |
 | 06 | CHUNK_06_vfx.md | Spell/hit particles (hand-rolled), cast beams | **DONE 2026-07-10** |
-| 07 | CHUNK_07_ui.md | WoW-style UI: unit frames, action bar, quest tracker | todo |
-| 08 | CHUNK_08_atmosphere.md | Sky, fog, day/night, per-act lighting mood | todo |
+| 07 | CHUNK_07_ui.md | WoW-style UI: unit frames, action bar, quest tracker | **DONE 2026-07-10** |
+| 08 | CHUNK_08_atmosphere.md | Sky, fog, day/night, per-act lighting mood | **DONE 2026-07-10** |
 | 09 | CHUNK_09_equipment.md | Visible weapons/armor from equipment slots (bone sockets) | todo |
 | 10 | CHUNK_10_performance.md | Preload, LOD/AoI tuning, shadow budget, 60 fps target | todo |

@@ -15,7 +15,7 @@ pub struct Db {
 
 /// The WoW-systems extension of a character sheet, stored as one JSON column so
 /// adding fields never needs a schema migration.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct SheetExt {
     #[serde(default)]
     class: Option<Class>,
@@ -39,6 +39,20 @@ struct SheetExt {
     quests_done: Vec<String>,
     #[serde(default)]
     equipment: std::collections::BTreeMap<String, String>,
+    #[serde(default = "default_ext_wakefulness")]
+    wakefulness: f32,
+    #[serde(default)]
+    last_logout: Option<u64>,
+}
+
+fn default_ext_wakefulness() -> f32 {
+    100.0
+}
+
+impl Default for SheetExt {
+    fn default() -> Self {
+        serde_json::from_str("{}").expect("empty SheetExt deserializes")
+    }
 }
 
 impl Db {
@@ -143,6 +157,8 @@ impl Db {
                         quests: ext.quests,
                         quests_done: ext.quests_done,
                         equipment: ext.equipment,
+                        wakefulness: ext.wakefulness,
+                        last_logout: ext.last_logout,
                     })
                 },
             )
@@ -184,6 +200,8 @@ impl Db {
             quests: c.quests.clone(),
             quests_done: c.quests_done.clone(),
             equipment: c.equipment.clone(),
+            wakefulness: c.wakefulness,
+            last_logout: c.last_logout,
         })?;
         self.conn.execute(
             "INSERT INTO accounts
@@ -295,7 +313,7 @@ impl Db {
     pub fn credit_gold(&self, name: &str, amount: u32) -> Result<()> {
         if let Some(mut sheet) = self.load(name)? {
             sheet.gold += amount;
-            self.save(&sheet)?;
+            self.save(&sheet, None)?;
         }
         Ok(())
     }

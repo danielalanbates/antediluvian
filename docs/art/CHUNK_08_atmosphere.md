@@ -1,6 +1,6 @@
 # CHUNK 08 — Sky, lighting, atmosphere
 
-**Status: todo** (best after CHUNK_03 terrain)
+**Status: DONE 2026-07-10**
 
 ## Goal
 Each act has a mood; the world has a sky and time-of-day instead of a flat

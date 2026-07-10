@@ -1,6 +1,6 @@
 # CHUNK 07 — WoW-style UI
 
-**Status: todo**
+**Status: DONE 2026-07-10**
 
 ## Goal
 Replace the two debug text lines with a real HUD: player unit frame

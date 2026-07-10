@@ -49,6 +49,7 @@ fn main() {
     };
 
     // Start the network thread before the app so login is already in flight.
+    let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
     let (tx, rx) = start_network(url, apple_id, character_name);
 
     // Asset root is the workspace-level assets/ dir, independent of cwd.
@@ -80,7 +81,7 @@ fn main() {
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
-        .insert_resource(Session { name, ..default() })
+        .insert_resource(Session { name: display_name, ..default() })
         .add_event::<CombatEvt>()
         .add_systems(Startup, (setup, init_vfx))
         .add_systems(
