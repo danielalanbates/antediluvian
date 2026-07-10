@@ -2,9 +2,9 @@
 
 This directory contains the master layout for the game's **Overarching Themes**. While the location-based quests handle the immediate narrative of a specific region, these overarching themes weave massive, 50-quest story arcs that require the player to travel back and forth across the entire seamless supercontinent.
 
-There are exactly **300 interconnected quests** defined across these six themes.
+There are exactly **400 interconnected quests** defined across these eight themes.
 
-## The Six Pillars of Antediluvian Lore
+## The Eight Pillars of Antediluvian Lore
 
 1. [01: The Forbidden Arts](01_the_forbidden_arts.md)
    * **Focus:** Hunting down the illicit technologies taught by the Watchers (Metallurgy, Sorcery, Astrology, and Dark Writing). 
@@ -29,6 +29,14 @@ There are exactly **300 interconnected quests** defined across these six themes.
 6. [06: The Grigori Rebellion](06_the_grigori_rebellion.md)
    * **Focus:** The ultimate endgame hunt to track down, defeat, and bind the original 200 fallen angels (Watchers) who instigated the corruption of earth.
    * **Key Figures:** Samyaza, Azazel, the Archangels (Michael, Uriel, Raphael, Gabriel).
+
+7. [07: The Corrupted Beasts](07_the_corrupted_beasts.md)
+   * **Focus:** Hunting down the apex predators of the antediluvian world that have been mutated by celestial magic or driven mad by the dying ecosystem.
+   * **Key Figures:** The Alpha Mutants, Prehistoric Fauna, Animal Handlers.
+
+8. [08: The Remnant Prophets](08_the_remnant_prophets.md)
+   * **Focus:** Tracing the history of the righteous patriarchs from Enosh to Noah, recovering their lost teachings, and protecting their living descendants from assassination.
+   * **Key Figures:** Enosh, Kenan, Mahalalel, Jared, Enoch, Methuselah, Lamech (Sethite).
 
 ## Implementation
 These quests are designed to be interwoven. A player might be doing a quest for *The Two Lineages* in the City of Enoch, which naturally leads them to discover an armory that advances a quest for *The Forbidden Arts*, which in turn points them toward a giant warlord for *The Nephilim Scourge*.
