@@ -68,7 +68,8 @@ richer animation, terrain variety — the long tail).
   the wire, cross-client swing screenshot); 13 server tests green.
 - Art-pass work queue lives in `docs/art/` (CHUNK_01 ✅, CHUNK_02 ✅,
   CHUNK_03 ✅ per-act fBm terrain w/ height-banded vertex colors, rebuilt on
-  travel; characters ride the surface).
+  travel; characters ride the surface; CHUNK_04 ✅ KayKit prop environments —
+  real trees/rocks for resources, tavern/well inn set, per-act decor scatter).
 
 ## Status (2026-07-09 late night) — content layer first pass
 - **Quests + NPCs:** an Elder questgiver stands at every act's inn. `Talk` (key

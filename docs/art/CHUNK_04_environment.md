@@ -1,6 +1,15 @@
 # CHUNK 04 — Environment sets
 
-**Status: todo**
+**Status: DONE 2026-07-10.** KayKit Medieval Hexagon (nature trees/rocks,
+tavern/well), Halloween Bits (dead trees), City Builder Bits (buildings/bush/
+streetlight) fetched into `assets/models/props/{nature,village,halloween,city}`
+(gltf+bin+shared png per dir; ~580K total; LICENSES.md updated). Server tree/
+rock resources render as per-act prop variants (id-hashed variant/yaw/scale);
+inn set at entry (tavern+well+bushes, city building for Enoch); ~170 decor
+props scattered deterministically (hash01, skipped within 300u of inn), all
+tagged `Terrain` so travel rebuilds. Verified on screen in Eden + Nephilim.
+Gotchas: hexagon-pack fences read as bare posts (dropped); city bush needs
+~3x the scale of hexagon props; well pivot sits high (y-6 fudge).
 
 ## Goal
 Real vegetation, rocks, and an inn *building* instead of cone-trees, sphere-

@@ -209,14 +209,8 @@ impl Default for Orbit {
 #[derive(Resource)]
 struct RenderAssets {
     beast: Handle<Mesh>,
-    trunk: Handle<Mesh>,
-    canopy: Handle<Mesh>,
-    rock: Handle<Mesh>,
     bar: Handle<Mesh>,
     m_wildlife: Handle<StandardMaterial>,
-    m_trunk: Handle<StandardMaterial>,
-    m_canopy: Handle<StandardMaterial>,
-    m_rock: Handle<StandardMaterial>,
     m_bar_bg: Handle<StandardMaterial>,
     m_bar_hp: Handle<StandardMaterial>,
 }
@@ -283,12 +277,146 @@ fn class_abilities(class: Class) -> [&'static str; 2] {
     }
 }
 
+// ─── Props / scenery ─────────────────────────────────────────────────────────
+
+/// Cheap deterministic hash → [0, 1). Used for prop variety so every client
+/// renders the same world.
+fn hash01(seed: u64) -> f32 {
+    let h = seed
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(0x2545_F491_4F6C_DD1D);
+    ((h >> 40) & 0xFF_FFFF) as f32 / 16_777_216.0
+}
+
+/// Harvestable tree models per act (lush → pines → dead → parkland → coast).
+fn tree_set(act: Act) -> [&'static str; 3] {
+    match act {
+        Act::Eden => [
+            "models/props/nature/tree_single_A.gltf",
+            "models/props/nature/tree_single_B.gltf",
+            "models/props/nature/trees_A_medium.gltf",
+        ],
+        Act::Hermon => [
+            "models/props/nature/tree_single_B.gltf",
+            "models/props/nature/trees_B_small.gltf",
+            "models/props/nature/tree_single_A.gltf",
+        ],
+        Act::Nephilim => [
+            "models/props/halloween/tree_dead_large.gltf",
+            "models/props/halloween/tree_dead_medium.gltf",
+            "models/props/halloween/tree_dead_small.gltf",
+        ],
+        Act::Enoch => [
+            "models/props/nature/tree_single_A.gltf",
+            "models/props/nature/tree_single_B.gltf",
+            "models/props/nature/trees_B_small.gltf",
+        ],
+        Act::Flood => [
+            "models/props/halloween/tree_dead_small.gltf",
+            "models/props/halloween/tree_dead_medium.gltf",
+            "models/props/nature/rock_single_C.gltf",
+        ],
+    }
+}
+
+const ROCKS: [&str; 3] = [
+    "models/props/nature/rock_single_A.gltf",
+    "models/props/nature/rock_single_B.gltf",
+    "models/props/nature/rock_single_C.gltf",
+];
+
+/// KayKit hexagon props are ~1–2 units across; world characters are ~55u.
+const TREE_SCALE: f32 = 34.0;
+const ROCK_SCALE: f32 = 26.0;
+
+/// Spawn one static prop scene (no server entity) and return it.
+fn spawn_prop(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    path: &str,
+    pos: Vec3,
+    scale: f32,
+    yaw: f32,
+) -> Entity {
+    commands
+        .spawn((
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string()))),
+            Transform::from_translation(pos)
+                .with_scale(Vec3::splat(scale))
+                .with_rotation(Quat::from_rotation_y(yaw)),
+        ))
+        .id()
+}
+
+/// Everything act-scoped and purely visual: the terrain mesh, the inn set at
+/// the entry, and a deterministic decor scatter. All tagged `Terrain` so zone
+/// travel despawns and rebuilds the lot.
+fn spawn_act_scenery(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    asset_server: &AssetServer,
+    act: Act,
+) {
+    commands.spawn((
+        Mesh3d(meshes.add(build_terrain_mesh(act))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            ..default()
+        })),
+        Transform::default(),
+        Terrain,
+    ));
+
+    // Inn set at the zone entry (flat by construction). Enoch is the city act.
+    let inn: &[(&str, Vec3, f32, f32)] = if act == Act::Enoch {
+        &[
+            ("models/props/city/building_A.gltf", Vec3::new(-130.0, 0.0, -110.0), 40.0, 0.6),
+            ("models/props/city/streetlight.gltf", Vec3::new(60.0, 0.0, -50.0), 30.0, 0.0),
+            ("models/props/city/bush.gltf", Vec3::new(-40.0, 0.0, 90.0), 70.0, 1.9),
+        ]
+    } else {
+        &[
+            ("models/props/village/building_tavern_red.gltf", Vec3::new(-130.0, 0.0, -110.0), 55.0, 0.6),
+            ("models/props/village/building_well_red.gltf", Vec3::new(90.0, -6.0, -70.0), 28.0, 0.0),
+            ("models/props/city/bush.gltf", Vec3::new(-30.0, 0.0, 140.0), 64.0, 0.8),
+            ("models/props/city/bush.gltf", Vec3::new(55.0, 0.0, 135.0), 56.0, 2.4),
+        ]
+    };
+    for (path, pos, scale, yaw) in inn {
+        let e = spawn_prop(commands, asset_server, path, *pos, *scale, *yaw);
+        commands.entity(e).insert(Terrain);
+    }
+
+    // Non-gameplay decor scatter, deterministic per act.
+    let act_idx = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u64;
+    let trees = tree_set(act);
+    for i in 0..170u64 {
+        let s = act_idx * 100_000 + i;
+        let x = (hash01(s * 4 + 1) - 0.5) * 3600.0;
+        let z = (hash01(s * 4 + 2) - 0.5) * 3600.0;
+        if (x * x + z * z).sqrt() < 300.0 {
+            continue; // keep the inn clearing open
+        }
+        let (path, scale) = match (hash01(s * 4 + 3) * 3.0) as u32 {
+            0 => ("models/props/city/bush.gltf", 42.0 + hash01(s * 4) * 24.0),
+            1 => (ROCKS[(s % 3) as usize], 10.0 + hash01(s * 4) * 12.0),
+            _ => (trees[(s % 3) as usize], TREE_SCALE * (0.55 + hash01(s * 4) * 0.35)),
+        };
+        let pos = Vec3::new(x, terrain_height(act, x, z), z);
+        let e = spawn_prop(commands, asset_server, path, pos, scale, hash01(s * 4 + 5) * 6.283);
+        commands.entity(e).insert(Terrain);
+    }
+}
+
 // ─── Systems ─────────────────────────────────────────────────────────────────
 
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
         Camera3d::default(),
@@ -302,17 +430,8 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.6, 0.0)),
     ));
 
-    // Terrain (vertex-colored heightfield; rebuilt on zone travel).
-    commands.spawn((
-        Mesh3d(meshes.add(build_terrain_mesh(Act::Eden))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 1.0,
-            ..default()
-        })),
-        Transform::default(),
-        Terrain,
-    ));
+    // Terrain + inn + decor (rebuilt on zone travel).
+    spawn_act_scenery(&mut commands, &mut meshes, &mut materials, &asset_server, Act::Eden);
 
     // Inn ring at the zone entry (the rest / auction-house area).
     commands.spawn((
@@ -328,14 +447,8 @@ fn setup(
 
     let assets = RenderAssets {
         beast: meshes.add(Sphere::new(9.0)),
-        trunk: meshes.add(Cylinder::new(4.5, 26.0)),
-        canopy: meshes.add(Cone { radius: 17.0, height: 34.0 }),
-        rock: meshes.add(Sphere::new(11.0)),
         bar: meshes.add(Rectangle::new(1.0, 4.0)),
         m_wildlife: materials.add(Color::srgb(0.72, 0.60, 0.38)),
-        m_trunk: materials.add(Color::srgb(0.38, 0.26, 0.14)),
-        m_canopy: materials.add(Color::srgb(0.12, 0.42, 0.16)),
-        m_rock: materials.add(Color::srgb(0.52, 0.52, 0.55)),
         m_bar_bg: materials.add(StandardMaterial {
             base_color: Color::srgb(0.10, 0.10, 0.10),
             unlit: true,
@@ -448,20 +561,21 @@ fn spawn_visual(
             model = Some(m);
         }
         EntityKind::Resource => {
-            if e.tag.as_deref() == Some("rock") {
-                commands.entity(root).with_children(|p| {
-                    p.spawn((
-                        Mesh3d(assets.rock.clone()),
-                        MeshMaterial3d(assets.m_rock.clone()),
-                        Transform::from_xyz(0.0, 6.0, 0.0).with_scale(Vec3::new(1.4, 0.8, 1.1)),
-                    ));
-                });
+            let (path, scale) = if e.tag.as_deref() == Some("rock") {
+                (ROCKS[(e.id % 3) as usize], ROCK_SCALE * (0.9 + hash01(e.id) * 0.4))
             } else {
-                commands.entity(root).with_children(|p| {
-                    p.spawn((Mesh3d(assets.trunk.clone()), MeshMaterial3d(assets.m_trunk.clone()), Transform::from_xyz(0.0, 13.0, 0.0)));
-                    p.spawn((Mesh3d(assets.canopy.clone()), MeshMaterial3d(assets.m_canopy.clone()), Transform::from_xyz(0.0, 43.0, 0.0)));
-                });
-            }
+                (tree_set(act)[(e.id % 3) as usize], TREE_SCALE * (0.9 + hash01(e.id) * 0.4))
+            };
+            let yaw = hash01(e.id * 7 + 1) * 6.283;
+            commands.entity(root).with_children(|p| {
+                p.spawn((
+                    SceneRoot(
+                        asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string())),
+                    ),
+                    Transform::from_scale(Vec3::splat(scale))
+                        .with_rotation(Quat::from_rotation_y(yaw)),
+                ));
+            });
         }
     };
 
@@ -516,7 +630,7 @@ fn receive_from_server(
     terrain_q: Query<Entity, With<Terrain>>,
 ) {
     // Rebuild the terrain when the character's act changes (login or travel).
-    let mut set_act = |commands: &mut Commands,
+    let set_act = |commands: &mut Commands,
                        session: &mut Session,
                        meshes: &mut Assets<Mesh>,
                        materials: &mut Assets<StandardMaterial>,
@@ -528,16 +642,7 @@ fn receive_from_server(
         for t in terrain_q.iter() {
             commands.entity(t).despawn_recursive();
         }
-        commands.spawn((
-            Mesh3d(meshes.add(build_terrain_mesh(act))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 1.0,
-                ..default()
-            })),
-            Transform::default(),
-            Terrain,
-        ));
+        spawn_act_scenery(commands, meshes, materials, &asset_server, act);
     };
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
