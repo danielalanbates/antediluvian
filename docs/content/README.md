@@ -64,12 +64,16 @@ window (read → implement → verify → commit).
 | C04 | CHUNK_C04_pois.md | POI placement + discovery XP + named subzones on the map | DONE |
 | C05 | CHUNK_C05_world_scale.md | Bigger per-act maps matching POI coordinate space; road between inn and POIs | DONE |
 | C06 | CHUNK_C06_mounts.md | Level-40 Dire-Wolf mount questline + riding (speed buff + client model) | DONE |
-| C07 | CHUNK_C07_taming.md | Creature Mastery sandbox: weaken→subdue taming of tameable bestiary mobs, stable | todo |
+| C07 | CHUNK_C07_taming.md | Creature Mastery sandbox: weaken→subdue taming of tameable bestiary mobs, stable | done |
 | C08 | CHUNK_C08_theme_questlines.md | First cross-zone theme pillar (Forbidden Arts) as a chained questline | todo |
 | C09 | CHUNK_C09_caves.md | Cave/mine sites: entrances, interior mobs + ore nodes from cave archives | todo |
 | C10 | CHUNK_C10_factions.md | Sethite/Cainite alignment choice + reputation + faction vendors | todo |
 | C11 | CHUNK_C11_economy.md | Bestiary drop tables in loot, vendor buy/sell, AH seeded by NPC listings | todo |
 | C12 | CHUNK_C12_audio.md | CC0 sound: combat hits, casts, ambient loops per act, UI clicks (bevy_audio) | todo |
+| C13 | CHUNK_C13_character_builder.md | Character-creation step (name/class/faction/appearance) behind Apple login | todo |
+| C14 | CHUNK_C14_dev_menu.md | Server-gated developer menu for alpha testers (teleport, give, spawn, godmode) | todo |
+| C15 | CHUNK_C15_thousand_players.md | 1,000 players on screen: AoI deltas, binary wire, instanced rigs, bot swarm | todo |
+| C16 | CHUNK_C16_wow_parity_pvp_zones.md | WoW-Classic parity audit + auto-flag PvP zones near enemy capitals | todo |
 
 Art-pass chunks 09 (visible equipment) and 10 (performance) still live in
 `docs/art/` and can be interleaved; C05 before C04 if map scale blocks POI

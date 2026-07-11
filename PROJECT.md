@@ -60,9 +60,13 @@ richer animation, terrain variety — the long tail).
 ## Work queues (for future AI sessions — START HERE)
 Two chunked work queues, each chunk sized for one small-context session:
 - **`docs/art/`** — presentation (CHUNK_01–09 ✅; 10 performance remains).
-- **`docs/content/`** — gameplay content from the design docs (C01–C07 ✅; C08–C12 todo):
+- **`docs/content/`** — gameplay content from the design docs (C01–C07 ✅; C08–C16 todo):
   quest engine → act quests → bestiary (2,500 mobs) → POIs → world scale →
-  mounts → taming → theme questlines → caves → factions → economy → audio.
+  mounts → taming → theme questlines → caves → factions → economy → audio →
+  char builder (Apple login) → dev menu → 1,000-player scale → WoW parity +
+  auto-flag PvP zones near enemy capitals.
+  **Standing goal (Daniel, 2026-07-11): alpha-test-ready .app** — build out
+  ALL chunks; executive permission to design/implement missing features.
 Read the queue README's protocol, do ONE chunk, verify with your eyes, update
 statuses, commit. Both READMEs carry hard-won gotchas (iCloud eviction,
 8 GB RAM, persistence three-place rule) — reread them each session.
