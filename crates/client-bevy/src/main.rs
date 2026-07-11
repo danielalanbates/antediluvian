@@ -54,9 +54,11 @@ fn main() {
     let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
     let (tx, rx) = start_network(url, apple_id, character_name);
 
-    // Asset root is the workspace-level assets/ dir, independent of cwd.
-    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets")
+    // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
+    // workspace-level assets/ dir, independent of cwd.
+    let assets_dir = std::env::var("ANTEDILUVIA_ASSETS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
         .canonicalize()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "assets".into());
