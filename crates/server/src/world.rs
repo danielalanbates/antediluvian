@@ -139,29 +139,7 @@ fn gear_bonus(sheet: &CharacterSheet) -> (i32, i32) {
     (melee, spell)
 }
 
-/// One kill quest per act, offered by that act's Elder at the zone entry.
-pub struct Quest {
-    pub id: &'static str,
-    pub act: Act,
-    pub offer: &'static str,
-    pub target: &'static str,
-    pub count: u32,
-    pub xp: u32,
-    pub gold: u32,
-    pub item: Option<&'static str>,
-}
-
-pub const QUESTS: &[Quest] = &[
-    Quest { id: "serpents_in_the_garden", act: Act::Eden,     offer: "Serpents defile the garden. Slay 5 of them.",      target: "serpent",   count: 5, xp: 120, gold: 15, item: Some("bronze_sword") },
-    Quest { id: "watchers_on_the_mount",  act: Act::Hermon,   offer: "The Watchers descend on Hermon. Fell 5 of them.",  target: "watcher",   count: 5, xp: 220, gold: 25, item: None },
-    Quest { id: "giants_in_the_land",     act: Act::Nephilim, offer: "There were giants in those days. Bring down 5.",   target: "giant",     count: 5, xp: 350, gold: 40, item: None },
-    Quest { id: "shades_of_enoch",        act: Act::Enoch,    offer: "Shades haunt the city of Enoch. Banish 5.",        target: "shade",     count: 5, xp: 500, gold: 55, item: None },
-    Quest { id: "leviathan_hunt",         act: Act::Flood,    offer: "The deep sends leviathans. Hunt 3 before the end.", target: "leviathan", count: 3, xp: 800, gold: 90, item: Some("hide_vest") },
-];
-
-fn quest_for_act(act: Act) -> &'static Quest {
-    QUESTS.iter().find(|q| q.act == act).expect("every act has a quest")
-}
+use crate::quests::{quest, quests_for, Objective, QUEST_CAP};
 
 /// Distance within which you can talk to an NPC.
 const TALK_RANGE: f32 = 140.0;
@@ -345,9 +323,12 @@ impl World {
             let tag = if self.rng.range(0.0, 1.0) < 0.6 { "tree" } else { "rock" };
             zone.entities.insert(id, make_resource(id, pos, tag));
         }
-        // The act's quest giver, by the inn.
+        // The act's quest givers, by the inn: the Elder (main quests) and a
+        // Wanderer (side quests) a short walk away.
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(90.0, 0.0), "Elder"));
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
         // One elite "alpha" per act — the dungeon-boss placeholder. Guaranteed
         // rare drop (thick_hide) and big XP.
         let pos = self.rng.point(WORLD_BOUNDS * 0.7);
@@ -841,19 +822,43 @@ impl World {
                                 EntityKind::Enemy => {
                                     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
                                     s.gold += 2 + tier * 2;
-                                    let q = quest_for_act(act);
-                                    let counts = etag
-                                        .as_deref()
-                                        .map(|t| t.starts_with(q.target))
-                                        .unwrap_or(false);
-                                    if counts {
-                                        if let Some(prog) = s.quests.get_mut(q.id) {
-                                            if *prog < q.count {
-                                                *prog += 1;
-                                                events.push(SimEvent::Info {
-                                                    owner: o,
-                                                    text: format!("Quest: {} — {}/{}", q.id, prog, q.count),
-                                                });
+                                    // Advance every active quest this kill satisfies:
+                                    // kill objectives tick progress, collect objectives
+                                    // loot the quest item (100% while active).
+                                    let active: Vec<String> = s.quests.keys().cloned().collect();
+                                    for qid in active {
+                                        let Some(def) = quest(&qid) else { continue };
+                                        match def.objective {
+                                            Objective::Kill { target, count } => {
+                                                let hits = etag
+                                                    .as_deref()
+                                                    .map(|t| t.starts_with(target))
+                                                    .unwrap_or(false);
+                                                if !hits { continue }
+                                                let prog = s.quests.get_mut(&qid).unwrap();
+                                                if *prog < count {
+                                                    *prog += 1;
+                                                    events.push(SimEvent::Info {
+                                                        owner: o,
+                                                        text: format!("Quest: {} — {}/{}", qid, prog, count),
+                                                    });
+                                                }
+                                            }
+                                            Objective::Collect { item, count, source } => {
+                                                let hits = etag
+                                                    .as_deref()
+                                                    .map(|t| t.starts_with(source))
+                                                    .unwrap_or(false);
+                                                if !hits { continue }
+                                                let have = s.inventory.iter().filter(|i| i.as_str() == item).count() as u32;
+                                                if have < count && s.inventory.len() < 40 {
+                                                    s.inventory.push(item.to_string());
+                                                    s.quests.insert(qid.clone(), have + 1);
+                                                    events.push(SimEvent::Info {
+                                                        owner: o,
+                                                        text: format!("Quest: {} — {}/{} {}", qid, have + 1, count, item),
+                                                    });
+                                                }
                                             }
                                         }
                                     }
@@ -1044,49 +1049,72 @@ impl World {
         Ok(format!("You equip the {item}."))
     }
 
-    /// Talk to the nearest NPC: quest offer / progress / turn-in.
+    /// Talk to the nearest NPC. Priority: turn in a completed quest from this
+    /// giver → accept the first available quest (prerequisites met, under the
+    /// concurrent cap) → report progress on one in flight → pleasantries.
     pub fn talk(&mut self, act: Act, id: EntityId) -> Result<String, String> {
         let z = self.zones.get(&act).ok_or("no zone")?;
         let pos = z.entities.get(&id).map(|e| e.pos).ok_or("no such player")?;
-        let near_npc = z
+        let npc = z
             .entities
             .values()
-            .filter(|e| e.kind == EntityKind::Npc)
-            .any(|e| e.pos.distance(pos) <= TALK_RANGE);
-        if !near_npc {
-            return Err("There is no one nearby to talk to.".into());
-        }
-        let q = quest_for_act(act);
+            .filter(|e| e.kind == EntityKind::Npc && e.pos.distance(pos) <= TALK_RANGE)
+            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+            .map(|e| e.name.clone().unwrap_or_else(|| "Elder".into()))
+            .ok_or("There is no one nearby to talk to.")?;
+
         let e = self.entity_mut(act, id).unwrap();
         let s = e.sheet.as_mut().ok_or("no sheet")?;
-        if s.quests_done.iter().any(|d| d == q.id) {
-            return Ok("Elder: You have done all I asked. Go with peace.".into());
-        }
-        match s.quests.get(q.id).copied() {
-            None => {
-                s.quests.insert(q.id.to_string(), 0);
-                Ok(format!("Elder: {} (0/{})", q.offer, q.count))
-            }
-            Some(prog) if prog < q.count => {
-                Ok(format!("Elder: Not done yet — {}/{} slain.", prog, q.count))
-            }
-            Some(_) => {
-                // Turn-in: xp (through the normal leveling path), gold, item.
-                s.quests.remove(q.id);
-                s.quests_done.push(q.id.to_string());
-                s.gold += q.gold;
-                let mut text = format!("Elder: It is done! (+{} xp, +{}g", q.xp, q.gold);
-                if let Some(item) = q.item {
-                    if s.inventory.len() < 40 {
-                        s.inventory.push(item.to_string());
-                        text.push_str(&format!(", {item}"));
+
+        // 1) Turn-in: any of this giver's quests active and complete?
+        let turn_in = quests_for(act, &npc).find(|q| {
+            s.quests.get(q.id).is_some_and(|p| *p >= q.objective.count())
+        });
+        if let Some(q) = turn_in {
+            if let Objective::Collect { item, count, .. } = q.objective {
+                // Consume the collected items.
+                for _ in 0..count {
+                    if let Some(idx) = s.inventory.iter().position(|i| i == item) {
+                        s.inventory.remove(idx);
                     }
                 }
-                text.push(')');
-                award_xp(e, q.xp);
-                Ok(text)
             }
+            s.quests.remove(q.id);
+            s.quests_done.push(q.id.to_string());
+            s.gold += q.gold;
+            let mut text = format!("{npc}: It is done! (+{} xp, +{}g", q.xp, q.gold);
+            if let Some(item) = q.item {
+                if s.inventory.len() < 40 {
+                    s.inventory.push(item.to_string());
+                    text.push_str(&format!(", {item}"));
+                }
+            }
+            text.push(')');
+            award_xp(e, q.xp);
+            return Ok(text);
         }
+
+        // 2) Accept: first not-yet-started quest whose prerequisite is done.
+        let accept = quests_for(act, &npc).find(|q| {
+            !s.quests.contains_key(q.id)
+                && !s.quests_done.iter().any(|d| d == q.id)
+                && q.requires.map_or(true, |r| s.quests_done.iter().any(|d| d == r))
+        });
+        if let Some(q) = accept {
+            if s.quests.len() >= QUEST_CAP {
+                return Ok(format!("{npc}: Your hands are full. Finish what you carry first."));
+            }
+            s.quests.insert(q.id.to_string(), 0);
+            return Ok(format!("{npc}: {} (0/{})", q.offer, q.objective.count()));
+        }
+
+        // 3) Progress report on one of this giver's quests in flight.
+        if let Some(q) = quests_for(act, &npc).find(|q| s.quests.contains_key(q.id)) {
+            let prog = s.quests[q.id];
+            return Ok(format!("{npc}: Not done yet — {}/{}.", prog, q.objective.count()));
+        }
+
+        Ok(format!("{npc}: You have done all I asked. Go with peace."))
     }
 
     /// Toggle the PvP flag; returns the new state.
@@ -1650,6 +1678,90 @@ mod tests {
         }
         let s = w.player_sheet(Act::Eden, pid).unwrap();
         assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
+    }
+
+    /// Kill one serpent with the given quest state pre-seeded; returns the sheet.
+    fn kill_one_serpent(w: &mut World, seed_quests: &[(&str, u32)]) -> CharacterSheet {
+        let (eid, epos) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some("serpent"))
+                .unwrap();
+            (e.id, e.pos)
+        };
+        let mut sheet = new_character("Hunter");
+        sheet.x = epos.x - 12.0;
+        sheet.y = epos.y;
+        for (q, p) in seed_quests {
+            sheet.quests.insert((*q).into(), *p);
+        }
+        let pid = w.spawn_player(9, sheet);
+        for _ in 0..300 {
+            w.queue_attack(Act::Eden, pid);
+            w.step();
+            if !w.zones[&Act::Eden].entities.contains_key(&eid) {
+                break;
+            }
+        }
+        w.player_sheet(Act::Eden, pid).unwrap().clone()
+    }
+
+    #[test]
+    fn collect_quest_loots_and_consumes_on_turn_in() {
+        let mut w = World::new(21);
+        // Source kill drops the quest item while the quest is active.
+        let s = kill_one_serpent(&mut w, &[("the_first_forges", 0)]);
+        assert!(s.inventory.iter().any(|i| i == "bronze_ingot"), "quest item looted");
+        assert_eq!(s.quests.get("the_first_forges").copied(), Some(1));
+
+        // Turn-in at the Wanderer consumes the six ingots and pays out.
+        let mut w = World::new(22);
+        let pid = spawn_at(&mut w, 2, "Collector", -70.0, 110.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.quests.insert("the_first_forges".into(), 6);
+            s.inventory = vec!["bronze_ingot".into(); 6];
+        }
+        let done = w.talk(Act::Eden, pid).unwrap();
+        assert!(done.contains("It is done"), "{done}");
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(!s.inventory.iter().any(|i| i == "bronze_ingot"), "ingots consumed");
+        assert!(s.inventory.iter().any(|i| i == "bronze_bracers"), "reward granted");
+    }
+
+    #[test]
+    fn chained_quest_needs_prerequisite() {
+        let mut w = World::new(23);
+        // Stand by the Wanderer with its unchained quest already done.
+        let pid = spawn_at(&mut w, 3, "Seeker", -70.0, 110.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.quests_done.push("the_first_forges".into());
+        }
+        // Prerequisite (elder main quest) not done: nothing to offer.
+        let t = w.talk(Act::Eden, pid).unwrap();
+        assert!(t.contains("peace"), "chained quest withheld, got: {t}");
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.quests_done.push("serpents_in_the_garden".into());
+        }
+        let t = w.talk(Act::Eden, pid).unwrap();
+        assert!(t.contains("altar") || t.contains("Scavengers"), "chained quest now offered, got: {t}");
+    }
+
+    #[test]
+    fn two_quests_progress_from_one_kill() {
+        let mut w = World::new(24);
+        let s = kill_one_serpent(
+            &mut w,
+            &[("serpents_in_the_garden", 0), ("altar_of_the_firstborn", 0)],
+        );
+        assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
+        assert_eq!(s.quests.get("altar_of_the_firstborn").copied(), Some(1));
     }
 
     #[test]

@@ -7,6 +7,7 @@
 
 mod db;
 mod net;
+mod quests;
 mod world;
 
 use antediluvia_protocol::{Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};

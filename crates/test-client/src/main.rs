@@ -34,6 +34,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut my_pos = (0.0f32, 0.0f32);
     let mut frames = 0u64;
 
+    // Quest E2E mode (ANTEDILUVIA_QUEST=1): talk to the Elder at (90,0) to
+    // accept the act quest, hunt until the "5/5" progress notice, walk back,
+    // turn in, print QUEST-E2E-OK and exit.
+    let quest_mode = std::env::var("ANTEDILUVIA_QUEST").is_ok();
+    let mut quest_ready = false;
+    let mut talked = false;
+    let mut last_talk_frame = 0u64;
+
     while let Some(frame) = read.next().await {
         let Message::Text(txt) = frame? else { continue };
         let msg: ServerMsg = match serde_json::from_str(&txt) {
@@ -54,7 +62,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("LOGIN REJECTED: {reason}");
                 break;
             }
-            ServerMsg::Notice { text } => println!("[notice] {text}"),
+            ServerMsg::Notice { text } => {
+                println!("[notice] {text}");
+                if quest_mode {
+                    if text.contains("(0/") {
+                        talked = true; // quest accepted
+                    }
+                    if text.contains("5/5") {
+                        quest_ready = true;
+                    }
+                    if text.contains("It is done") {
+                        println!("QUEST-E2E-OK");
+                        break;
+                    }
+                }
+            }
             ServerMsg::Event { .. } => {}
             ServerMsg::Chat { from, text } => println!("[chat] {from}: {text}"),
             ServerMsg::Stats { character } => {
@@ -92,6 +114,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
 
+                // Quest mode: first walk to the Elder and accept; once the
+                // objective is complete, walk back and turn in.
+                if quest_mode && (!talked || quest_ready) {
+                    let (dx, dy) = (90.0 - my_pos.0, 0.0 - my_pos.1);
+                    if dx.hypot(dy) > 80.0 {
+                        write.send(Message::Text(send(&ClientMsg::Move { dx, dy }).into())).await?;
+                    } else if frames.saturating_sub(last_talk_frame) >= 20 {
+                        write.send(Message::Text(send(&ClientMsg::Move { dx: 0.0, dy: 0.0 }).into())).await?;
+                        write.send(Message::Text(send(&ClientMsg::Talk).into())).await?;
+                        last_talk_frame = frames;
+                    }
+                    if frames >= 4000 {
+                        println!("QUEST-E2E-TIMEOUT");
+                        break;
+                    }
+                    continue;
+                }
+
                 // Drive toward + attack the nearest enemy.
                 if let Some(en) = nearest_enemy {
                     let (dx, dy) = (en.x - my_pos.0, en.y - my_pos.1);
@@ -107,7 +147,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Bot runs for a bounded number of frames then leaves cleanly.
-                if frames >= 400 {
+                if quest_mode && frames >= 4000 {
+                    println!("QUEST-E2E-TIMEOUT");
+                    break;
+                }
+                if !quest_mode && frames >= 400 {
                     println!("test run complete ({frames} frames); disconnecting");
                     break;
                 }

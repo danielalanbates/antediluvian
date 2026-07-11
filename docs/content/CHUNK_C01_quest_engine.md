@@ -1,6 +1,6 @@
 # CHUNK C01 — Data-driven quest engine
 
-**Status: todo**
+**Status: DONE (2026-07-10)**
 
 ## Goal
 Replace the one-hardcoded-quest-per-act system with an engine that supports
