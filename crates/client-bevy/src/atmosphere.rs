@@ -161,16 +161,30 @@ pub fn update_atmosphere(
     ambient.brightness = 80.0 + 220.0 * day_factor;
     ambient.color = mood.ambient_color;
 
+    // Cave interiors (C09): darken ambient + tighten fog inside a pocket.
+    let in_cave = q_cam.get_single().ok().map(|(_, cam_tf, _)| {
+        let p = cam_tf.translation;
+        crate::caves_for_act(session.act)
+            .any(|c| (p.x - c.x).hypot(p.z - c.y) < 260.0)
+    }).unwrap_or(false);
+    if in_cave {
+        ambient.brightness *= 0.25;
+    }
+
     if let Ok((cam_ent, cam_tf, mut fog)) = q_cam.get_single_mut() {
         // Update fog color (darken slightly at night, but mostly retain mood)
         let night_dim = 0.3 + 0.7 * day_factor;
         let base_fog = mood.fog_color.to_srgba();
+        let cave_dim = if in_cave { 0.35 } else { 1.0 };
         fog.color = Color::srgba(
-            base_fog.red * night_dim,
-            base_fog.green * night_dim,
-            base_fog.blue * night_dim,
+            base_fog.red * night_dim * cave_dim,
+            base_fog.green * night_dim * cave_dim,
+            base_fog.blue * night_dim * cave_dim,
             1.0
         );
+        fog.falloff = FogFalloff::Exponential {
+            density: mood.fog_density * if in_cave { 4.0 } else { 1.0 },
+        };
 
         // Keep sky centered on camera
         if let Ok(mut sky_tf) = q_sky.get_single_mut() {

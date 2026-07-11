@@ -1,0 +1,330 @@
+[
+ {
+  "id": 181,
+  "name": "The Desolate Glimmering Hollow",
+  "act": "eden",
+  "x": -3200.0,
+  "y": -1928.2,
+  "resources": [
+   "orichalcum_ore",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 195,
+  "name": "The Deep Underground Spring",
+  "act": "eden",
+  "x": 3085.2,
+  "y": -589.5,
+  "resources": [
+   "abyssal_coal",
+   "blood_iron"
+  ]
+ },
+ {
+  "id": 266,
+  "name": "The Echoing Underground Spring",
+  "act": "eden",
+  "x": 2560.1,
+  "y": -591.8,
+  "resources": [
+   "abyssal_coal",
+   "mithril_like_edenium"
+  ]
+ },
+ {
+  "id": 500,
+  "name": "The Echoing Underground Spring",
+  "act": "eden",
+  "x": 3200.0,
+  "y": -1474.7,
+  "resources": [
+   "blood_iron",
+   "orichalcum_ore"
+  ]
+ },
+ {
+  "id": 651,
+  "name": "The Magically-irradiated Abandoned Nomad Tunnel",
+  "act": "eden",
+  "x": -2256.8,
+  "y": -636.8,
+  "resources": [
+   "blood_iron",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 756,
+  "name": "The Collapsing Root-Bound Cavern",
+  "act": "eden",
+  "x": -928.4,
+  "y": -483.8,
+  "resources": [
+   "luminous_quartz",
+   "mithril_like_edenium"
+  ]
+ },
+ {
+  "id": 598,
+  "name": "The Ruined Slag-Filled Cavern",
+  "act": "enoch",
+  "x": -1775.7,
+  "y": -2039.4,
+  "resources": [
+   "celestial_copper",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 752,
+  "name": "The Crystalline Toxic Sump Cave",
+  "act": "enoch",
+  "x": 531.9,
+  "y": -1303.2,
+  "resources": [
+   "mithril_like_edenium",
+   "petrified_wood"
+  ]
+ },
+ {
+  "id": 774,
+  "name": "The Ancient Smuggler's Delve",
+  "act": "enoch",
+  "x": 1833.3,
+  "y": -1800.0,
+  "resources": [
+   "blood_iron"
+  ]
+ },
+ {
+  "id": 783,
+  "name": "The Crystalline Slag-Filled Cavern",
+  "act": "enoch",
+  "x": -905.4,
+  "y": -1709.5,
+  "resources": [
+   "nephilim_bone_fragments",
+   "orichalcum_ore"
+  ]
+ },
+ {
+  "id": 807,
+  "name": "The Crystalline Watcher-Tech Excavation",
+  "act": "enoch",
+  "x": 2232.9,
+  "y": -1914.8,
+  "resources": [
+   "abyssal_coal",
+   "luminous_quartz"
+  ]
+ },
+ {
+  "id": 856,
+  "name": "The Abandoned Slag-Filled Cavern",
+  "act": "enoch",
+  "x": 391.5,
+  "y": -905.4,
+  "resources": [
+   "abyssal_coal",
+   "orichalcum_ore"
+  ]
+ },
+ {
+  "id": 34,
+  "name": "The Silent Tectonic Rift",
+  "act": "flood",
+  "x": 154.3,
+  "y": -799.2,
+  "resources": [
+   "blood_iron",
+   "petrified_wood"
+  ]
+ },
+ {
+  "id": 56,
+  "name": "The Overgrown Leviathan's Hollow",
+  "act": "flood",
+  "x": -661.5,
+  "y": -1435.0,
+  "resources": [
+   "celestial_copper",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 114,
+  "name": "The Overgrown Flooded Magma Chamber",
+  "act": "flood",
+  "x": -1489.5,
+  "y": -1678.0,
+  "resources": [
+   "luminous_quartz",
+   "mithril_like_edenium"
+  ]
+ },
+ {
+  "id": 408,
+  "name": "The Crystalline Sulphuric Grotto",
+  "act": "flood",
+  "x": 2559.6,
+  "y": -1065.6,
+  "resources": [
+   "orichalcum_ore",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 600,
+  "name": "The Toxic Sulphuric Grotto",
+  "act": "flood",
+  "x": -3200.0,
+  "y": -1530.0,
+  "resources": [
+   "mithril_like_edenium",
+   "nephilim_bone_fragments"
+  ]
+ },
+ {
+  "id": 926,
+  "name": "The Collapsing Tectonic Rift",
+  "act": "flood",
+  "x": 3200.0,
+  "y": -1176.8,
+  "resources": [
+   "abyssal_coal",
+   "nephilim_bone_fragments"
+  ]
+ },
+ {
+  "id": 182,
+  "name": "The Pristine Glacial Ice Cave",
+  "act": "hermon",
+  "x": 286.2,
+  "y": -1884.2,
+  "resources": [
+   "celestial_copper",
+   "luminous_quartz"
+  ]
+ },
+ {
+  "id": 342,
+  "name": "The Overgrown Grigori Deep Vault",
+  "act": "hermon",
+  "x": -2003.9,
+  "y": -556.6,
+  "resources": [
+   "abyssal_coal",
+   "luminous_quartz"
+  ]
+ },
+ {
+  "id": 418,
+  "name": "The Ruined Grigori Deep Vault",
+  "act": "hermon",
+  "x": -1647.9,
+  "y": -1233.5,
+  "resources": [
+   "nephilim_bone_fragments",
+   "sulfur_deposits"
+  ]
+ },
+ {
+  "id": 430,
+  "name": "The Fortified Volcanic Vent",
+  "act": "hermon",
+  "x": 1700.5,
+  "y": -1699.2,
+  "resources": [
+   "petrified_wood",
+   "watcher_steel_scraps"
+  ]
+ },
+ {
+  "id": 457,
+  "name": "The Toxic Volcanic Vent",
+  "act": "hermon",
+  "x": 843.8,
+  "y": -2097.0,
+  "resources": [
+   "luminous_quartz",
+   "nephilim_bone_fragments"
+  ]
+ },
+ {
+  "id": 909,
+  "name": "The Collapsing Echoing Chasm",
+  "act": "hermon",
+  "x": -859.5,
+  "y": -1320.8,
+  "resources": [
+   "celestial_copper"
+  ]
+ },
+ {
+  "id": 119,
+  "name": "The Unfathomable Fossilized Burrow",
+  "act": "nephilim",
+  "x": -784.4,
+  "y": -620.1,
+  "resources": [
+   "blood_iron",
+   "mithril_like_edenium"
+  ]
+ },
+ {
+  "id": 158,
+  "name": "The Unfathomable Fossilized Burrow",
+  "act": "nephilim",
+  "x": 550.4,
+  "y": -1904.4,
+  "resources": [
+   "blood_iron",
+   "mithril_like_edenium"
+  ]
+ },
+ {
+  "id": 465,
+  "name": "The Collapsing Fossilized Burrow",
+  "act": "nephilim",
+  "x": 117.5,
+  "y": -1724.0,
+  "resources": [
+   "orichalcum_ore",
+   "watcher_steel_scraps"
+  ]
+ },
+ {
+  "id": 515,
+  "name": "The Silent Bone-Lined Pit",
+  "act": "nephilim",
+  "x": -1728.0,
+  "y": -1971.0,
+  "resources": [
+   "abyssal_coal",
+   "petrified_wood"
+  ]
+ },
+ {
+  "id": 578,
+  "name": "The Pristine Bone-Lined Pit",
+  "act": "nephilim",
+  "x": 2712.2,
+  "y": -395.6,
+  "resources": [
+   "nephilim_bone_fragments",
+   "petrified_wood"
+  ]
+ },
+ {
+  "id": 729,
+  "name": "The Silent Strip-Mined Cavern",
+  "act": "nephilim",
+  "x": -1508.4,
+  "y": -1576.4,
+  "resources": [
+   "abyssal_coal",
+   "petrified_wood"
+  ]
+ }
+]

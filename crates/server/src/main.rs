@@ -8,6 +8,7 @@
 mod db;
 mod mobs;
 mod net;
+mod caves;
 mod pois;
 mod quests;
 mod world;

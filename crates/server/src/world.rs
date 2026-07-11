@@ -112,6 +112,9 @@ pub const RECIPES: &[Recipe] = &[
     Recipe { id: "oak_staff", needs: Some(("woodcutting", 5)), inputs: &[("wood", 3)],              output: "oak_staff" },
     Recipe { id: "hide_vest", needs: None,                    inputs: &[("thick_hide", 2)],         output: "hide_vest" },
     Recipe { id: "taming_lasso", needs: None,                  inputs: &[("thick_hide", 1), ("wood", 2)], output: "taming_lasso" },
+    // Cave-ore upgrades (C09): each new ore has one craftable step up.
+    Recipe { id: "orichalcum_blade", needs: Some(("mining", 10)), inputs: &[("orichalcum_ore", 3), ("wood", 1)], output: "orichalcum_blade" },
+    Recipe { id: "luminous_charm",   needs: Some(("mining", 5)),  inputs: &[("luminous_quartz", 2)],             output: "luminous_charm" },
 ];
 
 /// Equippable gear. Bonuses apply only while equipped.
@@ -141,6 +144,9 @@ pub const ITEMS: &[ItemDef] = &[
     ItemDef { id: "covenant_signet",       slot: "finger", melee: 5,  spell: 5,  hp: 10 },
     // Forbidden Arts pillar finale (C08): the warlord's star-metal blade.
     ItemDef { id: "warlords_star_blade",   slot: "weapon", melee: 18, spell: 8,  hp: 0 },
+    // Cave-ore crafts (C09).
+    ItemDef { id: "orichalcum_blade",      slot: "weapon", melee: 15, spell: 0,  hp: 0 },
+    ItemDef { id: "luminous_charm",        slot: "neck",   melee: 0,  spell: 8,  hp: 10 },
 ];
 
 /// Key items: carried, never equipped or consumed.
@@ -454,6 +460,27 @@ impl World {
                 zone.entities.insert(id, make_resource(id, center + off, tag));
             }
         }
+        // Caves (C09): each cave pocket gets rich ore nodes, a few mobs from
+        // one act tier up, and a <resource>_dweller mini-boss.
+        let next_act = Act::ALL[(Act::ALL.iter().position(|a| *a == act).unwrap_or(0) + 1).min(Act::ALL.len() - 1)];
+        let tough_tag = act_spawn_table(next_act)[0].0;
+        for cave in crate::caves::caves_for_act(act) {
+            let center = Vec2::new(cave.x, cave.y);
+            for i in 0..4 {
+                let off = self.rng.point(130.0);
+                let id = self.alloc_id();
+                let res = &cave.resources[i % cave.resources.len()];
+                zone.entities.insert(id, make_resource(id, center + off, &format!("ore_{res}")));
+            }
+            for _ in 0..3 {
+                let off = self.rng.point(170.0);
+                let id = self.alloc_id();
+                zone.entities.insert(id, make_enemy(id, center + off, tough_tag, next_act));
+            }
+            let id = self.alloc_id();
+            let boss_tag = format!("{}_dweller", cave.resources[0]);
+            zone.entities.insert(id, make_enemy(id, center + self.rng.point(60.0), &boss_tag, act));
+        }
         // The act's quest givers: the Elder at the inn, a Wanderer at the
         // crossroads, and a Seer further afield (see quests.rs giver mapping).
         let id = self.alloc_id();
@@ -675,6 +702,24 @@ impl World {
                                 }
                                 poi_xp += xp;
                                 break; // one discovery per tick keeps notices readable
+                            }
+                        }
+                        // Cave discovery (C09): caves count as POIs.
+                        for cave in crate::caves::caves_for_act(act) {
+                            if e.pos.distance(Vec2::new(cave.x, cave.y)) <= crate::caves::CAVE_RADIUS
+                                && !s.discovered.iter().any(|d| d == &cave.name)
+                            {
+                                s.discovered.push(cave.name.clone());
+                                let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
+                                let xp = 75 * (tier + 1);
+                                if let Some(o) = e.owner {
+                                    events.push(SimEvent::Info {
+                                        owner: o,
+                                        text: format!("Discovered: {} (+{} xp)", cave.name, xp),
+                                    });
+                                }
+                                poi_xp += xp;
+                                break;
                             }
                         }
                     }
@@ -955,6 +1000,7 @@ impl World {
         // Resolve kills. Enemies grant xp + a trophy and respawn a replacement;
         // harvested resource nodes grant a material and respawn elsewhere.
         for (target_id, attacker_ent) in killed {
+            let origin = zone.entities.get(&target_id).map(|t| t.origin);
             let (kind, xp_value, etag) = match zone.entities.get(&target_id) {
                 Some(t) if t.kind == EntityKind::Enemy => (EntityKind::Enemy, t.xp_value, t.tag.clone()),
                 Some(t) if t.kind == EntityKind::Resource => (EntityKind::Resource, 0, t.tag.clone()),
@@ -995,6 +1041,14 @@ impl World {
                             def.drops[i.min(def.drops.len() - 1)].clone()
                         };
                         (reward, xp_value)
+                    } else if let Some(res) = tag.strip_suffix("_dweller") {
+                        // Cave mini-boss (C09): respawns near its cave (its
+                        // origin), guaranteed crafting-rare drop.
+                        let home = origin.unwrap_or(pos);
+                        let mut boss = make_enemy(nid, home + rng.point(60.0), tag, act);
+                        boss.tag = Some(tag.to_string());
+                        zone.entities.insert(nid, boss);
+                        (res.to_string(), xp_value)
                     } else if let Some(base) = tag.strip_suffix("_alpha") {
                         // The act boss respawns as a boss and drops a rare.
                         let mut boss = make_enemy(nid, pos, base, act);
@@ -1012,9 +1066,16 @@ impl World {
                 }
                 EntityKind::Resource => {
                     let tag = etag.as_deref().unwrap_or("tree");
-                    zone.entities.insert(nid, make_resource(nid, pos, tag));
-                    let material = if tag == "rock" { "stone" } else { "wood" };
-                    (material.to_string(), 0)
+                    if let Some(res) = tag.strip_prefix("ore_") {
+                        // Cave ore (C09): respawns inside its cave pocket.
+                        let home = origin.unwrap_or(pos);
+                        zone.entities.insert(nid, make_resource(nid, home + rng.point(120.0), tag));
+                        (res.to_string(), 0)
+                    } else {
+                        zone.entities.insert(nid, make_resource(nid, pos, tag));
+                        let material = if tag == "rock" { "stone" } else { "wood" };
+                        (material.to_string(), 0)
+                    }
                 }
                 _ => continue,
             };
@@ -1042,7 +1103,8 @@ impl World {
                                 }
                                 // Harvesting levels the matching profession.
                                 EntityKind::Resource => {
-                                    let prof = if reward_item == "stone" { "mining" } else { "woodcutting" };
+                                    let is_ore = etag.as_deref().is_some_and(|t| t.starts_with("ore_"));
+                                    let prof = if reward_item == "stone" || is_ore { "mining" } else { "woodcutting" };
                                     let skill = s.professions.entry(prof.to_string()).or_insert(0);
                                     if *skill < PROFESSION_CAP {
                                         *skill += 1;
@@ -1086,10 +1148,15 @@ impl World {
                                     }
                                 }
                             }
-                            if s.inventory.len() < inv_cap(s) {
-                                s.inventory.push(reward_item.clone());
-                                events.push(SimEvent::Loot { owner: o, item: reward_item });
+                            // Cave ore nodes yield double (C09).
+                            let yield_n = if kind == EntityKind::Resource
+                                && etag.as_deref().is_some_and(|t| t.starts_with("ore_")) { 2 } else { 1 };
+                            for _ in 0..yield_n {
+                                if s.inventory.len() < inv_cap(s) {
+                                    s.inventory.push(reward_item.clone());
+                                }
                             }
+                            events.push(SimEvent::Loot { owner: o, item: reward_item });
                         }
                     }
                 }
@@ -1673,6 +1740,24 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         e.damage = 55;
         e.xp_value = 1500;
         e.aggro_range = 320.0;
+        return e;
+    }
+    // Cave mini-bosses (C09): "<resource>_dweller" — alpha-grade guardian
+    // of a cave pocket; drops its resource as a guaranteed crafting rare.
+    if let Some(res) = tag.strip_suffix("_dweller") {
+        let base = act_spawn_table(act)[0].0;
+        let mut e = make_enemy(id, pos, base, act);
+        e.tag = Some(tag.to_string());
+        let pretty = res.split('_').map(|w| {
+            let mut c = w.chars();
+            match c.next() { Some(f) => f.to_uppercase().collect::<String>() + c.as_str(), None => String::new() }
+        }).collect::<Vec<_>>().join(" ");
+        e.name = Some(format!("Dweller of the {pretty}"));
+        e.max_health *= 4;
+        e.health = e.max_health;
+        e.damage *= 2;
+        e.xp_value *= 5;
+        e.patrol_radius = 120.0;
         return e;
     }
     let is_object = OBJECT_TAGS.contains(&tag);
@@ -2303,7 +2388,18 @@ mod tests {
     #[test]
     fn poi_discovery_grants_xp_once_and_persists() {
         let mut w = World::new(41);
-        let poi = crate::pois::pois_for_act(Act::Eden).next().unwrap();
+        // Pick a POI with no cave pocket or sibling POI nearby, so exactly
+        // one discovery fires.
+        let poi = crate::pois::pois_for_act(Act::Eden)
+            .find(|p| {
+                let at = Vec2::new(p.x, p.y);
+                crate::caves::caves_for_act(Act::Eden)
+                    .all(|c| at.distance(Vec2::new(c.x, c.y)) > crate::caves::CAVE_RADIUS + crate::pois::POI_RADIUS)
+                    && crate::pois::pois_for_act(Act::Eden)
+                        .filter(|o| o.id != p.id)
+                        .all(|o| at.distance(Vec2::new(o.x, o.y)) > 2.0 * crate::pois::POI_RADIUS)
+            })
+            .unwrap();
         let pid = spawn_at(&mut w, 5, "Explorer", poi.x, poi.y);
         w.step();
         let s = w.player_sheet(Act::Eden, pid).unwrap();
@@ -2316,7 +2412,7 @@ mod tests {
         }
         let s = w.player_sheet(Act::Eden, pid).unwrap();
         assert_eq!(s.discovered.iter().filter(|d| *d == &poi.name).count(), 1);
-        assert_eq!(s.xp, xp_after, "no repeat XP");
+        assert_eq!(s.xp, xp_after, "no repeat XP; discovered={:?} inv={:?}", s.discovered, s.inventory);
 
         // Persists across a save/load round-trip.
         let db = crate::db::Db::open(":memory:").unwrap();
@@ -2628,13 +2724,79 @@ mod tests {
                 .unwrap();
             (e.pos, e.tag.clone().unwrap())
         };
-        let prof = if tag == "rock" { "mining" } else { "woodcutting" };
+        let prof = if tag == "rock" || tag.starts_with("ore_") { "mining" } else { "woodcutting" };
         let pid = spawn_at(&mut w, 1, "Gatherer", res_pos.x - 12.0, res_pos.y);
         w.queue_attack(Act::Eden, pid);
         w.step();
         let s = w.player_sheet(Act::Eden, pid).unwrap();
         // Groves cluster (C05): one swing can fell several nodes.
         assert!(s.professions.get(prof).copied().unwrap_or(0) >= 1);
+    }
+
+    /// C09: cave ore nodes yield the archive resource at double count and
+    /// level mining; the cave's dweller mini-boss drops the crafting rare.
+    #[test]
+    fn cave_ores_and_dweller_drop() {
+        let mut w = World::new(90);
+        let cave = crate::caves::caves_for_act(Act::Eden).next().unwrap();
+        let res = cave.resources[0].clone();
+        let (node_pos, node_tag) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z.entities.values()
+                .find(|e| e.kind == EntityKind::Resource
+                    && e.tag.as_deref().is_some_and(|t| t.starts_with("ore_")))
+                .unwrap();
+            (e.pos, e.tag.clone().unwrap())
+        };
+        let ore = node_tag.strip_prefix("ore_").unwrap().to_string();
+        let pid = spawn_at(&mut w, 1, "Miner", node_pos.x - 12.0, node_pos.y);
+        w.queue_attack(Act::Eden, pid);
+        w.step();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        let got = s.inventory.iter().filter(|i| **i == ore).count();
+        assert!(got >= 2, "double yield expected, got {got} of {ore} in {:?}", s.inventory);
+        assert!(s.professions.get("mining").copied().unwrap_or(0) >= 1, "ore mining levels mining");
+
+        // Dweller drop: kill the mini-boss directly.
+        let boss_tag = format!("{}_dweller", res);
+        let (bid, bpos) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z.entities.values()
+                .find(|e| e.tag.as_deref() == Some(boss_tag.as_str()))
+                .unwrap();
+            (e.id, e.pos)
+        };
+        let hunter = spawn_at(&mut w, 60, "Slayer", bpos.x - 12.0, bpos.y);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&bid).unwrap().health = 1;
+        }
+        for _ in 0..40 {
+            w.queue_attack(Act::Eden, hunter);
+            w.step();
+            let s = w.player_sheet(Act::Eden, hunter).unwrap();
+            if s.inventory.iter().any(|i| *i == res) {
+                return;
+            }
+        }
+        panic!("dweller never dropped {res}");
+    }
+
+    /// C09: crafting the orichalcum blade consumes ores and needs mining 10.
+    #[test]
+    fn cave_recipe_crafts() {
+        let mut w = World::new(91);
+        let pid = spawn_at(&mut w, 5, "Smith", 0.0, 0.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.inventory.extend(["orichalcum_ore".to_string(), "orichalcum_ore".into(), "orichalcum_ore".into(), "wood".into()]);
+            s.professions.insert("mining".into(), 10);
+        }
+        w.craft(Act::Eden, pid, "orichalcum_blade").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.inventory.iter().any(|i| i == "orichalcum_blade"));
+        assert!(!s.inventory.iter().any(|i| i == "orichalcum_ore"));
     }
 }
 

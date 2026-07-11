@@ -485,6 +485,37 @@ fn spawn_act_scenery(
         commands.entity(e).insert(Terrain);
     }
 
+    // Cave mouths (C09): two big flanking rocks and a leaning capstone make
+    // a readable entrance arch at each cave center.
+    for (i, cave) in caves_for_act(act).enumerate() {
+        let h = terrain_height(act, cave.x, cave.y);
+        let base = Vec3::new(cave.x, h, cave.y);
+        let s0 = i as u64 * 13 + 5;
+        for (j, (dx, dz, sc, tilt)) in [
+            (-55.0f32, 0.0f32, 46.0f32, 0.0f32),
+            (55.0, 0.0, 42.0, 0.0),
+            (0.0, -8.0, 50.0, 1.35),
+        ].iter().enumerate() {
+            let e = spawn_prop(
+                commands,
+                asset_server,
+                ROCKS[(i + j) % 3],
+                base + Vec3::new(*dx, if *tilt > 0.0 { 34.0 } else { 0.0 }, *dz),
+                *sc,
+                hash01(s0 + j as u64) * 6.283,
+            );
+            if *tilt > 0.0 {
+                commands.entity(e).insert(Terrain);
+                // capstone leans across the gap
+                commands.entity(e).entry::<Transform>().and_modify(move |mut t| {
+                    t.rotation = Quat::from_rotation_z(*tilt * 0.35) * t.rotation;
+                });
+            } else {
+                commands.entity(e).insert(Terrain);
+            }
+        }
+    }
+
     // POI cairns (C04): a small stone stack marks each discoverable site.
     for (i, poi) in pois_for_act(act).enumerate() {
         let pos = Vec3::new(poi.x, terrain_height(act, poi.x, poi.y), poi.y);
@@ -508,6 +539,24 @@ struct PoiDef {
     act: String,
     x: f32,
     y: f32,
+}
+
+#[derive(serde::Deserialize)]
+pub struct CaveDef {
+    pub act: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Cave pockets (C09): entrance props here, interior darkening in atmosphere.
+pub fn caves_for_act(act: Act) -> impl Iterator<Item = &'static CaveDef> {
+    static CAVES: std::sync::OnceLock<Vec<CaveDef>> = std::sync::OnceLock::new();
+    let all = CAVES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../assets/data/caves.json"))
+            .expect("caves.json parses")
+    });
+    let key = act.as_str();
+    all.iter().filter(move |c| c.act == key)
 }
 
 fn pois_for_act(act: Act) -> impl Iterator<Item = &'static PoiDef> {
