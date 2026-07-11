@@ -65,7 +65,7 @@ window (read → implement → verify → commit).
 | C05 | CHUNK_C05_world_scale.md | Bigger per-act maps matching POI coordinate space; road between inn and POIs | DONE |
 | C06 | CHUNK_C06_mounts.md | Level-40 Dire-Wolf mount questline + riding (speed buff + client model) | DONE |
 | C07 | CHUNK_C07_taming.md | Creature Mastery sandbox: weaken→subdue taming of tameable bestiary mobs, stable | done |
-| C08 | CHUNK_C08_theme_questlines.md | First cross-zone theme pillar (Forbidden Arts) as a chained questline | todo |
+| C08 | CHUNK_C08_theme_questlines.md | First cross-zone theme pillar (Forbidden Arts) as a chained questline | done |
 | C09 | CHUNK_C09_caves.md | Cave/mine sites: entrances, interior mobs + ore nodes from cave archives | todo |
 | C10 | CHUNK_C10_factions.md | Sethite/Cainite alignment choice + reputation + faction vendors | todo |
 | C11 | CHUNK_C11_economy.md | Bestiary drop tables in loot, vendor buy/sell, AH seeded by NPC listings | todo |

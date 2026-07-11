@@ -139,6 +139,8 @@ pub const ITEMS: &[ItemDef] = &[
     ItemDef { id: "lamechs_helm",          slot: "head",   melee: 0,  spell: 0,  hp: 25 },
     ItemDef { id: "enchanted_bronze_blade", slot: "weapon", melee: 11, spell: 4, hp: 0 },
     ItemDef { id: "covenant_signet",       slot: "finger", melee: 5,  spell: 5,  hp: 10 },
+    // Forbidden Arts pillar finale (C08): the warlord's star-metal blade.
+    ItemDef { id: "warlords_star_blade",   slot: "weapon", melee: 18, spell: 8,  hp: 0 },
 ];
 
 /// Key items: carried, never equipped or consumed.
@@ -1325,6 +1327,10 @@ impl World {
                 }
             }
             text.push(')');
+            // Theme chains hop acts (C08): tell the player where to go next.
+            if let Some(hint) = crate::quests::quest_next_hint(q.id) {
+                text.push_str(&format!(" {hint}"));
+            }
             award_xp(e, q.xp);
             return Ok(text);
         }
@@ -1604,10 +1610,10 @@ fn self_next_id(counter: &mut EntityId) -> EntityId {
 /// destructibles via `OBJECT_TAGS`.
 pub fn act_spawn_table(act: Act) -> &'static [(&'static str, usize)] {
     match act {
-        Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5)],
-        Act::Hermon => &[("watcher", 10), ("cultist", 6), ("chasm_fiend", 8), ("caravan_wagon", 3), ("oathstone", 1), ("stargazer", 1)],
-        Act::Nephilim => &[("giant", 14), ("blood_drinker", 8), ("weapon_cache", 4)],
-        Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8), ("dire_wolf", 16), ("swift_claw", 1)],
+        Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5), ("azazel_cultist", 6)],
+        Act::Hermon => &[("watcher", 10), ("cultist", 6), ("chasm_fiend", 8), ("caravan_wagon", 3), ("oathstone", 1), ("stargazer", 1), ("crystal_lens", 3)],
+        Act::Nephilim => &[("giant", 14), ("blood_drinker", 8), ("weapon_cache", 4), ("forge_giant", 1), ("azazel_herald", 1)],
+        Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8), ("dire_wolf", 16), ("swift_claw", 1), ("enchanted_bellows", 3), ("blood_smith", 6)],
         Act::Flood => &[("leviathan", 18), ("geyser", 5), ("nephilim_raider", 9), ("drowned_beast", 10), ("scroll_crate", 5)],
     }
 }
@@ -1616,6 +1622,7 @@ pub fn act_spawn_table(act: Act) -> &'static [(&'static str, usize)] {
 /// aggro, or strike back.
 const OBJECT_TAGS: &[&str] = &[
     "oathstone", "caravan_wagon", "weapon_cache", "furnace_regulator", "geyser", "scroll_crate",
+    "enchanted_bellows", "crystal_lens",
 ];
 
 fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
@@ -1643,6 +1650,29 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         e.damage = 40;
         e.xp_value = 800;
         e.aggro_range = 300.0;
+        return e;
+    }
+    // Forbidden Arts pillar elites (C08).
+    if tag == "forge_giant" {
+        let mut e = make_enemy(id, pos, "giant", act);
+        e.tag = Some(tag.to_string());
+        e.name = Some("The Smithing Giant".into());
+        e.max_health = 1200;
+        e.health = 1200;
+        e.damage = 45;
+        e.xp_value = 900;
+        e.aggro_range = 300.0;
+        return e;
+    }
+    if tag == "azazel_herald" {
+        let mut e = make_enemy(id, pos, "giant", act);
+        e.tag = Some(tag.to_string());
+        e.name = Some("Azazel's Herald".into());
+        e.max_health = 1600;
+        e.health = 1600;
+        e.damage = 55;
+        e.xp_value = 1500;
+        e.aggro_range = 320.0;
         return e;
     }
     let is_object = OBJECT_TAGS.contains(&tag);
@@ -2195,8 +2225,9 @@ mod tests {
         {
             let z = w.zones.get_mut(&Act::Eden).unwrap();
             let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
-            // Finish the Wanderer's unchained quest so only the chain remains.
+            // Finish the Wanderer's unchained quests so only the chain remains.
             s.quests_done.push("fruit_of_the_thorns".into());
+            s.quests_done.push("fa_first_blade".into()); // C08 pillar opener
         }
         // Prerequisite (elder main quest) not done: nothing to offer.
         let t = w.talk(Act::Eden, pid).unwrap();

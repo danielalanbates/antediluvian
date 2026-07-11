@@ -615,8 +615,10 @@ pub fn update_ui_panels(
                     if !lines.is_empty() {
                         lines.push('\n');
                     }
-                    let pretty = prettify_ability(name);
-                    lines.push_str(&format!("• {} — {}/target", pretty, progress));
+                    let pretty = prettify_ability(name.strip_prefix("fa_").unwrap_or(name));
+                    // Theme-pillar quests (C08) carry their pillar as a prefix.
+                    let theme = if name.starts_with("fa_") { "[Forbidden Arts] " } else { "" };
+                    lines.push_str(&format!("• {theme}{} — {}/target", pretty, progress));
                 }
                 **t = lines;
             }

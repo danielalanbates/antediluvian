@@ -208,7 +208,80 @@ pub const QUESTS: &[QuestDef] = &[
         offer: "Deep in the canyons a legendary pack dens. Subdue Swift-Claw, the young Alpha, and ride home.",
         objective: Kill { target: "swift_claw", count: 1 },
         xp: 15500, gold: 0, item: Some("dire_wolf_horn"), requires: Some("mount_watchers_chain"), side: true, min_level: 40 },
+    // ============ THEME PILLAR I — THE FORBIDDEN ARTS (C08) ==============
+    // 10-quest cross-act epic from docs/quests/themes/01_the_forbidden_arts.md.
+    // Faithful subset: arc A #1/#3/#4/#10, arc B #11/#13, arc C #22/#24,
+    // arc E #41/#46. Skipped: the remaining 37 doc entries (mechanics the
+    // engine can't express yet: escort, stealth, dialogue, rituals).
+    // Cross-act prerequisites are the point — see quest_theme()/quest_next_hint().
+    QuestDef { id: "fa_first_blade", act: Act::Eden, giver: "wanderer",
+        offer: "Azazel taught men the sword. Recover the first iron blade ever forged from the Cainite bandits of Nod.",
+        objective: Collect { item: "first_iron_blade", count: 1, source: "cainite" },
+        xp: 150, gold: 20, item: None, requires: None, side: true, min_level: 1 },
+    QuestDef { id: "fa_enchanters_bellows", act: Act::Enoch, giver: "elder",
+        offer: "The slum-forges breathe by sorcery. Sabotage 3 of the enchanted bellows.",
+        objective: Kill { target: "enchanted_bellows", count: 3 },
+        xp: 420, gold: 45, item: None, requires: Some("fa_first_blade"), side: true, min_level: 1 },
+    QuestDef { id: "fa_blood_tempered_steel", act: Act::Enoch, giver: "wanderer",
+        offer: "Smiths quench their blades in human blood for a magical edge. End 6 of the blood-smiths.",
+        objective: Kill { target: "blood_smith", count: 6 },
+        xp: 480, gold: 50, item: Some("healing_potion"), requires: Some("fa_enchanters_bellows"), side: true, min_level: 1 },
+    QuestDef { id: "fa_smithing_giant", act: Act::Nephilim, giver: "elder",
+        offer: "A Nephilim brute has learned Azazel's forge-craft and arms his brethren. Bring him down.",
+        objective: Kill { target: "forge_giant", count: 1 },
+        xp: 600, gold: 60, item: None, requires: Some("fa_blood_tempered_steel"), side: true, min_level: 1 },
+    QuestDef { id: "fa_mandrake_harvest", act: Act::Hermon, giver: "wanderer",
+        offer: "Samyaza's cultists cut mandrake on the slopes for their root-magic. Take 10 toxic roots from them.",
+        objective: Collect { item: "mandrake_root", count: 10, source: "cultist" },
+        xp: 320, gold: 30, item: None, requires: Some("fa_smithing_giant"), side: true, min_level: 1 },
+    QuestDef { id: "fa_mind_benders", act: Act::Enoch, giver: "seer",
+        offer: "Syndicate sorcerers drug the minds of the slums. Slay 10 of them.",
+        objective: Kill { target: "sorcerer", count: 10 },
+        xp: 520, gold: 55, item: None, requires: Some("fa_mandrake_harvest"), side: true, min_level: 1 },
+    QuestDef { id: "fa_crystal_lenses", act: Act::Hermon, giver: "seer",
+        offer: "Baraqiel's observatory reads doom in the stars through great quartz lenses. Shatter all 3.",
+        objective: Kill { target: "crystal_lens", count: 3 },
+        xp: 380, gold: 40, item: None, requires: Some("fa_mind_benders"), side: true, min_level: 1 },
+    QuestDef { id: "fa_zodiac_stones", act: Act::Flood, giver: "elder",
+        offer: "The raiders carry engraved zodiac stones that channel star-magic. Recover 4 from them.",
+        objective: Collect { item: "zodiac_stone", count: 4, source: "nephilim_raider" },
+        xp: 650, gold: 70, item: None, requires: Some("fa_crystal_lenses"), side: true, min_level: 1 },
+    QuestDef { id: "fa_scholars_request", act: Act::Eden, giver: "seer",
+        offer: "One artifact of each forbidden art must be sealed away. Take 4 from Azazel's cultists in the garden's shadow.",
+        objective: Collect { item: "forbidden_artifact", count: 4, source: "azazel_cultist" },
+        xp: 700, gold: 80, item: None, requires: Some("fa_zodiac_stones"), side: true, min_level: 1 },
+    QuestDef { id: "fa_final_master", act: Act::Nephilim, giver: "seer",
+        offer: "A warlord has mastered all four arts — blade, root, star and word. Face Azazel's Herald and end the corruption.",
+        objective: Kill { target: "azazel_herald", count: 1 },
+        xp: 1500, gold: 150, item: Some("warlords_star_blade"), requires: Some("fa_scholars_request"), side: true, min_level: 10 },
 ];
+
+/// Theme pillar a quest belongs to (client tracker prefixes these; the
+/// cross-act prerequisite exemption in the consistency test keys off it).
+pub fn quest_theme(id: &str) -> Option<&'static str> {
+    if id.starts_with("fa_") {
+        Some("Forbidden Arts")
+    } else {
+        None
+    }
+}
+
+/// Where the chain sends you after turning a themed quest in (appended to
+/// the turn-in notice so cross-act hops are discoverable in-game).
+pub fn quest_next_hint(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "fa_first_blade" => "Take the blade to the City Dissident in Enoch.",
+        "fa_enchanters_bellows" => "Seek Lamech's Rival at the Enoch crossroads.",
+        "fa_blood_tempered_steel" => "The forge-giant waits in the Nephilim Wastes — see the Refugee.",
+        "fa_smithing_giant" => "Samyaza's roots grow on Hermon. Find Healer Mahalalel.",
+        "fa_mandrake_harvest" => "Return to Enoch; the Patriarch watches the sorcerers.",
+        "fa_mind_benders" => "Climb to Mahaway on Hermon's ridge — the stars lie.",
+        "fa_crystal_lenses" => "Noah gathers the zodiac stones amid the Flood.",
+        "fa_zodiac_stones" => "Carry the artifacts to Abel's Echo in Eden.",
+        "fa_scholars_request" => "Azazel's Herald masses in the Wastes. Japheth and Ham know where.",
+        _ => return None,
+    })
+}
 
 /// Max concurrent quests per player.
 pub const QUEST_CAP: usize = 10;
@@ -237,15 +310,22 @@ mod tests {
                 QUESTS.iter().any(|q| q.act == act && q.requires.is_none() && !q.side),
                 "{act:?} needs a main starter quest"
             );
-            // 6 doc quests per act (+3 mount-chain quests parked in Enoch).
+            // 6 doc quests per act (+3 mount-chain quests parked in Enoch);
+            // theme-pillar quests (C08) sit outside the per-act budget.
             let expect = if act == Act::Enoch { 9 } else { 6 };
-            assert_eq!(QUESTS.iter().filter(|q| q.act == act).count(), expect, "{act:?} quest count");
+            let n = QUESTS.iter()
+                .filter(|q| q.act == act && quest_theme(q.id).is_none())
+                .count();
+            assert_eq!(n, expect, "{act:?} quest count");
         }
         for q in QUESTS {
             assert!(["elder", "wanderer", "seer", "jabal"].contains(&q.giver), "{}: unknown giver {}", q.id, q.giver);
             if let Some(r) = q.requires {
                 let pre = quest(r).unwrap_or_else(|| panic!("{}: missing prerequisite {r}", q.id));
-                assert_eq!(pre.act, q.act, "{}: prerequisite crosses acts", q.id);
+                // Theme pillars (C08) hop acts on purpose; everything else stays local.
+                if quest_theme(q.id).is_none() {
+                    assert_eq!(pre.act, q.act, "{}: prerequisite crosses acts", q.id);
+                }
             }
             if let Some(item) = q.item {
                 assert!(
@@ -268,5 +348,25 @@ mod tests {
                 assert!(live >= 1 && live as u32 <= 200, "{}: {target} spawn count {live} vs need {count}", q.id);
             }
         }
+    }
+
+    /// C08: the Forbidden Arts pillar is one unbroken chain that genuinely
+    /// spans the world, with hints covering every hop but the last.
+    #[test]
+    fn forbidden_arts_chain_spans_acts() {
+        let chain: Vec<&QuestDef> =
+            QUESTS.iter().filter(|q| quest_theme(q.id) == Some("Forbidden Arts")).collect();
+        assert_eq!(chain.len(), 10);
+        assert!(chain[0].requires.is_none());
+        for pair in chain.windows(2) {
+            assert_eq!(pair[1].requires, Some(pair[0].id), "chain must be unbroken in order");
+        }
+        let acts: std::collections::HashSet<_> = chain.iter().map(|q| q.act).collect();
+        assert_eq!(acts.len(), 5, "the pillar must visit every act");
+        // Every quest but the finale tells you where to go next.
+        for q in &chain[..chain.len() - 1] {
+            assert!(quest_next_hint(q.id).is_some(), "{} needs a travel hint", q.id);
+        }
+        assert!(quest_next_hint(chain[9].id).is_none());
     }
 }

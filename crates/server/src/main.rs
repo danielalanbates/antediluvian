@@ -274,7 +274,9 @@ fn handle_client_msg(
                     c.act = act;
                     c.entity = Some(new_ent);
                     c.send(ServerMsg::Notice { text: format!("You travel to {}.", act.as_str()) });
-                    c.send(ServerMsg::Stats { character: sheet });
+                    // Re-welcome: travel respawns the player under a NEW
+                    // entity id — without this the client's my_id goes stale.
+                    c.send(ServerMsg::Welcome { entity_id: new_ent, character: sheet });
                 }
             }
         }

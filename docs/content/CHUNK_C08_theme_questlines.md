@@ -1,6 +1,6 @@
 # CHUNK C08 — Cross-zone theme questline: The Forbidden Arts
 
-**Status: todo** (requires C02)
+**Status: done** (requires C02)
 
 ## Goal
 Implement the first of the eight "overarching theme" pillars as a long
@@ -32,3 +32,19 @@ repeat this recipe in later sessions (one pillar ≈ one session).
 - Wire E2E: scripted client runs the first 3 hops (accept in Eden → travel
   → progress → turn-in elsewhere).
 - Doc: append a "pillar recipe" note here for the next seven when done.
+
+## Pillar recipe (for pillars II–VIII, one per session)
+Done for pillar I; repeat per pillar:
+1. Pick ~10 quests spanning the pillar's arcs; chain them with cross-act
+   `requires` (consistency test exempts themed quests via `quest_theme`).
+2. Prefix ids with a pillar tag (`fa_` → next: `gw_`, ...) and extend
+   `quest_theme()` + the client tracker prefix match.
+3. Add `quest_next_hint()` entries for every hop but the finale — the
+   turn-in notice carries the travel breadcrumb.
+4. New targets go in `act_spawn_table` (+`OBJECT_TAGS` for destructibles,
+   elite stat blocks in `make_enemy`); finale boss drops a unique `ITEMS`
+   entry.
+5. Verify: `forbidden_arts_chain_spans_acts`-style test + the scratchpad
+   `fa_e2e.py` script pattern (AoI is 1400 — scripts must roam to find
+   camps and walk home to givers; Travel re-welcomes with the new
+   entity id as of C08).
