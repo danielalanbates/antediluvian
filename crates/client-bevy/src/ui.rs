@@ -46,6 +46,8 @@ pub struct TargetNameText;
 #[derive(Component)]
 pub struct TargetHpText;
 #[derive(Component)]
+pub struct BannerText;
+#[derive(Component)]
 pub struct HpFill;
 #[derive(Component)]
 pub struct HpText;
@@ -117,6 +119,24 @@ impl Cooldowns {
 pub fn spawn_ui(commands: &mut Commands) {
     spawn_player_frame(commands);
     spawn_target_frame(commands);
+    // Discovery banner: big gold text, top-center, faded in/out by system.
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(18.0),
+            left: Val::Px(0.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text::new(""),
+                TextFont { font_size: 34.0, ..default() },
+                TextColor(GOLD_ACCENT),
+                BannerText,
+            ));
+        });
     spawn_action_bar(commands);
     spawn_quest_tracker(commands);
     spawn_chat(commands);
@@ -671,6 +691,32 @@ pub fn update_target_frame(
         }
         None => {
             *vis = Visibility::Hidden;
+        }
+    }
+}
+
+/// Show and fade the discovery banner from `Session.banner`.
+pub fn update_banner(
+    time: Res<Time>,
+    mut session: ResMut<Session>,
+    mut q: Query<(&mut Text, &mut TextColor), With<BannerText>>,
+) {
+    let Ok((mut text, mut color)) = q.get_single_mut() else { return };
+    match session.banner.as_mut() {
+        Some((msg, left)) => {
+            *left -= time.delta_secs().min(0.1); // long loading frames must not eat the banner
+            let alpha = (*left / 0.8).clamp(0.0, 1.0); // fade out over the last 0.8 s
+            **text = msg.clone();
+            *color = TextColor(GOLD_ACCENT.with_alpha(alpha));
+            if *left <= 0.0 {
+                session.banner = None;
+                **text = String::new();
+            }
+        }
+        None => {
+            if !text.is_empty() {
+                **text = String::new();
+            }
         }
     }
 }

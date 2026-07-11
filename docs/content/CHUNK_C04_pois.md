@@ -1,6 +1,6 @@
 # CHUNK C04 — Points of interest & discovery
 
-**Status: todo** (do C05 first if POI coordinates don't fit the map)
+**Status: DONE (2026-07-10)**
 
 ## Goal
 Each act contains named micro-locations from the POI archives; walking into

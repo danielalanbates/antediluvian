@@ -169,6 +169,9 @@ pub struct CharacterSheet {
     /// Wakefulness (100.0 = fully awake, 0.0 = exhausted). Decreases while logged in, increases while logged out.
     #[serde(default = "default_wakefulness")]
     pub wakefulness: f32,
+    /// POI names this character has discovered (C04).
+    #[serde(default)]
+    pub discovered: Vec<String>,
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,

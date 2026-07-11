@@ -167,6 +167,7 @@ dependencies = [
  "bevy",
  "futures-util",
  "noise",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

@@ -29,7 +29,7 @@ use antediluvia_protocol::{
     Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
 };
 use terrain::{build_terrain_mesh, terrain_height};
-use ui::{spawn_ui, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
+use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::keyboard::KeyboardInput;
@@ -109,6 +109,7 @@ fn main() {
                 pulse_inn_ring,
                 update_ui_frames,
                 update_target_frame,
+                update_banner,
                 update_ui_panels,
                 update_atmosphere,
                 apply_loadouts,
@@ -212,6 +213,8 @@ pub struct Session {
     pub time_of_day: f32,
     /// Nearest hostile within engage range: (display name, hp, max hp).
     pub target: Option<(String, i32, i32)>,
+    /// Big centered announcement (text, seconds remaining).
+    pub banner: Option<(String, f32)>,
 }
 
 impl Default for Session {
@@ -227,6 +230,7 @@ impl Default for Session {
             chat_active: false,
             time_of_day: 0.5,
             target: None,
+            banner: None,
         }
     }
 }
@@ -475,6 +479,40 @@ fn spawn_act_scenery(
         let e = spawn_prop(commands, asset_server, path, pos, scale, hash01(s * 4 + 5) * 6.283);
         commands.entity(e).insert(Terrain);
     }
+
+    // POI cairns (C04): a small stone stack marks each discoverable site.
+    for (i, poi) in pois_for_act(act).enumerate() {
+        let pos = Vec3::new(poi.x, terrain_height(act, poi.x, poi.y), poi.y);
+        let e = spawn_prop(
+            commands,
+            asset_server,
+            ROCKS[i % 3],
+            pos,
+            14.0,
+            hash01(i as u64 * 7 + 3) * 6.283,
+        );
+        commands.entity(e).insert(Terrain);
+    }
+}
+
+// ─── POIs (C04): cairn markers + data ────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct PoiDef {
+    name: String,
+    act: String,
+    x: f32,
+    y: f32,
+}
+
+fn pois_for_act(act: Act) -> impl Iterator<Item = &'static PoiDef> {
+    static POIS: std::sync::OnceLock<Vec<PoiDef>> = std::sync::OnceLock::new();
+    let all = POIS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../assets/data/pois.json"))
+            .expect("pois.json parses")
+    });
+    let key = act.as_str();
+    all.iter().filter(move |p| p.act == key)
 }
 
 // ─── Systems ─────────────────────────────────────────────────────────────────
@@ -731,7 +769,12 @@ fn receive_from_server(
             ServerMsg::LoginRejected { reason } => {
                 push_chat(&mut session, format!("Login rejected: {reason}"));
             }
-            ServerMsg::Notice { text } => push_chat(&mut session, text),
+            ServerMsg::Notice { text } => {
+                if text.starts_with("Discovered:") {
+                    session.banner = Some((text.clone(), 5.0));
+                }
+                push_chat(&mut session, text);
+            }
             ServerMsg::Chat { from, text } => push_chat(&mut session, format!("{from}: {text}")),
             ServerMsg::Snapshot { time_of_day, entities, .. } => {
                 session.time_of_day = time_of_day;

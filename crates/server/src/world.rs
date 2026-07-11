@@ -532,6 +532,7 @@ impl World {
                         *cd -= DT;
                     }
                     e.cooldowns.retain(|_, cd| *cd > 0.0);
+                    let mut poi_xp: u32 = 0;
                     if let Some(s) = e.sheet.as_mut() {
                         let regen = (HEALTH_REGEN_PER_SEC * DT).round() as i32;
                         if e.health < e.max_health {
@@ -548,6 +549,31 @@ impl World {
                                 e.rest_accum -= 1.0;
                                 s.rested_xp = (s.rested_xp + RESTED_PER_SEC).min(RESTED_CAP);
                             }
+                        }
+                        // POI discovery (C04): first visit announces the
+                        // place and grants discovery XP by act tier.
+                        for poi in crate::pois::pois_for_act(act) {
+                            if e.pos.distance(Vec2::new(poi.x, poi.y)) <= crate::pois::POI_RADIUS
+                                && !s.discovered.iter().any(|d| d == &poi.name)
+                            {
+                                s.discovered.push(poi.name.clone());
+                                let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
+                                let xp = 50 * (tier + 1);
+                                if let Some(o) = e.owner {
+                                    events.push(SimEvent::Info {
+                                        owner: o,
+                                        text: format!("Discovered: {} (+{} xp)", poi.name, xp),
+                                    });
+                                }
+                                poi_xp += xp;
+                                break; // one discovery per tick keeps notices readable
+                            }
+                        }
+                    }
+                    if poi_xp > 0 && award_xp(e, poi_xp) {
+                        if let Some(o) = e.owner {
+                            let lvl = e.sheet.as_ref().map(|s| s.level).unwrap_or(1);
+                            events.push(SimEvent::LevelUp { owner: o, level: lvl });
                         }
                     }
                     // Talent/gear damage bonuses.
@@ -1932,6 +1958,31 @@ mod tests {
     }
 
     #[test]
+    fn poi_discovery_grants_xp_once_and_persists() {
+        let mut w = World::new(41);
+        let poi = crate::pois::pois_for_act(Act::Eden).next().unwrap();
+        let pid = spawn_at(&mut w, 5, "Explorer", poi.x, poi.y);
+        w.step();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.discovered.iter().any(|d| d == &poi.name), "POI discovered");
+        let xp_after = s.xp;
+        assert!(xp_after >= 50, "discovery XP granted, got {xp_after}");
+        // Standing there longer must not re-grant.
+        for _ in 0..40 {
+            w.step();
+        }
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.discovered.iter().filter(|d| *d == &poi.name).count(), 1);
+        assert_eq!(s.xp, xp_after, "no repeat XP");
+
+        // Persists across a save/load round-trip.
+        let db = crate::db::Db::open(":memory:").unwrap();
+        db.save(&s, Some("apple_poi")).unwrap();
+        let loaded = db.load(&s.name).unwrap().unwrap();
+        assert!(loaded.discovered.iter().any(|d| d == &poi.name), "survives persistence");
+    }
+
+    #[test]
     fn equipping_gear_boosts_damage_and_swaps() {
         let mut w = World::new(12);
         let pid = spawn_at(&mut w, 1, "Squire", 0.0, 0.0);
@@ -2034,6 +2085,7 @@ pub fn new_character(name: &str) -> CharacterSheet {
         pvp: false,
         wakefulness: 100.0,
         last_logout: None,
+        discovered: Vec::new(),
         quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),
         equipment: Default::default(),
