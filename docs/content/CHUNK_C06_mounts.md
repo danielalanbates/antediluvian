@@ -1,6 +1,6 @@
 # CHUNK C06 — Mounts: Dire-Wolf questline + riding
 
-**Status: todo** (requires C01; C05 recommended)
+**Status: DONE (2026-07-10)**
 
 ## Goal
 Level-40 players complete the "Taming the Antediluvian Wild" questline and

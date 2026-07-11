@@ -48,7 +48,7 @@ const RESERVED_TAGS: &[&str] = &[
     "ember_wisp", "cultist", "chasm_fiend", "caravan_wagon", "oathstone",
     "stargazer", "blood_drinker", "weapon_cache", "citadel_guard",
     "furnace_regulator", "enchanter_smith", "sorcerer", "geyser",
-    "nephilim_raider", "drowned_beast", "scroll_crate",
+    "nephilim_raider", "drowned_beast", "scroll_crate", "dire_wolf", "swift_claw",
     "deer", "goat", "boar", "dog", "fox", "tree", "rock", "questgiver",
 ];
 

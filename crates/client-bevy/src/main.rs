@@ -185,6 +185,8 @@ struct Mirrored {
     root: Entity,
     model: Option<Entity>,
     bar_fill: Option<Entity>,
+    /// Spawned wolf scene while the player is mounted (C06).
+    mount_model: Option<Entity>,
     /// While `time.elapsed_secs()` is below this, the entity is playing its
     /// death animation — keep the corpse visible even if it left the snapshot.
     dying_until: f32,
@@ -689,7 +691,7 @@ fn spawn_visual(
     if is_me {
         commands.entity(root).insert(PlayerTag);
     }
-    Mirrored { root, model, bar_fill, dying_until: 0.0 }
+    Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0 }
 }
 
 /// "chasm_fiend" → "Chasm Fiend" for the target frame.
@@ -815,6 +817,7 @@ fn receive_from_server(
                 })
         });
         let mut seen: HashSet<u64> = HashSet::with_capacity(entities.len());
+        let mut map_updates: Vec<(u64, Option<Entity>)> = Vec::new();
         for e in &entities {
             seen.insert(e.id);
             let is_me = Some(e.id) == my_id;
@@ -835,7 +838,30 @@ fn receive_from_server(
                     if let Some(model) = m.model {
                         if let Ok(mut t) = transforms.get_mut(model) {
                             t.rotation = Quat::from_rotation_y(-e.rot);
+                            // Rider sits on the wolf's back while mounted.
+                            t.translation.y = if e.mounted { 16.0 } else { 0.0 };
                         }
+                    }
+                    // Mount model appears/disappears with the flag (C06).
+                    match (e.mounted, m.mount_model) {
+                        (true, None) => {
+                            let wolf = commands
+                                .spawn((
+                                    SceneRoot(asset_server.load(
+                                        GltfAssetLabel::Scene(0).from_asset("models/wildlife/Wolf.gltf"),
+                                    )),
+                                    Transform::from_scale(Vec3::splat(26.0))
+                                        .with_rotation(Quat::from_rotation_y(-e.rot + std::f32::consts::FRAC_PI_2)),
+                                ))
+                                .id();
+                            commands.entity(m.root).add_child(wolf);
+                            map_updates.push((e.id, Some(wolf)));
+                        }
+                        (false, Some(wolf)) => {
+                            commands.entity(wolf).despawn_recursive();
+                            map_updates.push((e.id, None));
+                        }
+                        _ => {}
                     }
                     if let (Some(fill), true) = (m.bar_fill, e.max_health > 0) {
                         if let Ok(mut t) = transforms.get_mut(fill) {
@@ -854,6 +880,11 @@ fn receive_from_server(
                     }
                     map.0.insert(e.id, m);
                 }
+            }
+        }
+        for (id, v) in map_updates {
+            if let Some(m) = map.0.get_mut(&id) {
+                m.mount_model = v;
             }
         }
         // Despawn entities that left the AoI / zone / died — but let anything
@@ -930,6 +961,9 @@ fn send_input(
     }
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        tx.send(ClientMsg::Mount);
     }
     if let Some(class) = session.class {
         let [a, b] = class_abilities(class);

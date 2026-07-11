@@ -38,6 +38,8 @@ pub struct QuestDef {
     pub item: Option<&'static str>,
     /// Prerequisite quest id that must be in `quests_done`.
     pub requires: Option<&'static str>,
+    /// Minimum character level to accept (default 1).
+    pub min_level: u32,
     #[allow(dead_code)] // C02+ content uses this to sort quest logs
     pub side: bool,
 }
@@ -60,136 +62,152 @@ pub const QUESTS: &[QuestDef] = &[
     QuestDef { id: "serpents_in_the_garden", act: Act::Eden, giver: "elder",
         offer: "Serpents defile the garden. Slay 5 of them.",
         objective: Kill { target: "serpent", count: 5 },
-        xp: 120, gold: 15, item: Some("bronze_sword"), requires: None, side: false },
+        xp: 120, gold: 15, item: Some("bronze_sword"), requires: None, side: false, min_level: 1 },
     QuestDef { id: "altar_of_the_firstborn", act: Act::Eden, giver: "wanderer",
         offer: "Cainite scavengers dismantle Abel's altar. Drive off 8 of them.",
         objective: Kill { target: "cainite", count: 8 },
-        xp: 180, gold: 20, item: None, requires: Some("serpents_in_the_garden"), side: false },
+        xp: 180, gold: 20, item: None, requires: Some("serpents_in_the_garden"), side: false, min_level: 1 },
     QuestDef { id: "the_flaming_sword", act: Act::Eden, giver: "elder",
         offer: "Stray embers drift from the Garden's flaming sword. Gather 5 cherubim sparks from the wisps they ignite.",
         objective: Collect { item: "cherubim_spark", count: 5, source: "ember_wisp" },
-        xp: 250, gold: 30, item: Some("spark_woven_cloak"), requires: Some("altar_of_the_firstborn"), side: false },
+        xp: 250, gold: 30, item: Some("spark_woven_cloak"), requires: Some("altar_of_the_firstborn"), side: false, min_level: 1 },
     QuestDef { id: "fruit_of_the_thorns", act: Act::Eden, giver: "wanderer",
         // Briar-fruit comes from harvesting Eden's trees (doc: gather from the thicket).
         offer: "The cursed ground still must feed us. Gather 10 briar-fruit from the thickets.",
         objective: Collect { item: "briar_fruit", count: 10, source: "tree" },
-        xp: 100, gold: 5, item: Some("bitter_bread"), requires: None, side: true },
+        xp: 100, gold: 5, item: Some("bitter_bread"), requires: None, side: true, min_level: 1 },
     QuestDef { id: "blood_on_the_soil", act: Act::Eden, giver: "seer",
         offer: "The blood-soaked earth is restless. Calm 5 earth elementals risen from the stained soil.",
         objective: Kill { target: "elemental", count: 5 },
-        xp: 200, gold: 25, item: None, requires: None, side: true },
+        xp: 200, gold: 25, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "the_first_forges", act: Act::Eden, giver: "seer",
         offer: "Tubal-Cain strikes metal into blades. Loot 6 bronze ingots from the Cainite camp.",
         objective: Collect { item: "bronze_ingot", count: 6, source: "cainite" },
-        xp: 220, gold: 35, item: Some("bronze_bracers"), requires: None, side: true },
+        xp: 220, gold: 35, item: Some("bronze_bracers"), requires: None, side: true, min_level: 1 },
     // =========================== ACT II — HERMON ==========================
     QuestDef { id: "watchers_on_the_mount", act: Act::Hermon, giver: "elder",
         offer: "The Watchers descend on Hermon. Fell 5 of them.",
         objective: Kill { target: "watcher", count: 5 },
-        xp: 220, gold: 25, item: None, requires: None, side: false },
+        xp: 220, gold: 25, item: None, requires: None, side: false, min_level: 1 },
     QuestDef { id: "oath_of_imprecation", act: Act::Hermon, giver: "elder",
         // Destroy-the-object → the Oath-Stone spawns as a stationary destructible.
         offer: "Samyaza's pact is carved into the Oath-Stone on the summit. Shatter it.",
         objective: Kill { target: "oathstone", count: 1 },
-        xp: 350, gold: 40, item: Some("amulet_of_the_unbound"), requires: Some("watchers_on_the_mount"), side: false },
+        xp: 350, gold: 40, item: Some("amulet_of_the_unbound"), requires: Some("watchers_on_the_mount"), side: false, min_level: 1 },
     QuestDef { id: "stargazers_fall", act: Act::Hermon, giver: "seer",
         offer: "Baraqiel's chief Stargazer rallies cultists on the eastern ridge. Silence him.",
         objective: Kill { target: "stargazer", count: 1 },
-        xp: 450, gold: 50, item: Some("astrologers_staff"), requires: Some("oath_of_imprecation"), side: false },
+        xp: 450, gold: 50, item: Some("astrologers_staff"), requires: Some("oath_of_imprecation"), side: false, min_level: 1 },
     QuestDef { id: "roots_of_sorcery", act: Act::Hermon, giver: "wanderer",
         // Mandrake roots carried by the cultists who cut them (doc: brewed enchantments).
         offer: "Corrupted herbs poison the springs. Take 8 toxic mandrake roots from the cultists.",
         objective: Collect { item: "mandrake_root", count: 8, source: "cultist" },
-        xp: 200, gold: 20, item: Some("healing_potion"), requires: None, side: true },
+        xp: 200, gold: 20, item: Some("healing_potion"), requires: None, side: true, min_level: 1 },
     QuestDef { id: "cosmetic_deception", act: Act::Hermon, giver: "wanderer",
         offer: "A caravan hauls Azazel's cursed vanities through the pass. Destroy 3 of its wagons.",
         objective: Kill { target: "caravan_wagon", count: 3 },
-        xp: 250, gold: 35, item: None, requires: None, side: true },
+        xp: 250, gold: 35, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "visions_of_the_gateway", act: Act::Hermon, giver: "seer",
         offer: "Abyssal energies twist the cave-dwellers below. Slay 10 chasm fiends.",
         objective: Kill { target: "chasm_fiend", count: 10 },
-        xp: 300, gold: 40, item: None, requires: None, side: true },
+        xp: 300, gold: 40, item: None, requires: None, side: true, min_level: 1 },
     // ========================= ACT III — NEPHILIM =========================
     QuestDef { id: "giants_in_the_land", act: Act::Nephilim, giver: "elder",
         offer: "There were giants in those days. Bring down 5 of their hunting party.",
         objective: Kill { target: "giant", count: 5 },
-        xp: 350, gold: 40, item: None, requires: None, side: false },
+        xp: 350, gold: 40, item: None, requires: None, side: false, min_level: 1 },
     QuestDef { id: "blood_and_iron", act: Act::Nephilim, giver: "wanderer",
         offer: "Their iron armory waits in the deep ravine. Sabotage 4 weapon caches.",
         objective: Kill { target: "weapon_cache", count: 4 },
-        xp: 400, gold: 45, item: Some("iron_greaves"), requires: Some("giants_in_the_land"), side: false },
+        xp: 400, gold: 45, item: Some("iron_greaves"), requires: Some("giants_in_the_land"), side: false, min_level: 1 },
     QuestDef { id: "ohyahs_dream", act: Act::Nephilim, giver: "seer",
         // Boss retrieve → the dream tablet drops from the act's alpha giant.
         offer: "Retrieve the dream tablet from the warlord of the giants, that Enoch may read it.",
         objective: Collect { item: "dream_tablet", count: 1, source: "giant_alpha" },
-        xp: 600, gold: 70, item: Some("ring_of_the_dreamer"), requires: Some("blood_and_iron"), side: false },
+        xp: 600, gold: 70, item: Some("ring_of_the_dreamer"), requires: Some("blood_and_iron"), side: false, min_level: 1 },
     QuestDef { id: "the_ravaged_earth", act: Act::Nephilim, giver: "wanderer",
         // Soil samples come from mining the wasteland's rocks.
         offer: "The earth dies beneath the giants. Bring me 5 depleted soil samples from the rocks.",
         objective: Collect { item: "soil_sample", count: 5, source: "rock" },
-        xp: 300, gold: 30, item: None, requires: None, side: true },
+        xp: 300, gold: 30, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "bones_of_the_consumed", act: Act::Nephilim, giver: "seer",
         offer: "My family was taken to the feasting pits. Recover 6 remains from the giants for burial.",
         objective: Collect { item: "human_remains", count: 6, source: "giant" },
-        xp: 350, gold: 35, item: None, requires: None, side: true },
+        xp: 350, gold: 35, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "the_blood_drinkers", act: Act::Nephilim, giver: "elder",
         offer: "Blood-drinking giants hunt the canyons at night. Slay 8 so our scouts can pass.",
         objective: Kill { target: "blood_drinker", count: 8 },
-        xp: 450, gold: 50, item: Some("giant_bone_crusher"), requires: None, side: true },
+        xp: 450, gold: 50, item: Some("giant_bone_crusher"), requires: None, side: true, min_level: 1 },
     // =========================== ACT IV — ENOCH ===========================
     QuestDef { id: "shades_of_enoch", act: Act::Enoch, giver: "elder",
         offer: "Shades haunt the city of Enoch. Banish 5.",
         objective: Kill { target: "shade", count: 5 },
-        xp: 500, gold: 55, item: None, requires: None, side: false },
+        xp: 500, gold: 55, item: None, requires: None, side: false, min_level: 1 },
     QuestDef { id: "azazels_armory", act: Act::Enoch, giver: "wanderer",
         offer: "Lamech hoards Watcher armor in the citadel. Take 3 schematics from its guards.",
         objective: Collect { item: "armor_schematic", count: 3, source: "citadel_guard" },
-        xp: 650, gold: 75, item: Some("lamechs_helm"), requires: Some("shades_of_enoch"), side: false },
+        xp: 650, gold: 75, item: Some("lamechs_helm"), requires: Some("shades_of_enoch"), side: false, min_level: 1 },
     QuestDef { id: "smog_of_industry", act: Act::Enoch, giver: "elder",
         offer: "The furnaces never stop. Destroy 4 alchemical furnace regulators.",
         objective: Kill { target: "furnace_regulator", count: 4 },
-        xp: 600, gold: 70, item: None, requires: Some("azazels_armory"), side: false },
+        xp: 600, gold: 70, item: None, requires: Some("azazels_armory"), side: false, min_level: 1 },
     QuestDef { id: "the_hidden_prophet", act: Act::Enoch, giver: "seer",
         // Delivery → the scroll must be wrested from the shades warding the compound.
         offer: "Judgment is decreed. Recover the scroll of doom from the shades that ward the compound.",
         objective: Collect { item: "scroll_of_doom", count: 1, source: "shade" },
-        xp: 550, gold: 60, item: None, requires: None, side: true },
+        xp: 550, gold: 60, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "song_of_the_sword", act: Act::Enoch, giver: "wanderer",
         offer: "Dark magic corrupts our ancestral craft. Defeat 6 enchanter smiths.",
         objective: Kill { target: "enchanter_smith", count: 6 },
-        xp: 600, gold: 65, item: Some("enchanted_bronze_blade"), requires: None, side: true },
+        xp: 600, gold: 65, item: Some("enchanted_bronze_blade"), requires: None, side: true, min_level: 1 },
     QuestDef { id: "syndicate_of_sorcery", act: Act::Enoch, giver: "seer",
         offer: "Samyaza's syndicate drugs the slums. Slay 8 of their sorcerers.",
         objective: Kill { target: "sorcerer", count: 8 },
-        xp: 650, gold: 70, item: None, requires: None, side: true },
+        xp: 650, gold: 70, item: None, requires: None, side: true, min_level: 1 },
     // =========================== ACT V — FLOOD ============================
     QuestDef { id: "leviathan_hunt", act: Act::Flood, giver: "elder",
         offer: "The deep sends leviathans. Hunt 3 before the end.",
         objective: Kill { target: "leviathan", count: 3 },
-        xp: 800, gold: 90, item: Some("hide_vest"), requires: None, side: false },
+        xp: 800, gold: 90, item: Some("hide_vest"), requires: None, side: false, min_level: 1 },
     QuestDef { id: "fountains_of_the_deep", act: Act::Flood, giver: "elder",
         offer: "The crust shatters. Cap 5 abyssal geysers before they cut off the beasts' path.",
         objective: Kill { target: "geyser", count: 5 },
-        xp: 900, gold: 100, item: None, requires: Some("leviathan_hunt"), side: false },
+        xp: 900, gold: 100, item: None, requires: Some("leviathan_hunt"), side: false, min_level: 1 },
     QuestDef { id: "boarding_the_ark", act: Act::Flood, giver: "wanderer",
         // Wave defense → hold the ramp against the raiders assaulting it.
         offer: "The giants storm the ramp! Let no raider set foot on the gopher wood — fell 9.",
         objective: Kill { target: "nephilim_raider", count: 9 },
-        xp: 1200, gold: 150, item: Some("covenant_signet"), requires: Some("fountains_of_the_deep"), side: false },
+        xp: 1200, gold: 150, item: Some("covenant_signet"), requires: Some("fountains_of_the_deep"), side: false, min_level: 1 },
     QuestDef { id: "the_last_scion", act: Act::Flood, giver: "seer",
         // Escort → clear the drowned beasts between the outpost and the Ark.
         offer: "A righteous family is trapped south of us. Clear 6 drowned beasts from their path.",
         objective: Kill { target: "drowned_beast", count: 6 },
-        xp: 850, gold: 90, item: None, requires: None, side: true },
+        xp: 850, gold: 90, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "drowning_the_corruption", act: Act::Flood, giver: "seer",
         offer: "The cultists drag their dark library to high ground. Sink 5 crates of forbidden scrolls.",
         objective: Kill { target: "scroll_crate", count: 5 },
-        xp: 800, gold: 85, item: None, requires: None, side: true },
+        xp: 800, gold: 85, item: None, requires: None, side: true, min_level: 1 },
     QuestDef { id: "the_rain_begins", act: Act::Flood, giver: "elder",
         // Survival → the final onslaught, expressed as a cull of the surge.
         offer: "The door is sealed and the waters surge. Survive the onslaught — put down 10 drowned beasts.",
         objective: Kill { target: "drowned_beast", count: 10 },
-        xp: 1500, gold: 200, item: None, requires: None, side: true },
+        xp: 1500, gold: 200, item: None, requires: None, side: true, min_level: 1 },
+    // ================= MOUNT QUESTLINE (C06, level 40, Enoch) =============
+    // docs/quests/mount_questline.md — Parts 2A/2B collapse into one collect
+    // quest (iron links from the Enchanter Smiths); Parts 3+4 collapse into
+    // the Swift-Claw hunt whose turn-in grants the Horn of the Dire-Wolf.
+    QuestDef { id: "mount_call_of_the_wild", act: Act::Enoch, giver: "jabal",
+        offer: "A Dire-Wolf bows only to an Alpha. Slay 15 feral dire-wolves to prove your dominance.",
+        objective: Kill { target: "dire_wolf", count: 15 },
+        xp: 4000, gold: 0, item: None, requires: None, side: true, min_level: 40 },
+    QuestDef { id: "mount_watchers_chain", act: Act::Enoch, giver: "jabal",
+        offer: "Bring me 3 Watcher-forged iron links from the Enchanter Smiths; chain or bridle, the wolf must be reined.",
+        objective: Collect { item: "iron_link", count: 3, source: "enchanter_smith" },
+        xp: 5500, gold: 0, item: None, requires: Some("mount_call_of_the_wild"), side: true, min_level: 40 },
+    QuestDef { id: "mount_alphas_den", act: Act::Enoch, giver: "jabal",
+        offer: "Deep in the canyons a legendary pack dens. Subdue Swift-Claw, the young Alpha, and ride home.",
+        objective: Kill { target: "swift_claw", count: 1 },
+        xp: 15500, gold: 0, item: Some("dire_wolf_horn"), requires: Some("mount_watchers_chain"), side: true, min_level: 40 },
 ];
 
 /// Max concurrent quests per player.
@@ -208,7 +226,7 @@ pub fn quests_for(act: Act, giver: &str) -> impl Iterator<Item = &'static QuestD
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{act_spawn_table, item_def, CONSUMABLES};
+    use crate::world::{act_spawn_table, item_def, CONSUMABLES, KEY_ITEMS};
 
     /// C02 integrity: every quest is satisfiable with what actually spawns,
     /// every reward resolves, chains resolve, and each act has a starter.
@@ -219,17 +237,19 @@ mod tests {
                 QUESTS.iter().any(|q| q.act == act && q.requires.is_none() && !q.side),
                 "{act:?} needs a main starter quest"
             );
-            assert_eq!(QUESTS.iter().filter(|q| q.act == act).count(), 6, "{act:?} quest count");
+            // 6 doc quests per act (+3 mount-chain quests parked in Enoch).
+            let expect = if act == Act::Enoch { 9 } else { 6 };
+            assert_eq!(QUESTS.iter().filter(|q| q.act == act).count(), expect, "{act:?} quest count");
         }
         for q in QUESTS {
-            assert!(["elder", "wanderer", "seer"].contains(&q.giver), "{}: unknown giver {}", q.id, q.giver);
+            assert!(["elder", "wanderer", "seer", "jabal"].contains(&q.giver), "{}: unknown giver {}", q.id, q.giver);
             if let Some(r) = q.requires {
                 let pre = quest(r).unwrap_or_else(|| panic!("{}: missing prerequisite {r}", q.id));
                 assert_eq!(pre.act, q.act, "{}: prerequisite crosses acts", q.id);
             }
             if let Some(item) = q.item {
                 assert!(
-                    item_def(item).is_some() || CONSUMABLES.contains(&item),
+                    item_def(item).is_some() || CONSUMABLES.contains(&item) || KEY_ITEMS.contains(&item),
                     "{}: reward item {item} unresolved", q.id
                 );
             }

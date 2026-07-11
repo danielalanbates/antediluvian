@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -127,6 +127,9 @@ pub struct EntityState {
     /// Equipped chest item id (players) — drives armor presentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chest: Option<String>,
+    /// Riding a mount (players; C06).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mounted: bool,
 }
 
 /// The persistent, player-owned character sheet.
@@ -228,6 +231,8 @@ pub enum ClientMsg {
     Equip { item: String },
     /// Talk to the nearest NPC (quest givers): offers, progress, or turn-in.
     Talk,
+    /// Toggle riding the Dire-Wolf mount (requires the horn item; C06).
+    Mount,
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.

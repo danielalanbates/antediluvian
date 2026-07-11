@@ -16,6 +16,9 @@ pub use antediluvia_protocol::WORLD_BOUNDS;
 /// No hostile spawns within this distance of the inn (C05).
 pub const SAFE_RING: f32 = 400.0;
 
+/// Seconds after dealing/taking damage during which you count as in combat.
+const COMBAT_LOCK_SECS: f32 = 5.0;
+
 const PLAYER_SPEED: f32 = 180.0; // C05: bigger world, WoW-ish travel pacing
 const ENEMY_SPEED: f32 = 120.0;
 const WILDLIFE_SPEED: f32 = 190.0;
@@ -137,6 +140,9 @@ pub const ITEMS: &[ItemDef] = &[
     ItemDef { id: "covenant_signet",       slot: "finger", melee: 5,  spell: 5,  hp: 10 },
 ];
 
+/// Key items: carried, never equipped or consumed.
+pub const KEY_ITEMS: &[&str] = &["dire_wolf_horn"];
+
 /// Consumable quest rewards handled by `use_item` (not equipment).
 pub const CONSUMABLES: &[&str] = &[
     "bread", "fruit", "golden_apple", "energy_drink", "bitter_bread", "healing_potion",
@@ -232,6 +238,10 @@ pub struct Entity {
     pub duel_with: Option<EntityId>,
     /// Fractional-second accumulator for inn rested-XP accrual.
     pub rest_accum: f32,
+    /// Riding the Dire-Wolf (players; C06). Cleared by any combat.
+    pub mounted: bool,
+    /// Seconds until the player counts as out of combat again.
+    pub combat_timer: f32,
     /// For a player entity, the owning connection id.
     pub owner: Option<u64>,
     /// For a player, its persistent sheet (kept in sync so we can save it).
@@ -258,6 +268,7 @@ impl Entity {
                 .sheet
                 .as_ref()
                 .and_then(|s| s.equipment.get("chest").cloned()),
+            mounted: self.mounted,
         }
     }
 }
@@ -406,6 +417,11 @@ impl World {
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(260.0, -170.0), "Seer"));
+        // Beast-Master Jabal offers the mount questline in Enoch (C06).
+        if act == Act::Enoch {
+            let id = self.alloc_id();
+            zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(0.0, -220.0), "Jabal"));
+        }
         // One elite "alpha" per act — the dungeon-boss placeholder. Guaranteed
         // rare drop (thick_hide) and big XP.
         let pos = self.rng.point(WORLD_BOUNDS * 0.7);
@@ -455,6 +471,8 @@ impl World {
             cooldowns: HashMap::new(),
             duel_with: None,
             rest_accum: 0.0,
+            mounted: false,
+            combat_timer: 0.0,
             owner: Some(owner),
             sheet: Some(sheet),
         };
@@ -547,9 +565,13 @@ impl World {
                             fatigue_penalty = 0.5; // 50% movement speed when exhausted
                         }
                     }
+                    if e.combat_timer > 0.0 {
+                        e.combat_timer -= DT;
+                    }
                     if e.intent.length_squared() > 0.0001 {
                         let dir = e.intent.normalize_or_zero();
-                        e.pos += dir * (e.speed * fatigue_penalty) * DT;
+                        let mount_mult = if e.mounted { 1.6 } else { 1.0 };
+                        e.pos += dir * (e.speed * fatigue_penalty * mount_mult) * DT;
                         e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
                         e.rot = dir.y.atan2(dir.x);
                     }
@@ -801,10 +823,19 @@ impl World {
         let mut killed: Vec<(EntityId, Option<EntityId>)> = Vec::new();
         let mut duel_over: Vec<(EntityId, EntityId)> = Vec::new(); // (loser, winner)
         for (target, dmg, attacker) in damage {
+            // Combat dismounts and marks both sides in-combat (C06).
+            if let Some(att) = attacker {
+                if let Some(a) = zone.entities.get_mut(&att) {
+                    a.mounted = false;
+                    a.combat_timer = COMBAT_LOCK_SECS;
+                }
+            }
             if let Some(t) = zone.entities.get_mut(&target) {
                 if t.health <= 0 {
                     continue;
                 }
+                t.mounted = false;
+                t.combat_timer = COMBAT_LOCK_SECS;
                 t.health -= dmg;
                 if t.health > 0 {
                     events.push(SimEvent::Combat {
@@ -1226,6 +1257,7 @@ impl World {
         let accept = quests_for(act, &npc).find(|q| {
             !s.quests.contains_key(q.id)
                 && !s.quests_done.iter().any(|d| d == q.id)
+                && s.level >= q.min_level
                 && q.requires.map_or(true, |r| s.quests_done.iter().any(|d| d == r))
         });
         if let Some(q) = accept {
@@ -1243,6 +1275,25 @@ impl World {
         }
 
         Ok(format!("{npc}: You have done all I asked. Go with peace."))
+    }
+
+    /// Toggle riding the Dire-Wolf (C06). Requires the horn item; refused
+    /// while in combat. Any combat dismounts (see damage application).
+    pub fn toggle_mount(&mut self, act: Act, id: EntityId) -> Result<String, String> {
+        let e = self.entity_mut(act, id).ok_or("no such player")?;
+        if e.mounted {
+            e.mounted = false;
+            return Ok("You dismount.".into());
+        }
+        let s = e.sheet.as_ref().ok_or("no sheet")?;
+        if !s.inventory.iter().any(|i| i == "dire_wolf_horn") {
+            return Err("You have no mount. Earn the Horn of the Dire-Wolf.".into());
+        }
+        if e.combat_timer > 0.0 {
+            return Err("You can't mount in combat.".into());
+        }
+        e.mounted = true;
+        Ok("You whistle, and the Dire-Wolf answers. (+60% speed)".into())
     }
 
     /// Toggle the PvP flag; returns the new state.
@@ -1381,7 +1432,7 @@ pub fn act_spawn_table(act: Act) -> &'static [(&'static str, usize)] {
         Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5)],
         Act::Hermon => &[("watcher", 10), ("cultist", 6), ("chasm_fiend", 8), ("caravan_wagon", 3), ("oathstone", 1), ("stargazer", 1)],
         Act::Nephilim => &[("giant", 14), ("blood_drinker", 8), ("weapon_cache", 4)],
-        Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8)],
+        Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8), ("dire_wolf", 16), ("swift_claw", 1)],
         Act::Flood => &[("leviathan", 18), ("geyser", 5), ("nephilim_raider", 9), ("drowned_beast", 10), ("scroll_crate", 5)],
     }
 }
@@ -1405,6 +1456,18 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         e.health = e.max_health;
         e.damage = 4 + lvl;
         e.xp_value = (10 + lvl * 3) as u32;
+        return e;
+    }
+    if tag == "swift_claw" {
+        // The mount questline's young Alpha: a level-40 elite (C06).
+        let mut e = make_enemy(id, pos, "dire_wolf", act);
+        e.tag = Some(tag.to_string());
+        e.name = Some("Swift-Claw".into());
+        e.max_health = 900;
+        e.health = 900;
+        e.damage = 40;
+        e.xp_value = 800;
+        e.aggro_range = 300.0;
         return e;
     }
     let is_object = OBJECT_TAGS.contains(&tag);
@@ -1450,6 +1513,8 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         cooldowns: HashMap::new(),
         duel_with: None,
         rest_accum: 0.0,
+        mounted: false,
+        combat_timer: 0.0,
         owner: None,
         sheet: None,
     }
@@ -1484,6 +1549,8 @@ fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
         cooldowns: HashMap::new(),
         duel_with: None,
         rest_accum: 0.0,
+        mounted: false,
+        combat_timer: 0.0,
         owner: None,
         sheet: None,
     }
@@ -1518,6 +1585,8 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         cooldowns: HashMap::new(),
         duel_with: None,
         rest_accum: 0.0,
+        mounted: false,
+        combat_timer: 0.0,
         owner: None,
         sheet: None,
     }
@@ -1552,6 +1621,8 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         cooldowns: HashMap::new(),
         duel_with: None,
         rest_accum: 0.0,
+        mounted: false,
+        combat_timer: 0.0,
         owner: None,
         sheet: None,
     }
@@ -2029,6 +2100,98 @@ mod tests {
         db.save(&s, Some("apple_poi")).unwrap();
         let loaded = db.load(&s.name).unwrap().unwrap();
         assert!(loaded.discovered.iter().any(|d| d == &poi.name), "survives persistence");
+    }
+
+    #[test]
+    fn mount_rules_horn_combat_speed_dismount() {
+        let mut w = World::new(51);
+        let pid = spawn_at(&mut w, 6, "Rider", 0.0, 0.0);
+        // No horn: refused.
+        assert!(w.toggle_mount(Act::Eden, pid).is_err());
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let e = z.entities.get_mut(&pid).unwrap();
+            e.sheet.as_mut().unwrap().inventory.push("dire_wolf_horn".into());
+        }
+        // In combat: refused.
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().combat_timer = 3.0;
+        }
+        assert!(w.toggle_mount(Act::Eden, pid).is_err(), "no mounting in combat");
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().combat_timer = 0.0;
+        }
+        w.toggle_mount(Act::Eden, pid).unwrap();
+        assert!(w.zones[&Act::Eden].entities[&pid].mounted);
+        assert!(w.zones[&Act::Eden].entities[&pid].to_state().mounted, "mounted rides the wire");
+
+        // Mounted movement is 1.6x on-foot movement.
+        let start = w.zones[&Act::Eden].entities[&pid].pos;
+        w.set_intent(Act::Eden, pid, Vec2::new(1.0, 0.0));
+        w.step();
+        let mounted_dx = w.zones[&Act::Eden].entities[&pid].pos.x - start.x;
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().mounted = false;
+        }
+        let start = w.zones[&Act::Eden].entities[&pid].pos;
+        w.step();
+        let foot_dx = w.zones[&Act::Eden].entities[&pid].pos.x - start.x;
+        assert!(
+            (mounted_dx / foot_dx - 1.6).abs() < 0.05,
+            "expected 1.6x, got {}x", mounted_dx / foot_dx
+        );
+
+        // Taking damage dismounts.
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().mounted = true;
+            z.entities.get_mut(&pid).unwrap().intent = Vec2::ZERO;
+        }
+        let (eid, epos) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some("serpent"))
+                .unwrap();
+            (e.id, e.pos)
+        };
+        {
+            // Teleport next to a serpent and let it strike.
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let p = z.entities.get_mut(&pid).unwrap();
+            p.pos = epos + Vec2::new(10.0, 0.0);
+        }
+        for _ in 0..200 {
+            w.step();
+            if !w.zones[&Act::Eden].entities[&pid].mounted {
+                break;
+            }
+        }
+        assert!(!w.zones[&Act::Eden].entities[&pid].mounted, "damage should dismount");
+        let _ = eid;
+    }
+
+    #[test]
+    fn mount_quests_gated_at_level_40() {
+        let mut w = World::new(52);
+        // Jabal stands at Enoch entry + (0,-220).
+        let mut sheet = new_character("Tamer");
+        sheet.act = Act::Enoch;
+        sheet.x = 0.0;
+        sheet.y = -220.0;
+        let pid = w.spawn_player(8, sheet);
+        // Level 1: Jabal has nothing for us.
+        let t = w.talk(Act::Enoch, pid).unwrap();
+        assert!(t.contains("peace"), "level gate should hide the chain, got: {t}");
+        {
+            let z = w.zones.get_mut(&Act::Enoch).unwrap();
+            z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap().level = 40;
+        }
+        let t = w.talk(Act::Enoch, pid).unwrap();
+        assert!(t.contains("dire-wolves"), "chain offered at 40, got: {t}");
     }
 
     #[test]

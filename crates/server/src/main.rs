@@ -389,6 +389,12 @@ fn handle_client_msg(
             }
             send_stats(world, conns, id);
         }
+        ClientMsg::Mount => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.toggle_mount(act, ent) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+        }
         ClientMsg::Craft { recipe } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.craft(act, ent, &recipe) {
