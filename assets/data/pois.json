@@ -3,1400 +3,1400 @@
 "id": 63,
 "name": "The Pristine Crystal Spring",
 "act": "eden",
-"x": 1205.1,
-"y": -231.5
+"x": 2410.2,
+"y": -463.1
 },
 {
 "id": 138,
 "name": "The Smoldering Lush River Delta",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 163,
 "name": "The Fortified Nomad Camp",
 "act": "eden",
-"x": -576.2,
-"y": -124.4
+"x": -1152.5,
+"y": -248.8
 },
 {
 "id": 196,
 "name": "The Smoldering Caravan Wreckage",
 "act": "eden",
-"x": -1137.6,
-"y": -609.8
+"x": -2275.2,
+"y": -1219.5
 },
 {
 "id": 208,
 "name": "The Pristine Dust-Swept Ruin",
 "act": "eden",
-"x": -1125.0,
-"y": 539.8
+"x": -2250.0,
+"y": 1079.5
 },
 {
 "id": 221,
 "name": "The Shadowy Serpent's Hollow",
 "act": "eden",
-"x": 282.8,
-"y": -43.4
+"x": 565.6,
+"y": -86.9
 },
 {
 "id": 236,
 "name": "The Overgrown Dried Oasis",
 "act": "eden",
-"x": -1382.9,
-"y": -772.6
+"x": -2765.7,
+"y": -1545.3
 },
 {
 "id": 252,
 "name": "The Corrupted Lone Baobab",
 "act": "eden",
-"x": 505.6,
-"y": 342.4
+"x": 1011.1,
+"y": 684.9
 },
 {
 "id": 348,
 "name": "The Blood-soaked Wind-Carved Canyon",
 "act": "eden",
-"x": -1600.0,
-"y": 397.6
+"x": -3200.0,
+"y": 795.1
 },
 {
 "id": 381,
 "name": "The Overgrown Serpent's Hollow",
 "act": "eden",
-"x": 1218.4,
-"y": -1247.2
+"x": 2436.8,
+"y": -2494.3
 },
 {
 "id": 461,
 "name": "The Ancient Lone Baobab",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 498,
 "name": "The Luminescent Dried Oasis",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 510,
 "name": "The Shadowy Wind-Carved Canyon",
 "act": "eden",
-"x": 999.0,
-"y": -694.6
+"x": 1998.0,
+"y": -1389.2
 },
 {
 "id": 610,
 "name": "The Ruined Lush River Delta",
 "act": "eden",
-"x": 1600.0,
-"y": 1479.8
+"x": 3200.0,
+"y": 2959.7
 },
 {
 "id": 682,
 "name": "The Abandoned Cainite Outpost",
 "act": "eden",
-"x": 1600.0,
-"y": -1600.0
+"x": 3200.0,
+"y": -3200.0
 },
 {
 "id": 713,
 "name": "The Luminescent Caravan Wreckage",
 "act": "eden",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 723,
 "name": "The Silent Cainite Outpost",
 "act": "eden",
-"x": -1600.0,
-"y": 1447.0
+"x": -3200.0,
+"y": 2894.0
 },
 {
 "id": 744,
 "name": "The Blood-soaked Scavenger Hideout",
 "act": "eden",
-"x": 1600.0,
-"y": 1231.2
+"x": 3200.0,
+"y": 2462.4
 },
 {
 "id": 890,
 "name": "The Smoldering Caravan Wreckage",
 "act": "eden",
-"x": 1056.6,
-"y": -84.8
+"x": 2113.2,
+"y": -169.7
 },
 {
 "id": 896,
 "name": "The Magically-irradiated Nomad Camp",
 "act": "eden",
-"x": -1357.4,
-"y": 1046.9
+"x": -2714.8,
+"y": 2093.8
 },
 {
 "id": 996,
 "name": "The Corrupted First-Generation Altar",
 "act": "eden",
-"x": -1062.0,
-"y": 1537.4
+"x": -2124.0,
+"y": 3074.8
 },
 {
 "id": 1016,
 "name": "The Silent Primordial Beast Den",
 "act": "eden",
-"x": -1600.0,
-"y": 1228.3
+"x": -3200.0,
+"y": 2456.6
 },
 {
 "id": 1021,
 "name": "The Pristine Sacred Grove",
 "act": "eden",
-"x": -863.6,
-"y": -1600.0
+"x": -1727.1,
+"y": -3200.0
 },
 {
 "id": 1077,
 "name": "The Overgrown Lush River Delta",
 "act": "eden",
-"x": -1390.7,
-"y": -1600.0
+"x": -2781.5,
+"y": -3200.0
 },
 {
 "id": 1158,
 "name": "The Overgrown Lush River Delta",
 "act": "eden",
-"x": 1500.3,
-"y": -1600.0
+"x": 3000.6,
+"y": -3200.0
 },
 {
 "id": 1164,
 "name": "The Shadowy First-Generation Altar",
 "act": "eden",
-"x": 1083.2,
-"y": -1600.0
+"x": 2166.3,
+"y": -3200.0
 },
 {
 "id": 1283,
 "name": "The Overgrown Overgrown Monolith",
 "act": "eden",
-"x": 1315.8,
-"y": 453.8
+"x": 2631.6,
+"y": 907.6
 },
 {
 "id": 1388,
 "name": "The Shadowy Overgrown Monolith",
 "act": "eden",
-"x": 1483.2,
-"y": -1600.0
+"x": 2966.4,
+"y": -3200.0
 },
 {
 "id": 1455,
 "name": "The Smoldering Nomad Camp",
 "act": "eden",
-"x": 252.7,
-"y": -308.5
+"x": 505.4,
+"y": -617.0
 },
 {
 "id": 1457,
 "name": "The Abandoned Cherubim Burn-Scar",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1532,
 "name": "The Ruined Crystal Spring",
 "act": "eden",
-"x": 1600.0,
-"y": 1119.4
+"x": 3200.0,
+"y": 2238.8
 },
 {
 "id": 1583,
 "name": "The Ruined First-Generation Altar",
 "act": "eden",
-"x": -1600.0,
-"y": -239.8
+"x": -3200.0,
+"y": -479.7
 },
 {
 "id": 1700,
 "name": "The Frozen Dust-Swept Ruin",
 "act": "eden",
-"x": -1255.5,
-"y": 761.9
+"x": -2511.0,
+"y": 1523.7
 },
 {
 "id": 1795,
 "name": "The Fortified Lush River Delta",
 "act": "eden",
-"x": 1600.0,
-"y": -566.1
+"x": 3200.0,
+"y": -1132.2
 },
 {
 "id": 1830,
 "name": "The Pristine Overgrown Monolith",
 "act": "eden",
-"x": -718.6,
-"y": -398.5
+"x": -1437.3,
+"y": -797.0
 },
 {
 "id": 1863,
 "name": "The Shadowy First-Generation Altar",
 "act": "eden",
-"x": 488.9,
-"y": -491.6
+"x": 977.9,
+"y": -983.2
 },
 {
 "id": 1950,
 "name": "The Blood-soaked Dust-Swept Ruin",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1970,
 "name": "The Magically-irradiated Caravan Wreckage",
 "act": "eden",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1994,
 "name": "The Smoldering Caravan Wreckage",
 "act": "eden",
-"x": 909.9,
-"y": -127.4
+"x": 1819.8,
+"y": -254.7
 },
 {
 "id": 1997,
 "name": "The Magically-irradiated Dried Oasis",
 "act": "eden",
-"x": -1600.0,
-"y": -1600.0
+"x": -3200.0,
+"y": -3200.0
 },
 {
 "id": 59,
 "name": "The Shadowy Avalanche Zone",
 "act": "hermon",
-"x": -1600.0,
-"y": -924.3
+"x": -3200.0,
+"y": -1848.6
 },
 {
 "id": 60,
 "name": "The Ancient Ice Cave",
 "act": "hermon",
-"x": -1600.0,
-"y": -1085.6
+"x": -3200.0,
+"y": -2171.2
 },
 {
 "id": 69,
 "name": "The Abandoned Celestial Impact Crater",
 "act": "hermon",
-"x": -1426.7,
-"y": 1600.0
+"x": -2853.5,
+"y": 3200.0
 },
 {
 "id": 134,
 "name": "The Ancient Stargazer Observatory",
 "act": "hermon",
-"x": 523.4,
-"y": -1600.0
+"x": 1046.7,
+"y": -3200.0
 },
 {
 "id": 191,
 "name": "The Corrupted Frozen Alpine Pass",
 "act": "hermon",
-"x": -902.9,
-"y": 77.2
+"x": -1805.9,
+"y": 154.3
 },
 {
 "id": 212,
 "name": "The Corrupted Frozen Alpine Pass",
 "act": "hermon",
-"x": 616.7,
-"y": 482.6
+"x": 1233.5,
+"y": 965.2
 },
 {
 "id": 223,
 "name": "The Desolate Celestial Impact Crater",
 "act": "hermon",
-"x": -224.8,
-"y": -676.6
+"x": -449.6,
+"y": -1353.2
 },
 {
 "id": 286,
 "name": "The Frozen Ice Cave",
 "act": "hermon",
-"x": -1433.9,
-"y": -313.4
+"x": -2867.8,
+"y": -626.9
 },
 {
 "id": 363,
 "name": "The Desolate Frozen Alpine Pass",
 "act": "hermon",
-"x": 178.0,
-"y": 1600.0
+"x": 355.9,
+"y": 3200.0
 },
 {
 "id": 441,
 "name": "The Luminescent Cultist Basecamp",
 "act": "hermon",
-"x": 1394.8,
-"y": 546.3
+"x": 2789.6,
+"y": 1092.6
 },
 {
 "id": 521,
 "name": "The Ruined Celestial Impact Crater",
 "act": "hermon",
-"x": 1600.0,
-"y": -1600.0
+"x": 3200.0,
+"y": -3200.0
 },
 {
 "id": 531,
 "name": "The Fortified Frozen Alpine Pass",
 "act": "hermon",
-"x": 1155.8,
-"y": 1600.0
+"x": 2311.7,
+"y": 3200.0
 },
 {
 "id": 686,
 "name": "The Frozen Cultist Basecamp",
 "act": "hermon",
-"x": 767.5,
-"y": 1600.0
+"x": 1535.0,
+"y": 3200.0
 },
 {
 "id": 691,
 "name": "The Abandoned Celestial Impact Crater",
 "act": "hermon",
-"x": 274.5,
-"y": 1600.0
+"x": 549.0,
+"y": 3200.0
 },
 {
 "id": 712,
 "name": "The Smoldering Ice Cave",
 "act": "hermon",
-"x": 1600.0,
-"y": -1076.9
+"x": 3200.0,
+"y": -2153.7
 },
 {
 "id": 762,
 "name": "The Fortified Cultist Basecamp",
 "act": "hermon",
-"x": -1423.6,
-"y": -787.7
+"x": -2847.2,
+"y": -1575.5
 },
 {
 "id": 801,
 "name": "The Pristine Frozen Alpine Pass",
 "act": "hermon",
-"x": -1363.0,
-"y": 82.6
+"x": -2726.1,
+"y": 165.2
 },
 {
 "id": 803,
 "name": "The Ruined Stargazer Observatory",
 "act": "hermon",
-"x": -137.9,
-"y": -1600.0
+"x": -275.9,
+"y": -3200.0
 },
 {
 "id": 841,
 "name": "The Overgrown Celestial Impact Crater",
 "act": "hermon",
-"x": 1600.0,
-"y": 1240.7
+"x": 3200.0,
+"y": 2481.3
 },
 {
 "id": 930,
 "name": "The Corrupted Stargazer Observatory",
 "act": "hermon",
-"x": 1022.2,
-"y": 1481.4
+"x": 2044.4,
+"y": 2962.8
 },
 {
 "id": 959,
 "name": "The Overgrown Ice Cave",
 "act": "hermon",
-"x": -1600.0,
-"y": -1271.5
+"x": -3200.0,
+"y": -2543.0
 },
 {
 "id": 1046,
 "name": "The Magically-irradiated Cultist Basecamp",
 "act": "hermon",
-"x": -1033.9,
-"y": -656.3
+"x": -2067.8,
+"y": -1312.7
 },
 {
 "id": 1117,
 "name": "The Fortified Ice Cave",
 "act": "hermon",
-"x": -1600.0,
-"y": -1600.0
+"x": -3200.0,
+"y": -3200.0
 },
 {
 "id": 1175,
 "name": "The Luminescent Cultist Basecamp",
 "act": "hermon",
-"x": 964.8,
-"y": 1600.0
+"x": 1929.6,
+"y": 3200.0
 },
 {
 "id": 1288,
 "name": "The Fortified Stargazer Observatory",
 "act": "hermon",
-"x": 1546.7,
-"y": 367.7
+"x": 3093.3,
+"y": 735.3
 },
 {
 "id": 1327,
 "name": "The Fortified Celestial Impact Crater",
 "act": "hermon",
-"x": 1465.4,
-"y": 1429.4
+"x": 2930.8,
+"y": 2858.8
 },
 {
 "id": 1428,
 "name": "The Shadowy Stargazer Observatory",
 "act": "hermon",
-"x": 1466.8,
-"y": -375.3
+"x": 2933.6,
+"y": -750.6
 },
 {
 "id": 1459,
 "name": "The Silent Watcher's Descent Point",
 "act": "hermon",
-"x": -1051.2,
-"y": -1326.4
+"x": -2102.4,
+"y": -2652.8
 },
 {
 "id": 1460,
 "name": "The Desolate Cultist Basecamp",
 "act": "hermon",
-"x": 1600.0,
-"y": 479.0
+"x": 3200.0,
+"y": 958.1
 },
 {
 "id": 1467,
 "name": "The Shadowy Ice Cave",
 "act": "hermon",
-"x": 11.9,
-"y": -1600.0
+"x": 23.9,
+"y": -3200.0
 },
 {
 "id": 1541,
 "name": "The Silent Watcher's Descent Point",
 "act": "hermon",
-"x": 851.0,
-"y": 1600.0
+"x": 1701.9,
+"y": 3200.0
 },
 {
 "id": 1559,
 "name": "The Pristine Grigori Shrine",
 "act": "hermon",
-"x": -1359.7,
-"y": -1600.0
+"x": -2719.3,
+"y": -3200.0
 },
 {
 "id": 1632,
 "name": "The Shadowy Stargazer Observatory",
 "act": "hermon",
-"x": -1098.5,
-"y": -1378.6
+"x": -2196.9,
+"y": -2757.2
 },
 {
 "id": 1680,
 "name": "The Echoing Watcher's Descent Point",
 "act": "hermon",
-"x": -1600.0,
-"y": -297.0
+"x": -3200.0,
+"y": -594.0
 },
 {
 "id": 1752,
 "name": "The Silent Grigori Shrine",
 "act": "hermon",
-"x": 373.7,
-"y": 1600.0
+"x": 747.5,
+"y": 3200.0
 },
 {
 "id": 1811,
 "name": "The Abandoned Cultist Basecamp",
 "act": "hermon",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1822,
 "name": "The Silent Ice Cave",
 "act": "hermon",
-"x": 1018.6,
-"y": -581.9
+"x": 2037.2,
+"y": -1163.7
 },
 {
 "id": 1914,
 "name": "The Pristine Avalanche Zone",
 "act": "hermon",
-"x": -643.3,
-"y": -62.6
+"x": -1286.5,
+"y": -125.1
 },
 {
 "id": 1936,
 "name": "The Magically-irradiated Stargazer Observatory",
 "act": "hermon",
-"x": -1571.6,
-"y": 107.1
+"x": -3143.2,
+"y": 214.2
 },
 {
 "id": 1937,
 "name": "The Ancient Ice Cave",
 "act": "hermon",
-"x": 180.0,
-"y": 1600.0
+"x": 360.0,
+"y": 3200.0
 },
 {
 "id": 6,
 "name": "The Shadowy Strip Mine",
 "act": "nephilim",
-"x": 789.8,
-"y": -1600.0
+"x": 1579.5,
+"y": -3200.0
 },
 {
 "id": 144,
 "name": "The Desolate Warlord's Command Tent",
 "act": "nephilim",
-"x": -646.9,
-"y": -1143.9
+"x": -1293.8,
+"y": -2287.8
 },
 {
 "id": 159,
 "name": "The Fortified Giant's Footprint Lake",
 "act": "nephilim",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 168,
 "name": "The Luminescent Bone-Totem Field",
 "act": "nephilim",
-"x": 1600.0,
-"y": -1402.2
+"x": 3200.0,
+"y": -2804.4
 },
 {
 "id": 195,
 "name": "The Echoing Blood-Stained Canyon",
 "act": "nephilim",
-"x": 0.2,
-"y": -1474.0
+"x": 0.5,
+"y": -2948.0
 },
 {
 "id": 245,
 "name": "The Overgrown Warlord's Command Tent",
 "act": "nephilim",
-"x": -1220.4,
-"y": -626.6
+"x": -2440.8,
+"y": -1253.2
 },
 {
 "id": 283,
 "name": "The Ancient Warlord's Command Tent",
 "act": "nephilim",
-"x": -1600.0,
-"y": -1600.0
+"x": -3200.0,
+"y": -3200.0
 },
 {
 "id": 310,
 "name": "The Silent Giant's Footprint Lake",
 "act": "nephilim",
-"x": -978.3,
-"y": -712.4
+"x": -1956.6,
+"y": -1424.7
 },
 {
 "id": 313,
 "name": "The Overgrown Feasting Pit",
 "act": "nephilim",
-"x": 1383.8,
-"y": -718.6
+"x": 2767.5,
+"y": -1437.3
 },
 {
 "id": 376,
 "name": "The Ruined Desiccated Savanna",
 "act": "nephilim",
-"x": 751.5,
-"y": 1265.4
+"x": 1503.0,
+"y": 2530.8
 },
 {
 "id": 384,
 "name": "The Ruined Depleted Quarry",
 "act": "nephilim",
-"x": -1600.0,
-"y": -207.0
+"x": -3200.0,
+"y": -414.0
 },
 {
 "id": 408,
 "name": "The Pristine Bone-Totem Field",
 "act": "nephilim",
-"x": -1600.0,
-"y": 74.5
+"x": -3200.0,
+"y": 149.0
 },
 {
 "id": 411,
 "name": "The Desolate Desiccated Savanna",
 "act": "nephilim",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 413,
 "name": "The Fortified Giant's Footprint Lake",
 "act": "nephilim",
-"x": 159.1,
-"y": 113.6
+"x": 318.2,
+"y": 227.2
 },
 {
 "id": 433,
 "name": "The Abandoned Feasting Pit",
 "act": "nephilim",
-"x": 1600.0,
-"y": -1491.3
+"x": 3200.0,
+"y": -2982.6
 },
 {
 "id": 474,
 "name": "The Silent Giant's Footprint Lake",
 "act": "nephilim",
-"x": 1076.2,
-"y": 1600.0
+"x": 2152.3,
+"y": 3200.0
 },
 {
 "id": 590,
 "name": "The Ancient Bone-Totem Field",
 "act": "nephilim",
-"x": 756.2,
-"y": -778.3
+"x": 1512.5,
+"y": -1556.5
 },
 {
 "id": 595,
 "name": "The Luminescent Giant's Footprint Lake",
 "act": "nephilim",
-"x": -647.6,
-"y": -980.3
+"x": -1295.1,
+"y": -1960.7
 },
 {
 "id": 668,
 "name": "The Pristine Bone-Totem Field",
 "act": "nephilim",
-"x": 1600.0,
-"y": 58.7
+"x": 3200.0,
+"y": 117.5
 },
 {
 "id": 738,
 "name": "The Abandoned Blood-Stained Canyon",
 "act": "nephilim",
-"x": -338.2,
-"y": -70.7
+"x": -676.4,
+"y": -141.3
 },
 {
 "id": 933,
 "name": "The Ruined Strip Mine",
 "act": "nephilim",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 963,
 "name": "The Smoldering Giant's Footprint Lake",
 "act": "nephilim",
-"x": -90.0,
-"y": 1600.0
+"x": -180.0,
+"y": 3200.0
 },
 {
 "id": 1005,
 "name": "The Overgrown Desiccated Savanna",
 "act": "nephilim",
-"x": 887.2,
-"y": 584.1
+"x": 1774.4,
+"y": 1168.2
 },
 {
 "id": 1149,
 "name": "The Ancient Depleted Quarry",
 "act": "nephilim",
-"x": 1600.0,
-"y": 651.1
+"x": 3200.0,
+"y": 1302.3
 },
 {
 "id": 1195,
 "name": "The Pristine Strip Mine",
 "act": "nephilim",
-"x": 1000.1,
-"y": 1322.8
+"x": 2000.2,
+"y": 2645.6
 },
 {
 "id": 1268,
 "name": "The Overgrown Bone-Totem Field",
 "act": "nephilim",
-"x": 1600.0,
-"y": 1248.5
+"x": 3200.0,
+"y": 2497.1
 },
 {
 "id": 1289,
 "name": "The Shadowy Desiccated Savanna",
 "act": "nephilim",
-"x": -228.6,
-"y": 1600.0
+"x": -457.2,
+"y": 3200.0
 },
 {
 "id": 1296,
 "name": "The Shadowy Warlord's Command Tent",
 "act": "nephilim",
-"x": 1119.8,
-"y": 1600.0
+"x": 2239.7,
+"y": 3200.0
 },
 {
 "id": 1319,
 "name": "The Fortified Desiccated Savanna",
 "act": "nephilim",
-"x": 81.7,
-"y": 1546.2
+"x": 163.3,
+"y": 3092.4
 },
 {
 "id": 1395,
 "name": "The Smoldering Desiccated Savanna",
 "act": "nephilim",
-"x": 1600.0,
-"y": -831.8
+"x": 3200.0,
+"y": -1663.7
 },
 {
 "id": 1416,
 "name": "The Overgrown Strip Mine",
 "act": "nephilim",
-"x": -700.4,
-"y": 1600.0
+"x": -1400.9,
+"y": 3200.0
 },
 {
 "id": 1422,
 "name": "The Abandoned Blood-Stained Canyon",
 "act": "nephilim",
-"x": -1302.8,
-"y": -1220.4
+"x": -2605.5,
+"y": -2440.8
 },
 {
 "id": 1547,
 "name": "The Smoldering Bone-Totem Field",
 "act": "nephilim",
-"x": 638.8,
-"y": -748.8
+"x": 1277.5,
+"y": -1497.6
 },
 {
 "id": 1667,
 "name": "The Overgrown Warlord's Command Tent",
 "act": "nephilim",
-"x": -1314.5,
-"y": 742.1
+"x": -2628.9,
+"y": 1484.1
 },
 {
 "id": 1677,
 "name": "The Blood-soaked Depleted Quarry",
 "act": "nephilim",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1707,
 "name": "The Frozen Warlord's Command Tent",
 "act": "nephilim",
-"x": 1572.5,
-"y": 471.2
+"x": 3145.1,
+"y": 942.3
 },
 {
 "id": 1814,
 "name": "The Pristine Giant's Footprint Lake",
 "act": "nephilim",
-"x": -521.3,
-"y": 124.9
+"x": -1042.7,
+"y": 249.8
 },
 {
 "id": 1866,
 "name": "The Silent Warlord's Command Tent",
 "act": "nephilim",
-"x": 271.6,
-"y": 344.2
+"x": 543.1,
+"y": 688.5
 },
 {
 "id": 1909,
 "name": "The Abandoned Desiccated Savanna",
 "act": "nephilim",
-"x": -1253.5,
-"y": 369.9
+"x": -2507.0,
+"y": 739.8
 },
 {
 "id": 1925,
 "name": "The Luminescent Desiccated Savanna",
 "act": "nephilim",
-"x": -754.4,
-"y": -674.6
+"x": -1508.9,
+"y": -1349.1
 },
 {
 "id": 35,
 "name": "The Luminescent Watcher-Tech Armory",
 "act": "enoch",
-"x": -1255.5,
-"y": 843.1
+"x": -2511.0,
+"y": 1686.2
 },
 {
 "id": 36,
 "name": "The Silent Alchemical Forge",
 "act": "enoch",
-"x": 828.0,
-"y": 1280.9
+"x": 1656.0,
+"y": 2561.8
 },
 {
 "id": 43,
 "name": "The Frozen Syndicate Den",
 "act": "enoch",
-"x": 186.3,
-"y": 1600.0
+"x": 372.6,
+"y": 3200.0
 },
 {
 "id": 154,
 "name": "The Overgrown Syndicate Den",
 "act": "enoch",
-"x": -1283.0,
-"y": -1600.0
+"x": -2565.9,
+"y": -3200.0
 },
 {
 "id": 158,
 "name": "The Desolate Smog-Choked Plaza",
 "act": "enoch",
-"x": 1600.0,
-"y": -1600.0
+"x": 3200.0,
+"y": -3200.0
 },
 {
 "id": 180,
 "name": "The Desolate Syndicate Den",
 "act": "enoch",
-"x": 235.1,
-"y": -1600.0
+"x": 470.2,
+"y": -3200.0
 },
 {
 "id": 224,
 "name": "The Silent Watcher-Tech Armory",
 "act": "enoch",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 269,
 "name": "The Smoldering Syndicate Den",
 "act": "enoch",
-"x": -1349.5,
-"y": 1600.0
+"x": -2699.1,
+"y": 3200.0
 },
 {
 "id": 285,
 "name": "The Ancient Toxic Runoff Sewer",
 "act": "enoch",
-"x": -1469.5,
-"y": -1600.0
+"x": -2939.0,
+"y": -3200.0
 },
 {
 "id": 346,
 "name": "The Magically-irradiated Smog-Choked Plaza",
 "act": "enoch",
-"x": -1570.5,
-"y": 200.0
+"x": -3141.0,
+"y": 400.1
 },
 {
 "id": 349,
 "name": "The Blood-soaked Smog-Choked Plaza",
 "act": "enoch",
-"x": -1600.0,
-"y": 49.1
+"x": -3200.0,
+"y": 98.1
 },
 {
 "id": 527,
 "name": "The Echoing Watcher-Tech Armory",
 "act": "enoch",
-"x": -332.6,
-"y": 1217.7
+"x": -665.1,
+"y": 2435.4
 },
 {
 "id": 550,
 "name": "The Smoldering Syndicate Den",
 "act": "enoch",
-"x": 1600.0,
-"y": -1600.0
+"x": 3200.0,
+"y": -3200.0
 },
 {
 "id": 594,
 "name": "The Shadowy Watcher-Tech Armory",
 "act": "enoch",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 629,
 "name": "The Shadowy Alchemical Forge",
 "act": "enoch",
-"x": -367.4,
-"y": -1544.2
+"x": -734.9,
+"y": -3088.3
 },
 {
 "id": 646,
 "name": "The Corrupted Ziggurat Tier",
 "act": "enoch",
-"x": 1600.0,
-"y": -1400.9
+"x": 3200.0,
+"y": -2801.7
 },
 {
 "id": 670,
 "name": "The Shadowy Alchemical Forge",
 "act": "enoch",
-"x": 1472.9,
-"y": -1119.6
+"x": 2945.7,
+"y": -2239.2
 },
 {
 "id": 696,
 "name": "The Magically-irradiated Syndicate Den",
 "act": "enoch",
-"x": 947.2,
-"y": 1600.0
+"x": 1894.5,
+"y": 3200.0
 },
 {
 "id": 833,
 "name": "The Smoldering Underground Catacomb",
 "act": "enoch",
-"x": -511.0,
-"y": 1600.0
+"x": -1022.0,
+"y": 3200.0
 },
 {
 "id": 850,
 "name": "The Pristine Toxic Runoff Sewer",
 "act": "enoch",
-"x": -555.3,
-"y": 1496.9
+"x": -1110.6,
+"y": 2993.8
 },
 {
 "id": 884,
 "name": "The Smoldering Alchemical Forge",
 "act": "enoch",
-"x": -1600.0,
-"y": 1314.2
+"x": -3200.0,
+"y": 2628.5
 },
 {
 "id": 888,
 "name": "The Corrupted Toxic Runoff Sewer",
 "act": "enoch",
-"x": 284.2,
-"y": 1426.3
+"x": 568.4,
+"y": 2852.6
 },
 {
 "id": 899,
 "name": "The Shadowy Underground Catacomb",
 "act": "enoch",
-"x": -1423.4,
-"y": -1047.2
+"x": -2846.7,
+"y": -2094.3
 },
 {
 "id": 1019,
 "name": "The Overgrown Ziggurat Tier",
 "act": "enoch",
-"x": -663.1,
-"y": 1600.0
+"x": -1326.2,
+"y": 3200.0
 },
 {
 "id": 1089,
 "name": "The Magically-irradiated Watcher-Tech Armory",
 "act": "enoch",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 1166,
 "name": "The Pristine Toxic Runoff Sewer",
 "act": "enoch",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1183,
 "name": "The Corrupted Syndicate Den",
 "act": "enoch",
-"x": 403.9,
-"y": -1600.0
+"x": 807.8,
+"y": -3200.0
 },
 {
 "id": 1190,
 "name": "The Fortified Ziggurat Tier",
 "act": "enoch",
-"x": 1135.1,
-"y": 776.5
+"x": 2270.2,
+"y": 1553.0
 },
 {
 "id": 1261,
 "name": "The Magically-irradiated Toxic Runoff Sewer",
 "act": "enoch",
-"x": 1451.5,
-"y": -1600.0
+"x": 2903.0,
+"y": -3200.0
 },
 {
 "id": 1265,
 "name": "The Desolate Toxic Runoff Sewer",
 "act": "enoch",
-"x": -196.9,
-"y": 284.9
+"x": -393.8,
+"y": 569.7
 },
 {
 "id": 1338,
 "name": "The Magically-irradiated Toxic Runoff Sewer",
 "act": "enoch",
-"x": 553.5,
-"y": -863.8
+"x": 1107.0,
+"y": -1727.5
 },
 {
 "id": 1396,
 "name": "The Abandoned Smog-Choked Plaza",
 "act": "enoch",
-"x": 1191.4,
-"y": 1571.6
+"x": 2382.8,
+"y": 3143.2
 },
 {
 "id": 1553,
 "name": "The Smoldering Ziggurat Tier",
 "act": "enoch",
-"x": -749.2,
-"y": 481.9
+"x": -1498.5,
+"y": 963.9
 },
 {
 "id": 1567,
 "name": "The Desolate Watcher-Tech Armory",
 "act": "enoch",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1593,
 "name": "The Abandoned Ziggurat Tier",
 "act": "enoch",
-"x": 661.5,
-"y": 1399.3
+"x": 1323.0,
+"y": 2798.6
 },
 {
 "id": 1792,
 "name": "The Ancient Slum Ward",
 "act": "enoch",
-"x": -908.6,
-"y": -1600.0
+"x": -1817.1,
+"y": -3200.0
 },
 {
 "id": 1799,
 "name": "The Frozen Toxic Runoff Sewer",
 "act": "enoch",
-"x": -1600.0,
-"y": 1600.0
+"x": -3200.0,
+"y": 3200.0
 },
 {
 "id": 1895,
 "name": "The Shadowy Smog-Choked Plaza",
 "act": "enoch",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 1952,
 "name": "The Pristine Toxic Runoff Sewer",
 "act": "enoch",
-"x": -334.8,
-"y": -1437.3
+"x": -669.6,
+"y": -2874.6
 },
 {
 "id": 2000,
 "name": "The Silent Toxic Runoff Sewer",
 "act": "enoch",
-"x": -1600.0,
-"y": -889.4
+"x": -3200.0,
+"y": -1778.9
 },
 {
 "id": 27,
 "name": "The Abandoned Tar Pit",
 "act": "flood",
-"x": 482.2,
-"y": 876.4
+"x": 964.4,
+"y": 1752.8
 },
 {
 "id": 33,
 "name": "The Frozen Flooded Marshland",
 "act": "flood",
-"x": 1600.0,
-"y": -576.5
+"x": 3200.0,
+"y": -1152.9
 },
 {
 "id": 119,
 "name": "The Fortified Subterranean Breach",
 "act": "flood",
-"x": -1108.8,
-"y": -1326.8
+"x": -2217.6,
+"y": -2653.7
 },
 {
 "id": 126,
 "name": "The Luminescent Sinking Outpost",
 "act": "flood",
-"x": 889.2,
-"y": -1600.0
+"x": 1778.4,
+"y": -3200.0
 },
 {
 "id": 131,
 "name": "The Corrupted Leviathan Shallows",
 "act": "flood",
-"x": 1465.4,
-"y": -1600.0
+"x": 2930.8,
+"y": -3200.0
 },
 {
 "id": 141,
 "name": "The Silent Tectonic Fissure",
 "act": "flood",
-"x": -1600.0,
-"y": -723.4
+"x": -3200.0,
+"y": -1446.8
 },
 {
 "id": 249,
 "name": "The Magically-irradiated Ark Construction Yard",
 "act": "flood",
-"x": -68.4,
-"y": -1600.0
+"x": -136.8,
+"y": -3200.0
 },
 {
 "id": 251,
 "name": "The Fortified Sinking Outpost",
 "act": "flood",
-"x": -1215.2,
-"y": -331.2
+"x": -2430.5,
+"y": -662.4
 },
 {
 "id": 278,
 "name": "The Overgrown Tar Pit",
 "act": "flood",
-"x": 146.9,
-"y": -1600.0
+"x": 293.9,
+"y": -3200.0
 },
 {
 "id": 292,
 "name": "The Shadowy Leviathan Shallows",
 "act": "flood",
-"x": 452.9,
-"y": -1280.9
+"x": 905.9,
+"y": -2561.8
 },
 {
 "id": 339,
 "name": "The Echoing Tar Pit",
 "act": "flood",
-"x": -1600.0,
-"y": -1581.1
+"x": -3200.0,
+"y": -3162.2
 },
 {
 "id": 367,
 "name": "The Abandoned Tar Pit",
 "act": "flood",
-"x": 228.4,
-"y": -377.8
+"x": 456.8,
+"y": -755.6
 },
 {
 "id": 400,
 "name": "The Abandoned Leviathan Shallows",
 "act": "flood",
-"x": 1600.0,
-"y": 1600.0
+"x": 3200.0,
+"y": 3200.0
 },
 {
 "id": 427,
 "name": "The Ancient Subterranean Breach",
 "act": "flood",
-"x": -1571.4,
-"y": -1600.0
+"x": -3142.8,
+"y": -3200.0
 },
 {
 "id": 541,
 "name": "The Echoing Boiling Geyser",
 "act": "flood",
-"x": 213.5,
-"y": 1577.7
+"x": 427.1,
+"y": 3155.4
 },
 {
 "id": 580,
 "name": "The Desolate Ark Construction Yard",
 "act": "flood",
-"x": 479.7,
-"y": 1597.3
+"x": 959.4,
+"y": 3194.6
 },
 {
 "id": 597,
 "name": "The Ancient Boiling Geyser",
 "act": "flood",
-"x": -463.3,
-"y": 1600.0
+"x": -926.6,
+"y": 3200.0
 },
 {
 "id": 627,
 "name": "The Luminescent Sinking Outpost",
 "act": "flood",
-"x": 1531.4,
-"y": -1098.2
+"x": 3062.7,
+"y": -2196.5
 },
 {
 "id": 689,
 "name": "The Overgrown Boiling Geyser",
 "act": "flood",
-"x": 174.4,
-"y": 93.6
+"x": 348.8,
+"y": 187.2
 },
 {
 "id": 726,
 "name": "The Frozen Boiling Geyser",
 "act": "flood",
-"x": -565.9,
-"y": -1600.0
+"x": -1131.8,
+"y": -3200.0
 },
 {
 "id": 889,
 "name": "The Smoldering Tar Pit",
 "act": "flood",
-"x": 1127.0,
-"y": -1600.0
+"x": 2254.1,
+"y": -3200.0
 },
 {
 "id": 951,
 "name": "The Silent Subterranean Breach",
 "act": "flood",
-"x": -903.1,
-"y": 1188.5
+"x": -1806.3,
+"y": 2376.9
 },
 {
 "id": 956,
 "name": "The Smoldering Subterranean Breach",
 "act": "flood",
-"x": 887.2,
-"y": -1575.7
+"x": 1774.4,
+"y": -3151.3
 },
 {
 "id": 1024,
 "name": "The Blood-soaked Boiling Geyser",
 "act": "flood",
-"x": 433.8,
-"y": -1587.6
+"x": 867.6,
+"y": -3175.2
 },
 {
 "id": 1044,
 "name": "The Luminescent Ark Construction Yard",
 "act": "flood",
-"x": 1385.1,
-"y": -1475.8
+"x": 2770.2,
+"y": -2951.6
 },
 {
 "id": 1071,
 "name": "The Blood-soaked Leviathan Shallows",
 "act": "flood",
-"x": -1600.0,
-"y": 365.2
+"x": -3200.0,
+"y": 730.4
 },
 {
 "id": 1159,
 "name": "The Smoldering Tectonic Fissure",
 "act": "flood",
-"x": 1243.4,
-"y": 1600.0
+"x": 2486.7,
+"y": 3200.0
 },
 {
 "id": 1173,
 "name": "The Silent Leviathan Shallows",
 "act": "flood",
-"x": 1557.0,
-"y": -262.4
+"x": 3114.0,
+"y": -524.7
 },
 {
 "id": 1329,
 "name": "The Silent Flooded Marshland",
 "act": "flood",
-"x": 736.2,
-"y": 1600.0
+"x": 1472.4,
+"y": 3200.0
 },
 {
 "id": 1489,
 "name": "The Smoldering Sinking Outpost",
 "act": "flood",
-"x": -1011.1,
-"y": -1600.0
+"x": -2022.3,
+"y": -3200.0
 },
 {
 "id": 1528,
 "name": "The Fortified Tectonic Fissure",
 "act": "flood",
-"x": -1426.3,
-"y": 271.1
+"x": -2852.6,
+"y": 542.2
 },
 {
 "id": 1539,
 "name": "The Silent Tectonic Fissure",
 "act": "flood",
-"x": 1325.7,
-"y": 1448.8
+"x": 2651.4,
+"y": 2897.6
 },
 {
 "id": 1574,
 "name": "The Desolate Sinking Outpost",
 "act": "flood",
-"x": -1297.6,
-"y": 79.2
+"x": -2595.2,
+"y": 158.4
 },
 {
 "id": 1641,
 "name": "The Luminescent Subterranean Breach",
 "act": "flood",
-"x": -1600.0,
-"y": 1470.2
+"x": -3200.0,
+"y": 2940.3
 },
 {
 "id": 1670,
 "name": "The Abandoned Boiling Geyser",
 "act": "flood",
-"x": 1600.0,
-"y": -133.0
+"x": 3200.0,
+"y": -265.9
 },
 {
 "id": 1684,
 "name": "The Shadowy Tectonic Fissure",
 "act": "flood",
-"x": 365.6,
-"y": 1309.3
+"x": 731.2,
+"y": 2618.6
 },
 {
 "id": 1762,
 "name": "The Smoldering Leviathan Shallows",
 "act": "flood",
-"x": 980.8,
-"y": 1600.0
+"x": 1961.5,
+"y": 3200.0
 },
 {
 "id": 1823,
 "name": "The Blood-soaked Ark Construction Yard",
 "act": "flood",
-"x": 1483.7,
-"y": 1600.0
+"x": 2967.3,
+"y": 3200.0
 },
 {
 "id": 1844,
 "name": "The Smoldering Subterranean Breach",
 "act": "flood",
-"x": -981.2,
-"y": 1553.0
+"x": -1962.5,
+"y": 3105.9
 },
 {
 "id": 1911,
 "name": "The Fortified Sinking Outpost",
 "act": "flood",
-"x": 30.8,
-"y": -1159.2
+"x": 61.6,
+"y": -2318.4
 }
 ]

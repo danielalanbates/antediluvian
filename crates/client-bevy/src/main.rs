@@ -463,10 +463,10 @@ fn spawn_act_scenery(
     // Non-gameplay decor scatter, deterministic per act.
     let act_idx = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u64;
     let trees = tree_set(act);
-    for i in 0..170u64 {
+    for i in 0..300u64 { // C05: 4x map area
         let s = act_idx * 100_000 + i;
-        let x = (hash01(s * 4 + 1) - 0.5) * 3600.0;
-        let z = (hash01(s * 4 + 2) - 0.5) * 3600.0;
+        let x = (hash01(s * 4 + 1) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
+        let z = (hash01(s * 4 + 2) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
         if (x * x + z * z).sqrt() < 300.0 {
             continue; // keep the inn clearing open
         }

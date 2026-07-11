@@ -53,7 +53,7 @@ mod tests {
             let n = pois_for_act(act).count();
             assert_eq!(n, 40, "{act:?} POI count");
             for p in pois_for_act(act) {
-                assert!(p.x.abs() <= 1600.0 && p.y.abs() <= 1600.0, "{} out of bounds", p.name);
+                assert!(p.x.abs() <= 3200.0 && p.y.abs() <= 3200.0, "{} out of bounds", p.name);
             }
         }
         assert!(poi_near(Act::Eden, 7).is_some());

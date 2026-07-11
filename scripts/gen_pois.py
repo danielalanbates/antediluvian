@@ -3,7 +3,7 @@
 assets/data/pois.json, capped at 40 POIs per act (deterministic md5 pick).
 
 Doc coordinates span ±8000; the playable world is ±1800 (WORLD_BOUNDS), so
-positions scale by 1800/8000 = 0.225 and clamp to ±1600 to stay in bounds.
+positions scale by 3600/8000 = 0.45 and clamp to ±3200 to stay in bounds.
 """
 import glob
 import hashlib
@@ -12,8 +12,8 @@ import os
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCALE = 1800.0 / 8000.0
-CLAMP = 1600.0
+SCALE = 3600.0 / 8000.0
+CLAMP = 3200.0
 PER_ACT_CAP = 40
 
 ACT_MAP = [

@@ -126,6 +126,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
 
+                // Walk mode (ANTEDILUVIA_WALK=1): trek to the far corner and
+                // back — proves big-map traversal without desync.
+                if std::env::var("ANTEDILUVIA_WALK").is_ok() {
+                    static mut OUTBOUND: bool = true;
+                    let goal = if unsafe { OUTBOUND } { (3200.0f32, 3200.0f32) } else { (0.0f32, 0.0f32) };
+                    let (dx, dy) = (goal.0 - my_pos.0, goal.1 - my_pos.1);
+                    if dx.hypot(dy) < 80.0 {
+                        if unsafe { OUTBOUND } {
+                            println!("WALK-REACHED-CORNER at ({:.0},{:.0})", my_pos.0, my_pos.1);
+                            unsafe { OUTBOUND = false };
+                        } else {
+                            println!("WALK-E2E-OK back at ({:.0},{:.0})", my_pos.0, my_pos.1);
+                            break;
+                        }
+                    } else {
+                        write.send(Message::Text(send(&ClientMsg::Move { dx, dy }).into())).await?;
+                    }
+                    if frames >= 12000 {
+                        println!("WALK-E2E-TIMEOUT at ({:.0},{:.0})", my_pos.0, my_pos.1);
+                        break;
+                    }
+                    continue;
+                }
+
                 // Quest mode: first walk to the giver and accept; once the
                 // objective is complete, walk back and turn in.
                 if quest_mode && (!talked || quest_ready) {

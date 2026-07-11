@@ -1,6 +1,6 @@
 # CHUNK C05 — World scale & layout
 
-**Status: todo**
+**Status: DONE (2026-07-10)**
 
 ## Goal
 Grow each act's playable map so it can hold ~40 POIs, cave entrances, and

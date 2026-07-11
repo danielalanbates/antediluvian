@@ -14,8 +14,21 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use std::sync::OnceLock;
 
 /// Grid resolution (quads per side) and world size of the terrain mesh.
-const GRID: usize = 128;
-const SIZE: f32 = 4200.0;
+const GRID: usize = 192;
+/// Mesh extends a margin past the playable half-extent (C05: shared constant).
+const SIZE: f32 = antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0;
+
+/// Dirt road from the inn (0,0) toward the far side of the map (+x).
+const ROAD_END_X: f32 = antediluvia_protocol::WORLD_BOUNDS * 0.85;
+const ROAD_HALF_WIDTH: f32 = 55.0;
+const ROAD_BLEND: f32 = 130.0;
+
+/// Distance from (x,z) to the road's center segment.
+fn road_dist(x: f32, z: f32) -> f32 {
+    let t = (x / ROAD_END_X).clamp(0.0, 1.0);
+    let px = t * ROAD_END_X;
+    ((x - px) * (x - px) + z * z).sqrt()
+}
 /// The inn stays perfectly flat inside this radius…
 const FLAT_RADIUS: f32 = 240.0;
 /// …and blends into the hills over this additional distance.
@@ -53,7 +66,9 @@ pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     }
     let d = (x * x + z * z).sqrt();
     let t = ((d - FLAT_RADIUS) / BLEND_DIST).clamp(0.0, 1.0);
-    h * t * t
+    // The road cuts a flat strip through the hills.
+    let r = ((road_dist(x, z) - ROAD_HALF_WIDTH) / ROAD_BLEND).clamp(0.0, 1.0);
+    h * t * t * r * r
 }
 
 /// Height-banded vertex palette per act: low → mid → high.
@@ -97,7 +112,13 @@ pub fn build_terrain_mesh(act: Act) -> Mesh {
             let z = -SIZE / 2.0 + iz as f32 * step;
             let h = terrain_height(act, x, z);
             positions.push([x, h, z]);
-            colors.push(color_for(act, h));
+            // Road strip renders packed dirt instead of the height palette.
+            if road_dist(x, z) <= ROAD_HALF_WIDTH {
+                let lin = Color::srgb(0.42, 0.33, 0.22).to_linear();
+                colors.push([lin.red, lin.green, lin.blue, 1.0]);
+            } else {
+                colors.push(color_for(act, h));
+            }
             uvs.push([ix as f32 / n as f32, iz as f32 / n as f32]);
         }
     }
@@ -119,4 +140,26 @@ pub fn build_terrain_mesh(act: Act) -> Mesh {
     mesh.insert_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn road_is_flat_and_bounded() {
+        // On the road: flat all the way out.
+        for x in [400.0, 1000.0, 2000.0, 3000.0] {
+            let h = terrain_height(Act::Hermon, x, 0.0);
+            assert!(h.abs() < 0.01, "road at x={x} should be flat, got {h}");
+        }
+        // Far off the road: the hills are real (Hermon is the mountain act).
+        let mut any_hill = false;
+        for x in [700.0, 1200.0, 1900.0] {
+            if terrain_height(Act::Hermon, x, 900.0).abs() > 5.0 {
+                any_hill = true;
+            }
+        }
+        assert!(any_hill, "off-road terrain should have relief");
+    }
 }

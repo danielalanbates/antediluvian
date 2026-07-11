@@ -7,6 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Half-extent of each act's square playable map, shared by server (spawns,
+/// clamping) and client (terrain mesh, decor) so they cannot drift (C05).
+pub const WORLD_BOUNDS: f32 = 3600.0;
+
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
 pub const PROTOCOL_VERSION: u32 = 6;

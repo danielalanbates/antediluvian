@@ -60,7 +60,7 @@ richer animation, terrain variety — the long tail).
 ## Work queues (for future AI sessions — START HERE)
 Two chunked work queues, each chunk sized for one small-context session:
 - **`docs/art/`** — presentation (CHUNK_01–09 ✅; 10 performance remains).
-- **`docs/content/`** — gameplay content from the design docs (C01–C04 ✅; C05–C12 todo):
+- **`docs/content/`** — gameplay content from the design docs (C01–C05 ✅; C06–C12 todo):
   quest engine → act quests → bestiary (2,500 mobs) → POIs → world scale →
   mounts → taming → theme questlines → caves → factions → economy → audio.
 Read the queue README's protocol, do ONE chunk, verify with your eyes, update

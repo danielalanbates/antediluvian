@@ -11,9 +11,12 @@ use std::collections::HashMap;
 
 pub const TICK_HZ: u64 = 20;
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
-pub const WORLD_BOUNDS: f32 = 1800.0;
+pub use antediluvia_protocol::WORLD_BOUNDS;
 
-const PLAYER_SPEED: f32 = 260.0;
+/// No hostile spawns within this distance of the inn (C05).
+pub const SAFE_RING: f32 = 400.0;
+
+const PLAYER_SPEED: f32 = 180.0; // C05: bigger world, WoW-ish travel pacing
 const ENEMY_SPEED: f32 = 120.0;
 const WILDLIFE_SPEED: f32 = 190.0;
 const MELEE_RANGE: f32 = 80.0;
@@ -312,6 +315,16 @@ impl World {
         id
     }
 
+    /// A random point in the playable area at least `min_dist` from `entry`.
+    fn safe_point(&mut self, entry: Vec2, min_dist: f32) -> Vec2 {
+        loop {
+            let p = self.rng.point(WORLD_BOUNDS * 0.9);
+            if p.distance(entry) > min_dist {
+                return p;
+            }
+        }
+    }
+
     /// Seed a zone with enemies, wildlife and resource nodes. Counts vary by act
     /// so the later, more dangerous acts feel different.
     fn populate_zone(&mut self, zone: &mut Zone) {
@@ -323,17 +336,28 @@ impl World {
             Act::Flood => ("leviathan", "fox"),
         };
         let act = zone.act;
+        // C05: spawns come in clusters ("camps") of up to 6 around a shared
+        // center, never inside the safe ring around the inn.
         for (tag, n) in act_spawn_table(act) {
-            for _ in 0..*n {
-                let pos = self.rng.point(WORLD_BOUNDS * 0.9);
-                let id = self.alloc_id();
-                zone.entities.insert(id, make_enemy(id, pos, tag, act));
+            let mut left = *n;
+            while left > 0 {
+                let center = self.safe_point(zone.entry, SAFE_RING);
+                let group = left.min(6);
+                for _ in 0..group {
+                    let off = self.rng.point(150.0);
+                    let id = self.alloc_id();
+                    zone.entities.insert(id, make_enemy(id, center + off, tag, act));
+                }
+                left -= group;
             }
         }
-        for _ in 0..8 {
-            let pos = self.rng.point(WORLD_BOUNDS * 0.9);
-            let id = self.alloc_id();
-            zone.entities.insert(id, make_wildlife(id, pos, wildlife_tag));
+        for _ in 0..2 {
+            let center = self.safe_point(zone.entry, SAFE_RING);
+            for _ in 0..4 {
+                let off = self.rng.point(180.0);
+                let id = self.alloc_id();
+                zone.entities.insert(id, make_wildlife(id, center + off, wildlife_tag));
+            }
         }
         // Bestiary species (C03): a dozen level-appropriate mobs from the
         // act's habitat. Hostile temperaments spawn as enemies, docile and
@@ -364,11 +388,15 @@ impl World {
                 }
             }
         }
-        for _ in 0..14 {
-            let pos = self.rng.point(WORLD_BOUNDS * 0.9);
-            let id = self.alloc_id();
+        for _ in 0..5 {
+            // Resource groves: a stand of trees or a rock outcrop.
+            let center = self.safe_point(zone.entry, 350.0);
             let tag = if self.rng.range(0.0, 1.0) < 0.6 { "tree" } else { "rock" };
-            zone.entities.insert(id, make_resource(id, pos, tag));
+            for _ in 0..4 {
+                let off = self.rng.point(140.0);
+                let id = self.alloc_id();
+                zone.entities.insert(id, make_resource(id, center + off, tag));
+            }
         }
         // The act's quest givers: the Elder at the inn, a Wanderer at the
         // crossroads, and a Seer further afield (see quests.rs giver mapping).
@@ -847,8 +875,14 @@ impl World {
             };
             zone.entities.remove(&target_id);
 
-            // Respawn a replacement elsewhere so the zone stays populated.
-            let pos = rng.point(WORLD_BOUNDS * 0.9);
+            // Respawn a replacement elsewhere so the zone stays populated
+            // (enemies never respawn inside the inn's safe ring).
+            let pos = loop {
+                let p = rng.point(WORLD_BOUNDS * 0.9);
+                if kind != EntityKind::Enemy || p.length() > SAFE_RING {
+                    break p;
+                }
+            };
             let nid = self_next_id(&mut next_id);
             let (reward_item, xp) = match kind {
                 EntityKind::Enemy => {
@@ -1606,7 +1640,11 @@ mod tests {
         let mut w = World::new(7);
         let (eid, epos, etag) = {
             let z = &w.zones[&Act::Eden];
-            let e = z.entities.values().find(|e| e.kind == EntityKind::Enemy).unwrap();
+            let e = z
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some("serpent"))
+                .unwrap();
             (e.id, e.pos, e.tag.clone().unwrap())
         };
         // Make the enemy killable in one hit by placing the player on top-ish.
@@ -1648,15 +1686,24 @@ mod tests {
     #[test]
     fn class_select_and_cast_damages_target_and_costs_mana() {
         let mut w = World::new(3);
-        let (eid, epos) = {
+        let epos = {
             let e = w.zones[&Act::Eden]
                 .entities
                 .values()
                 .find(|e| e.kind == EntityKind::Enemy)
                 .unwrap();
-            (e.id, e.pos)
+            e.pos
         };
         let pid = spawn_at(&mut w, 1, "Magus", epos.x - 100.0, epos.y);
+        // Clusters (C05): the cast hits the *nearest* enemy — resolve it.
+        let me = w.zones[&Act::Eden].entities[&pid].pos;
+        let eid = w.zones[&Act::Eden]
+            .entities
+            .values()
+            .filter(|e| e.kind == EntityKind::Enemy)
+            .min_by(|a, b| a.pos.distance(me).total_cmp(&b.pos.distance(me)))
+            .unwrap()
+            .id;
         w.select_class(Act::Eden, pid, Class::Mage).unwrap();
         // Second class pick is rejected.
         assert!(w.select_class(Act::Eden, pid, Class::Warrior).is_err());
@@ -1820,7 +1867,8 @@ mod tests {
             }
         }
         let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
+        // The swing cleaves the whole camp cluster, so 1+ kills may credit.
+        assert!(s.quests.get("serpents_in_the_garden").copied().unwrap_or(0) >= 1);
     }
 
     /// Kill one Eden mob of the given tag with quest state pre-seeded.
@@ -1904,8 +1952,9 @@ mod tests {
         let mut w = World::new(24);
         // One cainite kill advances a Kill quest and a Collect quest together.
         let s = kill_one_tagged(&mut w, "cainite", &[("altar_of_the_firstborn", 0), ("the_first_forges", 0)]);
-        assert_eq!(s.quests.get("altar_of_the_firstborn").copied(), Some(1));
-        assert_eq!(s.quests.get("the_first_forges").copied(), Some(1));
+        // Cleave may take out 1+ cluster-mates; both quests must credit.
+        assert!(s.quests.get("altar_of_the_firstborn").copied().unwrap_or(0) >= 1);
+        assert!(s.quests.get("the_first_forges").copied().unwrap_or(0) >= 1);
         assert!(s.inventory.iter().any(|i| i == "bronze_ingot"));
     }
 
@@ -2056,7 +2105,8 @@ mod tests {
         w.queue_attack(Act::Eden, pid);
         w.step();
         let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert_eq!(s.professions.get(prof).copied().unwrap_or(0), 1);
+        // Groves cluster (C05): one swing can fell several nodes.
+        assert!(s.professions.get(prof).copied().unwrap_or(0) >= 1);
     }
 }
 
