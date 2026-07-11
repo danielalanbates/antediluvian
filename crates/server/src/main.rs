@@ -6,6 +6,7 @@
 //! only through channels, so the simulation stays lock-free and deterministic.
 
 mod db;
+mod mobs;
 mod net;
 mod quests;
 mod world;

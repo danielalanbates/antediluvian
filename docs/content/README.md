@@ -59,8 +59,8 @@ window (read → implement → verify → commit).
 | # | File | What | Status |
 |---|------|------|--------|
 | C01 | CHUNK_C01_quest_engine.md | Data-driven multi-quest engine (multiple concurrent quests, multiple givers per act) | DONE |
-| C02 | CHUNK_C02_act_quests.md | All ~45 act quests from docs/quests/act*.md loaded + rewards/items | todo |
-| C03 | CHUNK_C03_bestiary.md | Bestiary → generated mobs.json → level-ranged spawn tables per act | todo |
+| C02 | CHUNK_C02_act_quests.md | All ~45 act quests from docs/quests/act*.md loaded + rewards/items | DONE |
+| C03 | CHUNK_C03_bestiary.md | Bestiary → generated mobs.json → level-ranged spawn tables per act | DONE |
 | C04 | CHUNK_C04_pois.md | POI placement + discovery XP + named subzones on the map | todo |
 | C05 | CHUNK_C05_world_scale.md | Bigger per-act maps matching POI coordinate space; road between inn and POIs | todo |
 | C06 | CHUNK_C06_mounts.md | Level-40 Dire-Wolf mount questline + riding (speed buff + client model) | todo |

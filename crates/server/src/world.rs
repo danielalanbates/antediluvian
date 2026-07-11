@@ -121,6 +121,22 @@ pub const ITEMS: &[ItemDef] = &[
     ItemDef { id: "oak_staff",    slot: "weapon", melee: 0,  spell: 5, hp: 0 },
     ItemDef { id: "bronze_sword", slot: "weapon", melee: 8,  spell: 0, hp: 0 },
     ItemDef { id: "hide_vest",    slot: "chest",  melee: 0,  spell: 0, hp: 30 },
+    // Quest rewards (C02), scaled against the act they come from.
+    ItemDef { id: "spark_woven_cloak",     slot: "back",   melee: 0,  spell: 3,  hp: 10 },
+    ItemDef { id: "bronze_bracers",        slot: "wrist",  melee: 2,  spell: 0,  hp: 5 },
+    ItemDef { id: "amulet_of_the_unbound", slot: "neck",   melee: 0,  spell: 5,  hp: 0 },
+    ItemDef { id: "astrologers_staff",     slot: "weapon", melee: 0,  spell: 12, hp: 0 },
+    ItemDef { id: "iron_greaves",          slot: "legs",   melee: 0,  spell: 0,  hp: 20 },
+    ItemDef { id: "ring_of_the_dreamer",   slot: "finger", melee: 3,  spell: 3,  hp: 0 },
+    ItemDef { id: "giant_bone_crusher",    slot: "weapon", melee: 14, spell: 0,  hp: 0 },
+    ItemDef { id: "lamechs_helm",          slot: "head",   melee: 0,  spell: 0,  hp: 25 },
+    ItemDef { id: "enchanted_bronze_blade", slot: "weapon", melee: 11, spell: 4, hp: 0 },
+    ItemDef { id: "covenant_signet",       slot: "finger", melee: 5,  spell: 5,  hp: 10 },
+];
+
+/// Consumable quest rewards handled by `use_item` (not equipment).
+pub const CONSUMABLES: &[&str] = &[
+    "bread", "fruit", "golden_apple", "energy_drink", "bitter_bread", "healing_potion",
 ];
 
 pub fn item_def(id: &str) -> Option<&'static ItemDef> {
@@ -299,23 +315,54 @@ impl World {
     /// Seed a zone with enemies, wildlife and resource nodes. Counts vary by act
     /// so the later, more dangerous acts feel different.
     fn populate_zone(&mut self, zone: &mut Zone) {
-        let (n_enemies, enemy_tag, wildlife_tag) = match zone.act {
-            Act::Eden => (6, "serpent", "deer"),
-            Act::Hermon => (10, "watcher", "goat"),
-            Act::Nephilim => (14, "giant", "boar"),
-            Act::Enoch => (12, "shade", "dog"),
-            Act::Flood => (18, "leviathan", "fox"),
+        let (enemy_tag, wildlife_tag) = match zone.act {
+            Act::Eden => ("serpent", "deer"),
+            Act::Hermon => ("watcher", "goat"),
+            Act::Nephilim => ("giant", "boar"),
+            Act::Enoch => ("shade", "dog"),
+            Act::Flood => ("leviathan", "fox"),
         };
         let act = zone.act;
-        for _ in 0..n_enemies {
-            let pos = self.rng.point(WORLD_BOUNDS * 0.9);
-            let id = self.alloc_id();
-            zone.entities.insert(id, make_enemy(id, pos, enemy_tag, act));
+        for (tag, n) in act_spawn_table(act) {
+            for _ in 0..*n {
+                let pos = self.rng.point(WORLD_BOUNDS * 0.9);
+                let id = self.alloc_id();
+                zone.entities.insert(id, make_enemy(id, pos, tag, act));
+            }
         }
         for _ in 0..8 {
             let pos = self.rng.point(WORLD_BOUNDS * 0.9);
             let id = self.alloc_id();
             zone.entities.insert(id, make_wildlife(id, pos, wildlife_tag));
+        }
+        // Bestiary species (C03): a dozen level-appropriate mobs from the
+        // act's habitat. Hostile temperaments spawn as enemies, docile and
+        // skittish ones as neutral wildlife.
+        let species = crate::mobs::species_for_act(act);
+        if !species.is_empty() {
+            for _ in 0..12 {
+                let def = species[(self.rng.range(0.0, species.len() as f32) as usize).min(species.len() - 1)];
+                // Keep the (often higher-level) bestiary fauna out of the
+                // starting inn area so fresh characters aren't ganked.
+                let pos = loop {
+                    let p = self.rng.point(WORLD_BOUNDS * 0.9);
+                    if p.distance(zone.entry) > 700.0 {
+                        break p;
+                    }
+                };
+                let id = self.alloc_id();
+                if def.hostile() {
+                    zone.entities.insert(id, make_enemy(id, pos, &def.tag, act));
+                } else {
+                    let lvl = def.mid_level() as i32;
+                    let mut e = make_wildlife(id, pos, &def.tag);
+                    e.name = Some(def.name.clone());
+                    e.max_health = 15 + lvl * 4;
+                    e.health = e.max_health;
+                    e.xp_value = (5 + lvl) as u32;
+                    zone.entities.insert(id, e);
+                }
+            }
         }
         for _ in 0..14 {
             let pos = self.rng.point(WORLD_BOUNDS * 0.9);
@@ -323,12 +370,14 @@ impl World {
             let tag = if self.rng.range(0.0, 1.0) < 0.6 { "tree" } else { "rock" };
             zone.entities.insert(id, make_resource(id, pos, tag));
         }
-        // The act's quest givers, by the inn: the Elder (main quests) and a
-        // Wanderer (side quests) a short walk away.
+        // The act's quest givers: the Elder at the inn, a Wanderer at the
+        // crossroads, and a Seer further afield (see quests.rs giver mapping).
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(90.0, 0.0), "Elder"));
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(260.0, -170.0), "Seer"));
         // One elite "alpha" per act — the dungeon-boss placeholder. Guaranteed
         // rare drop (thick_hide) and big XP.
         let pos = self.rng.point(WORLD_BOUNDS * 0.7);
@@ -778,7 +827,18 @@ impl World {
             let (reward_item, xp) = match kind {
                 EntityKind::Enemy => {
                     let tag = etag.as_deref().unwrap_or("serpent");
-                    if let Some(base) = tag.strip_suffix("_alpha") {
+                    // Bestiary species (incl. names that happen to end in
+                    // "_alpha") respawn as themselves and drop bestiary loot.
+                    if let Some(def) = crate::mobs::mob_by_tag(tag) {
+                        zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+                        let reward = if def.drops.is_empty() {
+                            format!("{tag}_trophy")
+                        } else {
+                            let i = rng.range(0.0, def.drops.len() as f32) as usize;
+                            def.drops[i.min(def.drops.len() - 1)].clone()
+                        };
+                        (reward, xp_value)
+                    } else if let Some(base) = tag.strip_suffix("_alpha") {
                         // The act boss respawns as a boss and drops a rare.
                         let mut boss = make_enemy(nid, pos, base, act);
                         boss.tag = Some(tag.to_string());
@@ -822,46 +882,6 @@ impl World {
                                 EntityKind::Enemy => {
                                     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
                                     s.gold += 2 + tier * 2;
-                                    // Advance every active quest this kill satisfies:
-                                    // kill objectives tick progress, collect objectives
-                                    // loot the quest item (100% while active).
-                                    let active: Vec<String> = s.quests.keys().cloned().collect();
-                                    for qid in active {
-                                        let Some(def) = quest(&qid) else { continue };
-                                        match def.objective {
-                                            Objective::Kill { target, count } => {
-                                                let hits = etag
-                                                    .as_deref()
-                                                    .map(|t| t.starts_with(target))
-                                                    .unwrap_or(false);
-                                                if !hits { continue }
-                                                let prog = s.quests.get_mut(&qid).unwrap();
-                                                if *prog < count {
-                                                    *prog += 1;
-                                                    events.push(SimEvent::Info {
-                                                        owner: o,
-                                                        text: format!("Quest: {} — {}/{}", qid, prog, count),
-                                                    });
-                                                }
-                                            }
-                                            Objective::Collect { item, count, source } => {
-                                                let hits = etag
-                                                    .as_deref()
-                                                    .map(|t| t.starts_with(source))
-                                                    .unwrap_or(false);
-                                                if !hits { continue }
-                                                let have = s.inventory.iter().filter(|i| i.as_str() == item).count() as u32;
-                                                if have < count && s.inventory.len() < 40 {
-                                                    s.inventory.push(item.to_string());
-                                                    s.quests.insert(qid.clone(), have + 1);
-                                                    events.push(SimEvent::Info {
-                                                        owner: o,
-                                                        text: format!("Quest: {} — {}/{} {}", qid, have + 1, count, item),
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
                                 }
                                 // Harvesting levels the matching profession.
                                 EntityKind::Resource => {
@@ -872,6 +892,42 @@ impl World {
                                     }
                                 }
                                 _ => {}
+                            }
+                            // Advance every active quest this kill/harvest
+                            // satisfies: Kill objectives count enemy kills,
+                            // Collect objectives loot the quest item (100%
+                            // while active) from enemy OR resource sources.
+                            let active: Vec<String> = s.quests.keys().cloned().collect();
+                            for qid in active {
+                                let Some(def) = quest(&qid) else { continue };
+                                match def.objective {
+                                    Objective::Kill { target, count } => {
+                                        let hits = kind == EntityKind::Enemy
+                                            && etag.as_deref().map(|t| t.starts_with(target)).unwrap_or(false);
+                                        if !hits { continue }
+                                        let prog = s.quests.get_mut(&qid).unwrap();
+                                        if *prog < count {
+                                            *prog += 1;
+                                            events.push(SimEvent::Info {
+                                                owner: o,
+                                                text: format!("Quest: {} — {}/{}", qid, prog, count),
+                                            });
+                                        }
+                                    }
+                                    Objective::Collect { item, count, source } => {
+                                        let hits = etag.as_deref().map(|t| t.starts_with(source)).unwrap_or(false);
+                                        if !hits { continue }
+                                        let have = s.inventory.iter().filter(|i| i.as_str() == item).count() as u32;
+                                        if have < count && s.inventory.len() < 40 {
+                                            s.inventory.push(item.to_string());
+                                            s.quests.insert(qid.clone(), have + 1);
+                                            events.push(SimEvent::Info {
+                                                owner: o,
+                                                text: format!("Quest: {} — {}/{} {}", qid, have + 1, count, item),
+                                            });
+                                        }
+                                    }
+                                }
                             }
                             if s.inventory.len() < 40 {
                                 s.inventory.push(reward_item.clone());
@@ -1024,6 +1080,18 @@ impl World {
                 s.inventory.remove(idx);
                 s.wakefulness = (s.wakefulness + 50.0).min(100.0);
                 Ok("You chug the premium energy drink and feel a massive surge of stamina.".into())
+            }
+            "bitter_bread" => {
+                s.inventory.remove(idx);
+                e.health = (e.health + 25).min(e.max_health);
+                s.health = e.health;
+                Ok("You choke down the bitter bread and recover 25 health.".into())
+            }
+            "healing_potion" => {
+                s.inventory.remove(idx);
+                e.health = (e.health + 60).min(e.max_health);
+                s.health = e.health;
+                Ok("You drink the healing potion and recover 60 health.".into())
             }
             _ => Err("You can't use that.".into()),
         }
@@ -1244,8 +1312,55 @@ fn self_next_id(counter: &mut EntityId) -> EntityId {
     id
 }
 
+/// Per-act enemy spawn table: (tag, count). The first entry is the act's
+/// signature mob (its alpha variant is the zone boss); the rest are quest
+/// targets from docs/quests (C02). Object tags spawn as stationary
+/// destructibles via `OBJECT_TAGS`.
+pub fn act_spawn_table(act: Act) -> &'static [(&'static str, usize)] {
+    match act {
+        Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5)],
+        Act::Hermon => &[("watcher", 10), ("cultist", 6), ("chasm_fiend", 8), ("caravan_wagon", 3), ("oathstone", 1), ("stargazer", 1)],
+        Act::Nephilim => &[("giant", 14), ("blood_drinker", 8), ("weapon_cache", 4)],
+        Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8)],
+        Act::Flood => &[("leviathan", 18), ("geyser", 5), ("nephilim_raider", 9), ("drowned_beast", 10), ("scroll_crate", 5)],
+    }
+}
+
+/// Stationary destructible "enemies" (quest objects): they never move,
+/// aggro, or strike back.
+const OBJECT_TAGS: &[&str] = &[
+    "oathstone", "caravan_wagon", "weapon_cache", "furnace_regulator", "geyser", "scroll_crate",
+];
+
 fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as i32;
+    // Bestiary species: stats scale with the entry's level, and the display
+    // name comes from the bestiary for nameplates.
+    if let Some(def) = crate::mobs::mob_by_tag(tag) {
+        let lvl = def.mid_level() as i32;
+        let mut e = make_enemy(id, pos, "__bestiary__", act);
+        e.tag = Some(tag.to_string());
+        e.name = Some(def.name.clone());
+        e.max_health = 30 + lvl * 8;
+        e.health = e.max_health;
+        e.damage = 4 + lvl;
+        e.xp_value = (10 + lvl * 3) as u32;
+        return e;
+    }
+    let is_object = OBJECT_TAGS.contains(&tag);
+    if is_object {
+        let mut e = make_enemy(id, pos, "__object__", act);
+        e.tag = Some(tag.to_string());
+        e.speed = 0.0;
+        e.damage = 0;
+        e.aggro_range = 0.0;
+        e.patrol_radius = 0.0;
+        e.state = AiState::Static;
+        e.max_health = 30 + tier * 10;
+        e.health = e.max_health;
+        e.xp_value = (8 + tier * 4) as u32;
+        return e;
+    }
     let max_health = 40 + tier * 20;
     Entity {
         id,
@@ -1667,6 +1782,8 @@ mod tests {
         let mut sheet = new_character("Hunter");
         sheet.x = epos.x - 12.0;
         sheet.y = epos.y;
+        sheet.max_health = 100_000;
+        sheet.health = 100_000;
         sheet.quests.insert("serpents_in_the_garden".into(), 0);
         let pid = w.spawn_player(9, sheet);
         for _ in 0..300 {
@@ -1680,19 +1797,21 @@ mod tests {
         assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
     }
 
-    /// Kill one serpent with the given quest state pre-seeded; returns the sheet.
-    fn kill_one_serpent(w: &mut World, seed_quests: &[(&str, u32)]) -> CharacterSheet {
+    /// Kill one Eden mob of the given tag with quest state pre-seeded.
+    fn kill_one_tagged(w: &mut World, tag: &str, seed_quests: &[(&str, u32)]) -> CharacterSheet {
         let (eid, epos) = {
             let e = w.zones[&Act::Eden]
                 .entities
                 .values()
-                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some("serpent"))
+                .find(|e| e.kind == EntityKind::Enemy && e.tag.as_deref() == Some(tag))
                 .unwrap();
             (e.id, e.pos)
         };
         let mut sheet = new_character("Hunter");
         sheet.x = epos.x - 12.0;
         sheet.y = epos.y;
+        sheet.max_health = 100_000; // isolation: nearby spawns must not gank the test
+        sheet.health = 100_000;
         for (q, p) in seed_quests {
             sheet.quests.insert((*q).into(), *p);
         }
@@ -1711,13 +1830,13 @@ mod tests {
     fn collect_quest_loots_and_consumes_on_turn_in() {
         let mut w = World::new(21);
         // Source kill drops the quest item while the quest is active.
-        let s = kill_one_serpent(&mut w, &[("the_first_forges", 0)]);
+        let s = kill_one_tagged(&mut w, "cainite", &[("the_first_forges", 0)]);
         assert!(s.inventory.iter().any(|i| i == "bronze_ingot"), "quest item looted");
         assert_eq!(s.quests.get("the_first_forges").copied(), Some(1));
 
-        // Turn-in at the Wanderer consumes the six ingots and pays out.
+        // Turn-in at the Seer consumes the six ingots and pays out.
         let mut w = World::new(22);
-        let pid = spawn_at(&mut w, 2, "Collector", -70.0, 110.0);
+        let pid = spawn_at(&mut w, 2, "Collector", 260.0, -170.0);
         {
             let z = w.zones.get_mut(&Act::Eden).unwrap();
             let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
@@ -1739,7 +1858,8 @@ mod tests {
         {
             let z = w.zones.get_mut(&Act::Eden).unwrap();
             let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
-            s.quests_done.push("the_first_forges".into());
+            // Finish the Wanderer's unchained quest so only the chain remains.
+            s.quests_done.push("fruit_of_the_thorns".into());
         }
         // Prerequisite (elder main quest) not done: nothing to offer.
         let t = w.talk(Act::Eden, pid).unwrap();
@@ -1756,12 +1876,59 @@ mod tests {
     #[test]
     fn two_quests_progress_from_one_kill() {
         let mut w = World::new(24);
-        let s = kill_one_serpent(
-            &mut w,
-            &[("serpents_in_the_garden", 0), ("altar_of_the_firstborn", 0)],
-        );
-        assert_eq!(s.quests.get("serpents_in_the_garden").copied(), Some(1));
+        // One cainite kill advances a Kill quest and a Collect quest together.
+        let s = kill_one_tagged(&mut w, "cainite", &[("altar_of_the_firstborn", 0), ("the_first_forges", 0)]);
         assert_eq!(s.quests.get("altar_of_the_firstborn").copied(), Some(1));
+        assert_eq!(s.quests.get("the_first_forges").copied(), Some(1));
+        assert!(s.inventory.iter().any(|i| i == "bronze_ingot"));
+    }
+
+    #[test]
+    fn bestiary_mobs_spawn_and_drop_their_loot() {
+        let mut w = World::new(31);
+        // Zones contain bestiary-tagged entities (hostile and/or docile).
+        let z = &w.zones[&Act::Eden];
+        let bestiary: Vec<_> = z
+            .entities
+            .values()
+            .filter(|e| e.tag.as_deref().and_then(crate::mobs::mob_by_tag).is_some())
+            .collect();
+        assert!(bestiary.len() >= 6, "expected bestiary spawns, got {}", bestiary.len());
+        assert!(bestiary.iter().all(|e| e.name.is_some()), "bestiary mobs carry names");
+
+        // Kill a hostile bestiary mob: the loot comes from its drop list.
+        let (eid, epos, tag) = {
+            let e = w.zones[&Act::Eden]
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy
+                    && e.tag.as_deref().and_then(crate::mobs::mob_by_tag).is_some())
+                .expect("a hostile bestiary mob spawned in Eden");
+            (e.id, e.pos, e.tag.clone().unwrap())
+        };
+        let def = crate::mobs::mob_by_tag(&tag).unwrap();
+        let mut sheet = new_character("Tracker");
+        sheet.x = epos.x - 12.0;
+        sheet.y = epos.y;
+        sheet.max_health = 100_000;
+        sheet.health = 100_000;
+        let pid = w.spawn_player(9, sheet);
+        for _ in 0..2000 {
+            w.queue_attack(Act::Eden, pid);
+            w.step();
+            if !w.zones[&Act::Eden].entities.contains_key(&eid) {
+                break;
+            }
+        }
+        assert!(
+            !w.zones[&Act::Eden].entities.contains_key(&eid),
+            "mob should die within the step budget"
+        );
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(
+            s.inventory.iter().any(|i| def.drops.contains(i)),
+            "inventory {:?} should contain one of {:?}", s.inventory, def.drops
+        );
     }
 
     #[test]
@@ -1802,7 +1969,10 @@ mod tests {
             let boss = z
                 .entities
                 .values()
-                .find(|e| e.tag.as_deref().map(|t| t.ends_with("_alpha")) == Some(true))
+                .find(|e| {
+                    e.tag.as_deref().map(|t| t.ends_with("_alpha")) == Some(true)
+                        && e.tag.as_deref().and_then(crate::mobs::mob_by_tag).is_none()
+                })
                 .expect("act boss");
             assert!(boss.max_health >= 160, "boss should be elite");
         }

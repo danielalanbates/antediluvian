@@ -40,6 +40,12 @@ pub struct PlayerNameText;
 #[derive(Component)]
 pub struct PlayerLevelText;
 #[derive(Component)]
+pub struct TargetFrameRoot;
+#[derive(Component)]
+pub struct TargetNameText;
+#[derive(Component)]
+pub struct TargetHpText;
+#[derive(Component)]
 pub struct HpFill;
 #[derive(Component)]
 pub struct HpText;
@@ -110,9 +116,45 @@ impl Cooldowns {
 /// Build the entire HUD hierarchy.  Called once from `setup`.
 pub fn spawn_ui(commands: &mut Commands) {
     spawn_player_frame(commands);
+    spawn_target_frame(commands);
     spawn_action_bar(commands);
     spawn_quest_tracker(commands);
     spawn_chat(commands);
+}
+
+// ── Target frame (below the player frame): nearest hostile in range ─────────
+
+fn spawn_target_frame(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(132.0),
+                left: Val::Px(14.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(8.0)),
+                row_gap: Val::Px(3.0),
+                min_width: Val::Px(220.0),
+                ..default()
+            },
+            Visibility::Hidden,
+            TargetFrameRoot,
+        ))
+        .insert(BackgroundColor(PANEL))
+        .with_children(|frame| {
+            frame.spawn((
+                Text::new(""),
+                TextFont { font_size: FONT_STAT, ..default() },
+                TextColor(GOLD_ACCENT),
+                TargetNameText,
+            ));
+            frame.spawn((
+                Text::new(""),
+                TextFont { font_size: FONT_LABEL, ..default() },
+                TextColor(TEXT_COLOR),
+                TargetHpText,
+            ));
+        });
 }
 
 // ── Player unit frame (top-left) ─────────────────────────────────────────────
@@ -607,4 +649,28 @@ fn prettify_ability(raw: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Fill the target frame from `Session.target`; hide it when nothing is near.
+pub fn update_target_frame(
+    session: Res<Session>,
+    mut q_root: Query<&mut Visibility, With<TargetFrameRoot>>,
+    mut q_name: Query<&mut Text, (With<TargetNameText>, Without<TargetHpText>)>,
+    mut q_hp: Query<&mut Text, (With<TargetHpText>, Without<TargetNameText>)>,
+) {
+    let Ok(mut vis) = q_root.get_single_mut() else { return };
+    match &session.target {
+        Some((name, hp, max)) => {
+            *vis = Visibility::Visible;
+            if let Ok(mut t) = q_name.get_single_mut() {
+                **t = name.clone();
+            }
+            if let Ok(mut t) = q_hp.get_single_mut() {
+                **t = format!("{} / {}", hp.max(&0), max);
+            }
+        }
+        None => {
+            *vis = Visibility::Hidden;
+        }
+    }
 }

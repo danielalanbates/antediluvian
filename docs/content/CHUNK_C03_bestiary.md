@@ -1,6 +1,6 @@
 # CHUNK C03 — Bestiary integration (2,500 mobs)
 
-**Status: todo**
+**Status: DONE (2026-07-10)**
 
 ## Goal
 The five acts spawn mobs drawn from the 2,500-entry bestiary instead of the

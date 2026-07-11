@@ -1,6 +1,6 @@
 # CHUNK C02 — Full act quest database
 
-**Status: todo** (requires C01)
+**Status: DONE (2026-07-10)**
 
 ## Goal
 Load all ~45 quests from `docs/quests/act1..act5.md` into the C01 engine,

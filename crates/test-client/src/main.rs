@@ -34,10 +34,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut my_pos = (0.0f32, 0.0f32);
     let mut frames = 0u64;
 
-    // Quest E2E mode (ANTEDILUVIA_QUEST=1): talk to the Elder at (90,0) to
-    // accept the act quest, hunt until the "5/5" progress notice, walk back,
-    // turn in, print QUEST-E2E-OK and exit.
+    // Quest E2E mode (ANTEDILUVIA_QUEST=1): walk the Eden main quest chain
+    // end-to-end — (giver position, mob tag to hunt, "n/n" done marker).
+    // Prints QUEST-E2E-OK after every chain step turn-in.
     let quest_mode = std::env::var("ANTEDILUVIA_QUEST").is_ok();
+    const CHAIN: &[((f32, f32), &str, &str)] = &[
+        ((90.0, 0.0), "serpent", "5/5"),      // serpents_in_the_garden (elder)
+        ((-70.0, 110.0), "cainite", "8/8"),   // altar_of_the_firstborn (wanderer)
+        ((90.0, 0.0), "ember_wisp", "5/5"),   // the_flaming_sword (elder, collect)
+    ];
+    let mut chain_i = 0usize;
     let mut quest_ready = false;
     let mut talked = false;
     let mut last_talk_frame = 0u64;
@@ -64,16 +70,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ServerMsg::Notice { text } => {
                 println!("[notice] {text}");
-                if quest_mode {
+                if quest_mode && chain_i < CHAIN.len() {
                     if text.contains("(0/") {
                         talked = true; // quest accepted
                     }
-                    if text.contains("5/5") {
+                    if text.contains(CHAIN[chain_i].2) {
                         quest_ready = true;
                     }
                     if text.contains("It is done") {
-                        println!("QUEST-E2E-OK");
-                        break;
+                        println!("QUEST-E2E-OK step {}", chain_i + 1);
+                        chain_i += 1;
+                        talked = false;
+                        quest_ready = false;
+                        if chain_i == CHAIN.len() {
+                            println!("CHAIN-E2E-OK");
+                            break;
+                        }
                     }
                 }
             }
@@ -114,10 +126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
 
-                // Quest mode: first walk to the Elder and accept; once the
+                // Quest mode: first walk to the giver and accept; once the
                 // objective is complete, walk back and turn in.
                 if quest_mode && (!talked || quest_ready) {
-                    let (dx, dy) = (90.0 - my_pos.0, 0.0 - my_pos.1);
+                    let giver = CHAIN[chain_i.min(CHAIN.len() - 1)].0;
+                    let (dx, dy) = (giver.0 - my_pos.0, giver.1 - my_pos.1);
                     if dx.hypot(dy) > 80.0 {
                         write.send(Message::Text(send(&ClientMsg::Move { dx, dy }).into())).await?;
                     } else if frames.saturating_sub(last_talk_frame) >= 20 {
@@ -125,14 +138,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         write.send(Message::Text(send(&ClientMsg::Talk).into())).await?;
                         last_talk_frame = frames;
                     }
-                    if frames >= 4000 {
+                    if frames >= 12000 {
                         println!("QUEST-E2E-TIMEOUT");
                         break;
                     }
                     continue;
                 }
 
-                // Drive toward + attack the nearest enemy.
+                // Drive toward + attack the nearest enemy (in quest mode,
+                // only mobs matching the current objective).
+                let nearest_enemy = if quest_mode {
+                    let want = CHAIN[chain_i.min(CHAIN.len() - 1)].1;
+                    entities
+                        .iter()
+                        .filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
+                        .filter(|e| e.tag.as_deref().map(|t| t.starts_with(want)).unwrap_or(false))
+                        .min_by(|a, b| {
+                            let da = (a.x - my_pos.0).hypot(a.y - my_pos.1);
+                            let db = (b.x - my_pos.0).hypot(b.y - my_pos.1);
+                            da.partial_cmp(&db).unwrap()
+                        })
+                } else {
+                    nearest_enemy
+                };
                 if let Some(en) = nearest_enemy {
                     let (dx, dy) = (en.x - my_pos.0, en.y - my_pos.1);
                     let dist = dx.hypot(dy);
@@ -147,11 +175,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Bot runs for a bounded number of frames then leaves cleanly.
-                if quest_mode && frames >= 4000 {
+                if quest_mode && frames >= 12000 {
                     println!("QUEST-E2E-TIMEOUT");
                     break;
                 }
-                if !quest_mode && frames >= 400 {
+                let frame_cap: u64 = std::env::var("ANTEDILUVIA_FRAMES")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(400);
+                if !quest_mode && frames >= frame_cap {
                     println!("test run complete ({frames} frames); disconnecting");
                     break;
                 }

@@ -29,7 +29,7 @@ use antediluvia_protocol::{
     Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
 };
 use terrain::{build_terrain_mesh, terrain_height};
-use ui::{spawn_ui, update_ui_frames, update_ui_panels, Cooldowns};
+use ui::{spawn_ui, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::keyboard::KeyboardInput;
@@ -108,6 +108,7 @@ fn main() {
                 update_vfx,
                 pulse_inn_ring,
                 update_ui_frames,
+                update_target_frame,
                 update_ui_panels,
                 update_atmosphere,
                 apply_loadouts,
@@ -209,6 +210,8 @@ pub struct Session {
     pub chat_active: bool,
     /// 0.0 to 1.0 time of day (driven by server).
     pub time_of_day: f32,
+    /// Nearest hostile within engage range: (display name, hp, max hp).
+    pub target: Option<(String, i32, i32)>,
 }
 
 impl Default for Session {
@@ -223,6 +226,7 @@ impl Default for Session {
             chat_input: String::new(),
             chat_active: false,
             time_of_day: 0.5,
+            target: None,
         }
     }
 }
@@ -290,11 +294,22 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
             // predators (Fox/ShibaInu/Wolf): Attack=0 Death=1 Gallop=3 Idle=5
             const HERB: [usize; 4] = [6, 4, 0, 2]; // idle, run, attack, death
             const PRED: [usize; 4] = [5, 3, 0, 1];
-            match e.tag.as_deref() {
-                Some("goat") => ("models/wildlife/Alpaca.gltf", HERB, 22.0),
-                Some("boar") => ("models/wildlife/Bull.gltf", HERB, 26.0),
-                Some("dog") => ("models/wildlife/ShibaInu.gltf", PRED, 20.0),
-                Some("fox") => ("models/wildlife/Fox.gltf", PRED, 20.0),
+            let tag = e.tag.as_deref().unwrap_or("");
+            match tag {
+                "goat" => ("models/wildlife/Alpaca.gltf", HERB, 22.0),
+                "boar" => ("models/wildlife/Bull.gltf", HERB, 26.0),
+                "dog" => ("models/wildlife/ShibaInu.gltf", PRED, 20.0),
+                "fox" => ("models/wildlife/Fox.gltf", PRED, 20.0),
+                "deer" => ("models/wildlife/Deer.gltf", HERB, 24.0),
+                // Bestiary species (C03): crude keyword → model mapping.
+                t if ["wolf", "hound", "jackal"].iter().any(|k| t.contains(k)) =>
+                    ("models/wildlife/Wolf.gltf", PRED, 22.0),
+                t if ["cat", "smilodon", "panther", "lion"].iter().any(|k| t.contains(k)) =>
+                    ("models/wildlife/Fox.gltf", PRED, 24.0),
+                t if ["bear", "mammoth", "mastodon", "behemoth", "bison", "auroch", "bull"].iter().any(|k| t.contains(k)) =>
+                    ("models/wildlife/Bull.gltf", HERB, 30.0),
+                t if ["goat", "ibex", "alpaca", "camel"].iter().any(|k| t.contains(k)) =>
+                    ("models/wildlife/Alpaca.gltf", HERB, 22.0),
                 _ => ("models/wildlife/Deer.gltf", HERB, 24.0),
             }
         }
@@ -639,6 +654,20 @@ fn spawn_visual(
     Mirrored { root, model, bar_fill, dying_until: 0.0 }
 }
 
+/// "chasm_fiend" → "Chasm Fiend" for the target frame.
+fn prettify_tag(tag: &str) -> String {
+    tag.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Push a line into the rolling chat log, keeping at most 24 entries.
 fn push_chat(session: &mut Session, line: String) {
     if session.chat_log.len() >= 24 {
@@ -723,6 +752,25 @@ fn receive_from_server(
 
     if let Some(entities) = latest {
         let my_id = session.my_id;
+        // Target frame: nearest living enemy within engage range.
+        let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
+        session.target = me_pos.and_then(|(mx, my)| {
+            entities
+                .iter()
+                .filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
+                .map(|e| {
+                    let d = (e.x - mx).hypot(e.y - my);
+                    (d, e)
+                })
+                .filter(|(d, _)| *d <= 420.0)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, e)| {
+                    let label = e.name.clone().unwrap_or_else(|| {
+                        prettify_tag(e.tag.as_deref().unwrap_or("Creature"))
+                    });
+                    (label, e.health, e.max_health)
+                })
+        });
         let mut seen: HashSet<u64> = HashSet::with_capacity(entities.len());
         for e in &entities {
             seen.insert(e.id);
