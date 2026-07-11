@@ -215,6 +215,8 @@ pub struct Session {
     pub time_of_day: f32,
     /// Nearest hostile within engage range: (display name, hp, max hp).
     pub target: Option<(String, i32, i32)>,
+    /// Entity id of the current target (for targeted actions like Tame).
+    pub target_id: Option<u64>,
     /// Big centered announcement (text, seconds remaining).
     pub banner: Option<(String, f32)>,
 }
@@ -232,6 +234,7 @@ impl Default for Session {
             chat_active: false,
             time_of_day: 0.5,
             target: None,
+            target_id: None,
             banner: None,
         }
     }
@@ -799,7 +802,7 @@ fn receive_from_server(
         let my_id = session.my_id;
         // Target frame: nearest living enemy within engage range.
         let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
-        session.target = me_pos.and_then(|(mx, my)| {
+        let nearest = me_pos.and_then(|(mx, my)| {
             entities
                 .iter()
                 .filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
@@ -809,12 +812,14 @@ fn receive_from_server(
                 })
                 .filter(|(d, _)| *d <= 420.0)
                 .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, e)| {
-                    let label = e.name.clone().unwrap_or_else(|| {
-                        prettify_tag(e.tag.as_deref().unwrap_or("Creature"))
-                    });
-                    (label, e.health, e.max_health)
-                })
+                .map(|(_, e)| e)
+        });
+        session.target_id = nearest.map(|e| e.id);
+        session.target = nearest.map(|e| {
+            let label = e.name.clone().unwrap_or_else(|| {
+                prettify_tag(e.tag.as_deref().unwrap_or("Creature"))
+            });
+            (label, e.health, e.max_health)
         });
         let mut seen: HashSet<u64> = HashSet::with_capacity(entities.len());
         let mut map_updates: Vec<(u64, Option<Entity>)> = Vec::new();
@@ -845,12 +850,23 @@ fn receive_from_server(
                     // Mount model appears/disappears with the flag (C06).
                     match (e.mounted, m.mount_model) {
                         (true, None) => {
+                            // Species-appropriate model (C07 keyword map).
+                            let sp = e.mount_species.as_deref().unwrap_or("wolf");
+                            let (path, scale) = if ["bear", "mammoth", "mastodon", "behemoth", "ox", "auroch", "bull", "bison"]
+                                .iter().any(|k| sp.contains(k))
+                            {
+                                ("models/wildlife/Bull.gltf", 32.0)
+                            } else if ["cat", "smilodon", "panther", "lion", "fox"].iter().any(|k| sp.contains(k)) {
+                                ("models/wildlife/Fox.gltf", 30.0)
+                            } else {
+                                ("models/wildlife/Wolf.gltf", 26.0)
+                            };
                             let wolf = commands
                                 .spawn((
                                     SceneRoot(asset_server.load(
-                                        GltfAssetLabel::Scene(0).from_asset("models/wildlife/Wolf.gltf"),
+                                        GltfAssetLabel::Scene(0).from_asset(path.to_string()),
                                     )),
-                                    Transform::from_scale(Vec3::splat(26.0))
+                                    Transform::from_scale(Vec3::splat(scale))
                                         .with_rotation(Quat::from_rotation_y(-e.rot + std::f32::consts::FRAC_PI_2)),
                                 ))
                                 .id();
@@ -964,6 +980,13 @@ fn send_input(
     }
     if keys.just_pressed(KeyCode::KeyM) {
         tx.send(ClientMsg::Mount);
+    }
+    // Tame the current target (C07): needs a lasso and a weakened tameable
+    // beast; the server enforces all the gates and replies with a notice.
+    if keys.just_pressed(KeyCode::KeyT) {
+        if let Some(target) = session.target_id {
+            tx.send(ClientMsg::Tame { target });
+        }
     }
     if let Some(class) = session.class {
         let [a, b] = class_abilities(class);

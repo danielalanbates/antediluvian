@@ -395,6 +395,27 @@ fn handle_client_msg(
                 Ok(text) | Err(text) => notice(conns, id, text),
             }
         }
+        ClientMsg::Tame { target } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.tame(act, ent, target) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Stable { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.stable_mount(act, ent, &item, true) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Unstable { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.stable_mount(act, ent, &item, false) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
         ClientMsg::Craft { recipe } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.craft(act, ent, &recipe) {

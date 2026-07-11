@@ -45,6 +45,8 @@ struct SheetExt {
     last_logout: Option<u64>,
     #[serde(default)]
     discovered: Vec<String>,
+    #[serde(default)]
+    stable: Vec<String>,
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -162,6 +164,7 @@ impl Db {
                         wakefulness: ext.wakefulness,
                         last_logout: ext.last_logout,
                         discovered: ext.discovered,
+                        stable: ext.stable,
                     })
                 },
             )
@@ -206,6 +209,7 @@ impl Db {
             wakefulness: c.wakefulness,
             last_logout: c.last_logout,
             discovered: c.discovered.clone(),
+            stable: c.stable.clone(),
         })?;
         self.conn.execute(
             "INSERT INTO accounts

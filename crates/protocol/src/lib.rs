@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -130,6 +130,9 @@ pub struct EntityState {
     /// Riding a mount (players; C06).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mounted: bool,
+    /// Species tag of the ridden mount, e.g. "starving_smilodon" (C07).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_species: Option<String>,
 }
 
 /// The persistent, player-owned character sheet.
@@ -179,6 +182,9 @@ pub struct CharacterSheet {
     /// POI names this character has discovered (C04).
     #[serde(default)]
     pub discovered: Vec<String>,
+    /// Mount items parked at the inn stable (C07).
+    #[serde(default)]
+    pub stable: Vec<String>,
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,
@@ -231,8 +237,14 @@ pub enum ClientMsg {
     Equip { item: String },
     /// Talk to the nearest NPC (quest givers): offers, progress, or turn-in.
     Talk,
-    /// Toggle riding the Dire-Wolf mount (requires the horn item; C06).
+    /// Toggle riding the active mount (C06/C07).
     Mount,
+    /// Attempt to tame a weakened tameable beast with a lasso (C07).
+    Tame { target: EntityId },
+    /// Move a mount item from inventory into the inn stable (C07).
+    Stable { item: String },
+    /// Take a mount item back out of the stable (C07).
+    Unstable { item: String },
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.

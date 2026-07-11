@@ -1,6 +1,6 @@
 # CHUNK C07 — Creature Mastery taming sandbox
 
-**Status: todo** (requires C03 + C06)
+**Status: done** (requires C03 + C06)
 
 ## Goal
 Any bestiary mob flagged `Tameable: Yes` can be tamed with the
