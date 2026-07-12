@@ -23,20 +23,25 @@ pub async fn handle_connection(id: u64, stream: TcpStream, game: mpsc::Unbounded
     let (mut write, mut read) = ws.split();
 
     // Channel the game loop uses to push messages to this client.
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<crate::Out>();
     if game.send(GameCmd::Connect { id, out: out_tx }).is_err() {
         return;
     }
 
     // Writer task: serialize ServerMsgs to the socket.
     let writer = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            let txt = match serde_json::to_string(&msg) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("serialize ServerMsg: {e}");
-                    continue;
-                }
+        while let Some(out) = out_rx.recv().await {
+            let txt = match out {
+                crate::Out::Msg(msg) => match serde_json::to_string(&msg) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!("serialize ServerMsg: {e}");
+                        continue;
+                    }
+                },
+                // Pre-assembled frame (C15): snapshots are serialized once
+                // per zone tick and shared across every receiving client.
+                crate::Out::Raw(t) => t,
             };
             if write.send(Message::Text(txt.into())).await.is_err() {
                 break;

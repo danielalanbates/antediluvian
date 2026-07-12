@@ -25,14 +25,21 @@ use world::{new_character, World, SimEvent, TICK_HZ};
 
 /// Commands funneled from connection tasks into the single game loop.
 pub enum GameCmd {
-    Connect { id: u64, out: mpsc::UnboundedSender<ServerMsg> },
+    Connect { id: u64, out: mpsc::UnboundedSender<Out> },
     Client { id: u64, msg: ClientMsg },
     Disconnect { id: u64 },
 }
 
 /// Game-loop-side record of a connected client.
+/// Message to a client's writer task: typed (serialized per-client) or a
+/// pre-assembled JSON frame shared across clients (C15 snapshots).
+pub enum Out {
+    Msg(ServerMsg),
+    Raw(String),
+}
+
 struct Conn {
-    out: mpsc::UnboundedSender<ServerMsg>,
+    out: mpsc::UnboundedSender<Out>,
     name: Option<String>,
     entity: Option<EntityId>,
     act: Act,
@@ -41,6 +48,8 @@ struct Conn {
     guild: Option<String>,
     /// Account is on the dev allowlist (C14).
     is_dev: bool,
+    /// Snapshot area-of-interest radius (C15) — bots shrink theirs.
+    aoi: f32,
     /// Conn id of a player who challenged us to a duel.
     pending_duel: Option<u64>,
     /// Guild we've been invited to.
@@ -49,7 +58,10 @@ struct Conn {
 
 impl Conn {
     fn send(&self, msg: ServerMsg) {
-        let _ = self.out.send(msg);
+        let _ = self.out.send(Out::Msg(msg));
+    }
+    fn send_raw(&self, frame: String) {
+        let _ = self.out.send(Out::Raw(frame));
     }
 }
 
@@ -102,15 +114,35 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     let mut tick = tokio::time::interval(Duration::from_millis(1000 / TICK_HZ));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ticks: u64 = 0;
+    let mut tick_accum = Duration::ZERO;
+    let mut tick_max = Duration::ZERO;
     let mut seed_round: u64 = 0;
     seed_auctions(&db, &mut seed_round);
 
     loop {
         tokio::select! {
             _ = tick.tick() => {
+                let t0 = std::time::Instant::now();
                 let events = world.step();
                 dispatch_events(&mut world, &conns, events);
-                broadcast_snapshots(&world, &conns);
+                // Snapshots at 10 Hz (every other sim tick) — C15 budget.
+                if ticks % 2 == 0 {
+                    broadcast_snapshots(&world, &conns);
+                }
+                let spent = t0.elapsed();
+                tick_accum += spent;
+                tick_max = tick_max.max(spent);
+                if spent.as_millis() > 45 {
+                    tracing::warn!("slow tick: {:?} ({} conns)", spent, conns.len());
+                }
+                if ticks % (TICK_HZ * 60) == 0 && ticks > 0 {
+                    tracing::info!(
+                        "tick telemetry: avg {:?} max {:?} over 60s ({} conns)",
+                        tick_accum / (TICK_HZ * 60) as u32, tick_max, conns.len()
+                    );
+                    tick_accum = Duration::ZERO;
+                    tick_max = Duration::ZERO;
+                }
                 ticks += 1;
                 // Persist all online characters every ~10s.
                 if ticks % (TICK_HZ * 10) == 0 {
@@ -174,6 +206,7 @@ fn handle_cmd(
                 logged_in: false,
                 guild: None,
                 is_dev: false,
+                aoi: AOI_RADIUS,
                 pending_duel: None,
                 pending_guild_invite: None,
             });
@@ -729,6 +762,11 @@ fn handle_client_msg(
                 c.send(ServerMsg::Auctions { listings });
             }
         }
+        ClientMsg::SetAoi { radius } => {
+            if let Some(c) = conns.get_mut(&id) {
+                c.aoi = radius.clamp(100.0, AOI_RADIUS);
+            }
+        }
         ClientMsg::Ping => {
             if let Some(c) = conns.get(&id) {
                 c.send(ServerMsg::Pong);
@@ -834,16 +872,41 @@ fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
         .time_override
         .unwrap_or((now_secs % 86400) as f32 / 86400.0);
 
+    // C15: serialize every entity ONCE per zone, then assemble each client's
+    // frame from the shared fragments — 1,000 clients no longer cost 1,000
+    // full serde passes over the same entities.
+    let mut per_act: HashMap<Act, (u64, Vec<(antediluvia_protocol::Vec2, String)>)> = HashMap::new();
+    for act in Act::ALL {
+        if !conns.values().any(|c| c.logged_in && c.act == act) {
+            continue;
+        }
+        let (tick, frags) = world.zone_serialized(act);
+        per_act.insert(act, (tick, frags));
+    }
     for c in conns.values() {
         if !c.logged_in {
             continue;
         }
         let Some(ent) = c.entity else { continue };
-        let (tick, entities) = match world.player_pos(c.act, ent) {
-            Some(pos) => world.zone_snapshot_around(c.act, pos, AOI_RADIUS),
-            None => world.zone_snapshot(c.act),
-        };
-        c.send(ServerMsg::Snapshot { act: c.act, tick, time_of_day, entities });
+        let Some((tick, frags)) = per_act.get(&c.act) else { continue };
+        let pos = world.player_pos(c.act, ent).unwrap_or_default();
+        let r2 = c.aoi * c.aoi;
+        let mut frame = format!(
+            "{{\"t\":\"snapshot\",\"act\":\"{}\",\"tick\":{},\"time_of_day\":{},\"entities\":[",
+            c.act.as_str(), tick, time_of_day
+        );
+        let mut first = true;
+        for (p, json) in frags {
+            if p.distance_squared(pos) <= r2 {
+                if !first {
+                    frame.push(',');
+                }
+                first = false;
+                frame.push_str(json);
+            }
+        }
+        frame.push_str("]}");
+        c.send_raw(frame);
     }
 }
 

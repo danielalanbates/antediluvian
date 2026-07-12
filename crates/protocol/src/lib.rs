@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -311,6 +311,10 @@ pub enum ClientMsg {
     /// Developer command (C14) — ignored unless the account is on the
     /// server's dev allowlist.
     Dev { cmd: DevCmd },
+    /// Ask for a smaller snapshot area-of-interest, in world units (C15).
+    /// Headless bots use this to keep 1,000-connection swarms cheap; the
+    /// server clamps to [100, 1400].
+    SetAoi { radius: f32 },
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.

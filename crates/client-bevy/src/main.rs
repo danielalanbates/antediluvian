@@ -309,7 +309,15 @@ struct RenderAssets {
     bar: Handle<Mesh>,
     m_bar_bg: Handle<StandardMaterial>,
     m_bar_hp: Handle<StandardMaterial>,
+    /// C15 crowd LOD: shared capsule impostor for far players.
+    lod_capsule: Handle<Mesh>,
+    m_lod: Handle<StandardMaterial>,
 }
+
+/// Players farther than this from the local player spawn as capsule
+/// impostors with no rig, animation, or nameplate (C15). Chosen at spawn;
+/// AoI churn re-evaluates naturally as entities come and go.
+const RIG_LOD_RADIUS: f32 = 350.0;
 
 /// Height of a character's health bar above the ground.
 const BAR_HEIGHT: f32 = 64.0;
@@ -683,6 +691,12 @@ fn setup(
             unlit: true,
             ..default()
         }),
+        lod_capsule: meshes.add(Capsule3d::new(9.0, 30.0)),
+        m_lod: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.5, 0.42),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
     };
     commands.insert_resource(assets);
 
@@ -698,6 +712,7 @@ fn spawn_visual(
     e: &EntityState,
     is_me: bool,
     act: Act,
+    cheap: bool,
 ) -> Mirrored {
     let pos = Vec3::new(e.x, terrain_height(act, e.x, e.y), e.y);
     let rot = Quat::from_rotation_y(-e.rot);
@@ -710,6 +725,21 @@ fn spawn_visual(
         .spawn((Transform::from_translation(pos), Visibility::default(), ServerEnt(e.id)))
         .id();
     match e.kind {
+        // C15 crowd LOD: distant players are one shared capsule, no rig,
+        // no animation graph, no nameplate.
+        EntityKind::Player if cheap => {
+            let mut m = Entity::PLACEHOLDER;
+            commands.entity(root).with_children(|p| {
+                m = p
+                    .spawn((
+                        Mesh3d(assets.lod_capsule.clone()),
+                        MeshMaterial3d(assets.m_lod.clone()),
+                        Transform::from_xyz(0.0, 30.0, 0.0).with_rotation(rot),
+                    ))
+                    .id();
+            });
+            model = Some(m);
+        }
         EntityKind::Player | EntityKind::Enemy | EntityKind::Npc | EntityKind::Wildlife => {
             let (file, [i_idle, i_run, i_attack, i_death], scale) = rig_for(e);
             let clips = RigClips {
@@ -1006,7 +1036,12 @@ fn receive_from_server(
                     }
                 }
                 None => {
-                    let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act);
+                    let cheap = e.kind == EntityKind::Player
+                        && !is_me
+                        && me_pos.map_or(false, |(px, py)| {
+                            Vec2::new(e.x - px, e.y - py).length() > RIG_LOD_RADIUS
+                        });
+                    let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act, cheap);
                     if e.kind == EntityKind::Player {
                         commands
                             .entity(m.root)

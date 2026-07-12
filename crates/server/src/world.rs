@@ -1947,6 +1947,18 @@ impl World {
     /// This is the bandwidth control for the MMO — a client never receives the
     /// whole zone, only what's near it. The player's own entity is always at the
     /// center, so it is always included.
+    /// All entities of a zone serialized once as (pos, JSON fragment) —
+    /// the C15 shared-snapshot path.
+    pub fn zone_serialized(&self, act: Act) -> (u64, Vec<(Vec2, String)>) {
+        let z = &self.zones[&act];
+        let frags = z
+            .entities
+            .values()
+            .map(|e| (e.pos, serde_json::to_string(&e.to_state()).unwrap_or_default()))
+            .collect();
+        (z.tick, frags)
+    }
+
     pub fn zone_snapshot_around(
         &self,
         act: Act,
@@ -3205,6 +3217,24 @@ mod tests {
         assert!(s.inventory.iter().any(|i| i == "bread"));
         assert_eq!(w.gold_minted, 20);
         assert_eq!(w.gold_sunk, bread as u64);
+    }
+
+    /// C15: players never collide — two players can stand on the same spot
+    /// and walking "through" another player causes no displacement.
+    #[test]
+    fn players_walk_through_each_other() {
+        let mut w = World::new(72);
+        let a = spawn_at(&mut w, 1, "PassA", 1000.0, 1000.0);
+        let b = spawn_at(&mut w, 2, "PassB", 1040.0, 1000.0);
+        // March A straight through B's position for 2 seconds.
+        for _ in 0..(TICK_HZ * 2) {
+            w.set_intent(Act::Eden, a, Vec2::new(1.0, 0.0));
+            w.step();
+        }
+        let pa = w.player_pos(Act::Eden, a).unwrap();
+        let pb = w.player_pos(Act::Eden, b).unwrap();
+        assert!(pa.x > 1040.0, "A passed through B's spot (x={})", pa.x);
+        assert_eq!(pb, Vec2::new(1040.0, 1000.0), "B was never displaced");
     }
 
     /// Kill one enemy whose tag starts with `tag` using an existing player.
