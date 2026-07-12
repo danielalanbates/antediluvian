@@ -327,6 +327,8 @@ pub struct Entity {
     pub enrage_timer: f32,
     /// Hits a bear-tier mount still absorbs before the rider is dismounted.
     pub mount_hits_left: u32,
+    /// Dev-menu godmode (C14): immune to all damage. Never persisted.
+    pub godmode: bool,
     /// For a player entity, the owning connection id.
     pub owner: Option<u64>,
     /// For a player, its persistent sheet (kept in sync so we can save it).
@@ -387,6 +389,8 @@ pub struct World {
     /// C11 economy telemetry (since boot, not persisted).
     pub gold_minted: u64,
     pub gold_sunk: u64,
+    /// Dev override of the day clock (C14); None = wall clock.
+    pub time_override: Option<f32>,
     pub zones: HashMap<Act, Zone>,
     next_id: EntityId,
     rng: Rng,
@@ -413,6 +417,7 @@ impl World {
             rng: Rng::new(seed),
             gold_minted: 0,
             gold_sunk: 0,
+            time_override: None,
         };
         for act in Act::ALL {
             let mut zone = Zone {
@@ -607,6 +612,7 @@ impl World {
             rest_accum: 0.0,
             mounted: false,
             combat_timer: 0.0,
+        godmode: false,
             enrage_timer: 0.0,
             mount_hits_left: 0,
             owner: Some(owner),
@@ -1009,6 +1015,9 @@ impl World {
                     t.mounted = false;
                 }
                 t.combat_timer = COMBAT_LOCK_SECS;
+                if t.godmode {
+                    continue; // dev godmode (C14)
+                }
                 t.health -= dmg;
                 if t.health > 0 {
                     events.push(SimEvent::Combat {
@@ -1756,6 +1765,87 @@ impl World {
         Ok(format!("Purchased {item} for {gold}g."))
     }
 
+    // ─── Developer commands (C14) — all callers are is_dev-gated ─────────
+
+    pub fn dev_teleport(&mut self, act: Act, id: EntityId, x: f32, y: f32) -> String {
+        let b = antediluvia_protocol::WORLD_BOUNDS - 10.0;
+        if let Some(e) = self.entity_mut(act, id) {
+            e.pos = Vec2::new(x.clamp(-b, b), y.clamp(-b, b));
+        }
+        format!("[dev] teleported to ({x:.0},{y:.0})")
+    }
+
+    pub fn dev_give(&mut self, act: Act, id: EntityId, item: &str, n: u32) -> String {
+        if let Some(s) = self.sheet_mut(act, id) {
+            let cap = inv_cap(s);
+            for _ in 0..n {
+                if s.inventory.len() >= cap { break; }
+                s.inventory.push(item.to_string());
+            }
+        }
+        format!("[dev] gave {n}x {item}")
+    }
+
+    pub fn dev_set_level(&mut self, act: Act, id: EntityId, level: u32) -> String {
+        if let Some(s) = self.sheet_mut(act, id) {
+            let level = level.clamp(1, 60);
+            s.level = level;
+            s.xp = 0;
+            s.max_xp = 100 * level;
+            s.max_health = 100 + (level as i32 - 1) * 15;
+            s.health = s.max_health;
+            s.max_mana = 50 + (level as i32 - 1) * 8;
+            s.mana = s.max_mana;
+        }
+        format!("[dev] level set to {level}")
+    }
+
+    pub fn dev_heal(&mut self, act: Act, id: EntityId) -> String {
+        if let Some(e) = self.entity_mut(act, id) {
+            if let Some(s) = e.sheet.as_mut() {
+                s.health = s.max_health;
+                s.mana = s.max_mana;
+            }
+            e.health = e.max_health;
+        }
+        "[dev] healed".into()
+    }
+
+    pub fn dev_spawn_mob(&mut self, act: Act, id: EntityId, tag: &str) -> String {
+        let Some(pos) = self.player_pos(act, id) else { return "[dev] no player".into() };
+        let mid = self.alloc_id();
+        if let Some(z) = self.zones.get_mut(&act) {
+            z.entities.insert(mid, make_enemy(mid, pos + Vec2::new(80.0, 0.0), tag, act));
+        }
+        format!("[dev] spawned {tag}")
+    }
+
+    pub fn dev_kill_target(&mut self, act: Act, id: EntityId) -> String {
+        let Some(pos) = self.player_pos(act, id) else { return "[dev] no player".into() };
+        let target = self.zones[&act].entities.values()
+            .filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
+            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+            .map(|e| e.id);
+        match target {
+            Some(t) => {
+                if let Some(e) = self.entity_mut(act, t) {
+                    e.health = 0;
+                }
+                "[dev] target killed".into()
+            }
+            None => "[dev] nothing to kill".into(),
+        }
+    }
+
+    pub fn dev_godmode(&mut self, act: Act, id: EntityId) -> String {
+        if let Some(e) = self.entity_mut(act, id) {
+            e.godmode = !e.godmode;
+            format!("[dev] godmode {}", if e.godmode { "ON" } else { "off" })
+        } else {
+            "[dev] no player".into()
+        }
+    }
+
     /// Toggle the PvP flag; returns the new state.
     pub fn toggle_pvp(&mut self, act: Act, id: EntityId) -> Option<bool> {
         let s = self.sheet_mut(act, id)?;
@@ -2017,6 +2107,7 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         rest_accum: 0.0,
         mounted: false,
         combat_timer: 0.0,
+        godmode: false,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2055,6 +2146,7 @@ fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
         rest_accum: 0.0,
         mounted: false,
         combat_timer: 0.0,
+        godmode: false,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2093,6 +2185,7 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         rest_accum: 0.0,
         mounted: false,
         combat_timer: 0.0,
+        godmode: false,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2131,6 +2224,7 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         rest_accum: 0.0,
         mounted: false,
         combat_timer: 0.0,
+        godmode: false,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,

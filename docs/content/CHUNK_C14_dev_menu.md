@@ -1,6 +1,6 @@
 # CHUNK C14 — Developer menu (alpha tooling)
 
-**Status: todo** (Daniel directive 2026-07-11: alpha readiness)
+**Status: DONE (2026-07-11)** — DevCmd enum (teleport/give/level/heal/spawn/kill/god/time) server-gated on allowlist (ANTEDILUVIA_DEV_ACCOUNTS env + dev_accounts.txt), is_dev in Welcome, every command audit-logged (who/what), backquote dev console in client (hidden for non-dev), godmode damage skip, day-clock override; proto v12. Verified: wire E2E (gate+all 8 cmds+world effects) + live console teleport/time screenshot. Note: TravelAny skipped — plain Travel is already ungated.
 
 ## Goal
 Alpha testers with dev rights get an in-game developer menu; everyone else

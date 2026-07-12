@@ -28,7 +28,7 @@ use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
 use audio::{ambient_system, init_audio_assets, one_shot, AudioAssets, Pool};
 use equipment::{apply_loadouts, init_equip_assets, Loadout};
 use antediluvia_protocol::{
-    Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
+    Act, CharacterSheet, Class, ClientMsg, DevCmd, EntityKind, EntityState, EventKind, ServerMsg,
 };
 use terrain::{build_terrain_mesh, terrain_height};
 use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
@@ -107,6 +107,7 @@ fn main() {
                 animate_movement,
                 trigger_attack_anim,
                 builder_screen,
+                dev_console,
             ),
         )
         .add_systems(
@@ -232,6 +233,10 @@ pub struct Session {
     pub apple_id: String,
     /// Character-builder state; `Some` while the create screen is up (C13).
     pub builder: Option<Builder>,
+    /// Account has dev rights (server-advised, C14).
+    pub is_dev: bool,
+    /// Dev console: `Some(input)` while open (backquote toggles).
+    pub dev_input: Option<String>,
 }
 
 /// Character-builder working state (C13).
@@ -272,6 +277,8 @@ impl Default for Session {
             target: None,
             target_id: None,
             apple_id: String::new(),
+            is_dev: false,
+            dev_input: None,
             banner: None,
             builder: None,
         }
@@ -848,7 +855,8 @@ fn receive_from_server(
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
         match msg {
-            ServerMsg::Welcome { entity_id, character } => {
+            ServerMsg::Welcome { entity_id, character, is_dev } => {
+                session.is_dev = is_dev;
                 session.my_id = Some(entity_id);
                 session.class = character.class;
                 session.builder = None;
@@ -1290,6 +1298,89 @@ fn builder_screen(
     }
 }
 
+/// Dev console (C14): backquote toggles a one-line command input on dev
+/// accounts. Commands: tp X Y | give ITEM [N] | level N | heal | spawn TAG |
+/// kill | god | time T | travel ACT. Server re-checks authorization.
+fn dev_console(
+    mut kb_events: EventReader<KeyboardInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut session: ResMut<Session>,
+    tx: Res<NetTx>,
+) {
+    if !session.is_dev {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Backquote) {
+        session.dev_input = match session.dev_input {
+            None => Some(String::new()),
+            Some(_) => None,
+        };
+        kb_events.clear();
+        let msg = if session.dev_input.is_some() {
+            "[dev] console open — tp X Y | give ITEM N | level N | heal | spawn TAG | kill | god | time T | travel ACT"
+        } else {
+            "[dev] console closed"
+        };
+        push_chat(&mut session, msg.into());
+        return;
+    }
+    if session.dev_input.is_none() {
+        return;
+    }
+    let mut submit = false;
+    for ev in kb_events.read() {
+        if !ev.state.is_pressed() {
+            continue;
+        }
+        let inp = session.dev_input.as_mut().unwrap();
+        match &ev.logical_key {
+            bevy::input::keyboard::Key::Character(c) if c != "`" => inp.push_str(c),
+            bevy::input::keyboard::Key::Space => inp.push(' '),
+            bevy::input::keyboard::Key::Backspace => { inp.pop(); }
+            bevy::input::keyboard::Key::Enter => submit = true,
+            _ => {}
+        }
+    }
+    if !submit {
+        return;
+    }
+    let line = session.dev_input.take().unwrap_or_default();
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let cmd = match parts.as_slice() {
+        ["tp", x, y] => x.parse().ok().zip(y.parse().ok()).map(|(x, y)| DevCmd::Teleport { x, y }),
+        ["give", item] => Some(DevCmd::GiveItem { item: item.to_string(), n: 1 }),
+        ["give", item, n] => n.parse().ok().map(|n| DevCmd::GiveItem { item: item.to_string(), n }),
+        ["level", n] => n.parse().ok().map(|level| DevCmd::SetLevel { level }),
+        ["heal"] => Some(DevCmd::Heal),
+        ["spawn", tag] => Some(DevCmd::SpawnMob { tag: tag.to_string() }),
+        ["kill"] => Some(DevCmd::KillTarget),
+        ["god"] => Some(DevCmd::Godmode),
+        ["time", t] => t.parse().ok().map(|t| DevCmd::TimeOfDay { t }),
+        ["travel", a] => {
+            let act = match *a {
+                "eden" => Some(Act::Eden),
+                "hermon" => Some(Act::Hermon),
+                "nephilim" => Some(Act::Nephilim),
+                "enoch" => Some(Act::Enoch),
+                "flood" => Some(Act::Flood),
+                _ => None,
+            };
+            if let Some(act) = act {
+                tx.send(ClientMsg::Travel { act });
+            }
+            None
+        }
+        _ => None,
+    };
+    match cmd {
+        Some(c) => tx.send(ClientMsg::Dev { cmd: c }),
+        None if !line.trim().is_empty() && !line.starts_with("travel") => {
+            push_chat(&mut session, format!("[dev] bad command: {line}"));
+        }
+        None => {}
+    }
+}
+
 /// Enter-to-chat: toggle chat mode, receive character input, send on Enter.
 fn chat_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -1297,8 +1388,8 @@ fn chat_input(
     mut session: ResMut<Session>,
     tx: Res<NetTx>,
 ) {
-    if session.builder.is_some() {
-        return; // the character builder owns the keyboard (C13)
+    if session.builder.is_some() || session.dev_input.is_some() {
+        return; // builder (C13) or dev console (C14) owns the keyboard
     }
     if keys.just_pressed(KeyCode::Enter) {
         if session.chat_active {

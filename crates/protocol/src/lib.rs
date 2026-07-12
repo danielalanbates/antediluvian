@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -232,6 +232,21 @@ pub struct CharacterCreate {
     pub appearance: [u32; 3],
 }
 
+/// Developer commands (C14) — server-gated on a dev-account allowlist; the
+/// client only requests, the server decides and audits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum DevCmd {
+    Teleport { x: f32, y: f32 },
+    GiveItem { item: String, n: u32 },
+    SetLevel { level: u32 },
+    Heal,
+    SpawnMob { tag: String },
+    KillTarget,
+    Godmode,
+    TimeOfDay { t: f32 },
+}
+
 // ─── Client → Server ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +308,9 @@ pub enum ClientMsg {
     Buy { item: String },
     /// Sell an item to the innkeeper at 80% of table price (C11).
     Sell { item: String },
+    /// Developer command (C14) — ignored unless the account is on the
+    /// server's dev allowlist.
+    Dev { cmd: DevCmd },
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.
@@ -317,7 +335,14 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     /// Login accepted. Carries the loaded character and the entity id the
     /// server assigned to this player.
-    Welcome { entity_id: EntityId, character: CharacterSheet },
+    Welcome {
+        entity_id: EntityId,
+        character: CharacterSheet,
+        /// Account is on the server's dev allowlist (C14) — client may show
+        /// the dev panel. Purely advisory; every DevCmd is re-checked.
+        #[serde(default)]
+        is_dev: bool,
+    },
     /// Login rejected (bad proto version, name taken by a live session, …).
     LoginRejected { reason: String },
     /// Full snapshot of every entity in the player's current zone. Sent each

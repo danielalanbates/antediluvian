@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => continue,
         };
         match msg {
-            ServerMsg::Welcome { entity_id, character } => {
+            ServerMsg::Welcome { entity_id, character, .. } => {
                 my_id = Some(entity_id);
                 my_pos = (character.x, character.y);
                 println!(

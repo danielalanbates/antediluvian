@@ -14,7 +14,7 @@ mod pois;
 mod quests;
 mod world;
 
-use antediluvia_protocol::{Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};
+use antediluvia_protocol::{DevCmd, Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};
 use db::Db;
 use glam::Vec2;
 use std::collections::{HashMap, HashSet};
@@ -39,6 +39,8 @@ struct Conn {
     logged_in: bool,
     /// Live guild membership (mirrors the sheet, for chat routing).
     guild: Option<String>,
+    /// Account is on the dev allowlist (C14).
+    is_dev: bool,
     /// Conn id of a player who challenged us to a duel.
     pending_duel: Option<u64>,
     /// Guild we've been invited to.
@@ -134,6 +136,27 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     Ok(())
 }
 
+/// Dev-account allowlist (C14): apple_ids from ANTEDILUVIA_DEV_ACCOUNTS
+/// (comma-separated) plus optional dev_accounts.txt (one per line, # comments).
+fn dev_accounts() -> &'static std::collections::HashSet<String> {
+    static SET: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        let mut set = std::collections::HashSet::new();
+        if let Ok(v) = std::env::var("ANTEDILUVIA_DEV_ACCOUNTS") {
+            set.extend(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        }
+        let path = std::env::var("ANTEDILUVIA_DEV_FILE").unwrap_or_else(|_| "dev_accounts.txt".into());
+        if let Ok(txt) = std::fs::read_to_string(path) {
+            set.extend(
+                txt.lines().map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_string),
+            );
+        }
+        set
+    })
+}
+
 fn handle_cmd(
     cmd: GameCmd,
     world: &mut World,
@@ -150,6 +173,7 @@ fn handle_cmd(
                 act: Act::Eden,
                 logged_in: false,
                 guild: None,
+                is_dev: false,
                 pending_duel: None,
                 pending_guild_invite: None,
             });
@@ -259,6 +283,7 @@ fn handle_client_msg(
 
             let act = sheet.act;
             let guild = sheet.guild.clone();
+            let is_dev = dev_accounts().contains(&apple_id);
             let entity_id = world.spawn_player(id, sheet.clone());
             active_names.insert(key.clone());
             if let Some(c) = conns.get_mut(&id) {
@@ -267,7 +292,8 @@ fn handle_client_msg(
                 c.act = act;
                 c.logged_in = true;
                 c.guild = guild;
-                c.send(ServerMsg::Welcome { entity_id, character: sheet });
+                c.is_dev = is_dev;
+                c.send(ServerMsg::Welcome { entity_id, character: sheet, is_dev });
             }
             tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
         }
@@ -307,7 +333,7 @@ fn handle_client_msg(
                     c.send(ServerMsg::Notice { text: format!("You travel to {}.", act.as_str()) });
                     // Re-welcome: travel respawns the player under a NEW
                     // entity id — without this the client's my_id goes stale.
-                    c.send(ServerMsg::Welcome { entity_id: new_ent, character: sheet });
+                    c.send(ServerMsg::Welcome { entity_id: new_ent, character: sheet, is_dev: c.is_dev });
                 }
             }
         }
@@ -468,6 +494,33 @@ fn handle_client_msg(
             match world.sell(act, ent, &item) {
                 Ok(text) | Err(text) => notice(conns, id, text),
             }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Dev { cmd } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            let (who, is_dev) = conns
+                .get(&id)
+                .map(|c| (c.name.clone().unwrap_or_default(), c.is_dev))
+                .unwrap_or_default();
+            if !is_dev {
+                tracing::warn!(conn = id, %who, ?cmd, "DEV AUDIT: unauthorized dev command");
+                return notice(conns, id, "You are not a developer.".into());
+            }
+            tracing::info!(conn = id, %who, ?cmd, "DEV AUDIT");
+            let text = match cmd {
+                DevCmd::Teleport { x, y } => world.dev_teleport(act, ent, x, y),
+                DevCmd::GiveItem { item, n } => world.dev_give(act, ent, &item, n.min(100)),
+                DevCmd::SetLevel { level } => world.dev_set_level(act, ent, level),
+                DevCmd::Heal => world.dev_heal(act, ent),
+                DevCmd::SpawnMob { tag } => world.dev_spawn_mob(act, ent, &tag),
+                DevCmd::KillTarget => world.dev_kill_target(act, ent),
+                DevCmd::Godmode => world.dev_godmode(act, ent),
+                DevCmd::TimeOfDay { t } => {
+                    world.time_override = Some(t.rem_euclid(1.0));
+                    format!("[dev] time set to {:.2}", t.rem_euclid(1.0))
+                }
+            };
+            notice(conns, id, text);
             send_stats(world, conns, id);
         }
         ClientMsg::Craft { recipe } => {
@@ -777,7 +830,9 @@ const AOI_RADIUS: f32 = 1400.0;
 fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     // 86400 seconds in a day. time_of_day = 0.0 at midnight UTC, 0.5 at noon UTC.
-    let time_of_day = (now_secs % 86400) as f32 / 86400.0;
+    let time_of_day = world
+        .time_override
+        .unwrap_or((now_secs % 86400) as f32 / 86400.0);
 
     for c in conns.values() {
         if !c.logged_in {
