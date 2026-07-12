@@ -1,6 +1,6 @@
 # CHUNK C12 — Audio: combat, ambient, UI
 
-**Status: todo** (independent — good filler session)
+**Status: DONE (2026-07-11)** — Kenney CC0 one-shots on combat events (pitch wobble 0.9–1.1, distance falloff), UI click on bar press, synthesized per-act ambient loops (gen_ambient.py) with 2 s crossfade on travel + 30% night duck, ANTEDILUVIA_MUTE=1; verified: clean build, no decode errors in client log, coreaudiod actively streaming while client runs. NOT confirmed by human ear yet — Daniel should listen on next launch.
 
 ## Goal
 The game stops being silent: melee hits, spell casts, level-up chime, UI

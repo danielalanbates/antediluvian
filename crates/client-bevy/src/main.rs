@@ -17,6 +17,7 @@
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
 
 mod atmosphere;
+mod audio;
 mod equipment;
 mod net;
 mod terrain;
@@ -24,6 +25,7 @@ mod ui;
 mod vfx;
 
 use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
+use audio::{ambient_system, init_audio_assets, one_shot, AudioAssets, Pool};
 use equipment::{apply_loadouts, init_equip_assets, Loadout};
 use antediluvia_protocol::{
     Act, CharacterSheet, Class, ClientMsg, EntityKind, EntityState, EventKind, ServerMsg,
@@ -87,7 +89,7 @@ fn main() {
         .insert_resource(Cooldowns::default())
         .insert_resource(Session { name: display_name, ..default() })
         .add_event::<CombatEvt>()
-        .add_systems(Startup, (setup, init_vfx, init_equip_assets))
+        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets))
         .add_systems(
             Update,
             (
@@ -112,6 +114,7 @@ fn main() {
                 update_banner,
                 update_ui_panels,
                 update_atmosphere,
+                ambient_system,
                 apply_loadouts,
             ),
         )
@@ -1248,6 +1251,8 @@ fn trigger_attack_anim(
     mut me: Query<&mut Mover, With<PlayerTag>>,
     rigs: Query<&RigAnim>,
     mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    mut commands: Commands,
+    mut audio: ResMut<AudioAssets>,
 ) {
     let swung = keys.just_pressed(KeyCode::Space)
         || keys.just_pressed(KeyCode::Digit1)
@@ -1255,6 +1260,8 @@ fn trigger_attack_anim(
     if !swung {
         return;
     }
+    // UI click for the bar press itself (C12).
+    one_shot(&mut commands, &mut audio, Pool::Click, 0.0);
     let Ok(mut mv) = me.get_single_mut() else { return };
     let Ok(rig) = rigs.get(mv.rig) else { return };
     let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { return };
@@ -1278,8 +1285,11 @@ fn apply_combat_events(
     mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
     transforms: Query<&Transform>,
     vfx: Res<VfxAssets>,
+    mut audio: ResMut<AudioAssets>,
+    cam: Query<&Transform, (With<MainCamera>, Without<Billboard>)>,
 ) {
     let now = time.elapsed_secs();
+    let cam_pos = cam.get_single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     // World position of a mirrored entity's root (chest height for bursts).
     let pos_of = |map: &EntityMap, id: u64, transforms: &Query<&Transform>| {
         map.0
@@ -1288,6 +1298,20 @@ fn apply_combat_events(
             .map(|t| t.translation + Vec3::Y * 30.0)
     };
     for ev in evs.read() {
+        // One-shot audio riding the same events (C12).
+        {
+            let at = pos_of(&map, ev.src, &transforms)
+                .or_else(|| ev.dst.and_then(|d| pos_of(&map, d, &transforms)));
+            let dist = at.map(|p| p.distance(cam_pos)).unwrap_or(600.0);
+            let pool = match ev.kind {
+                EventKind::Attack => Pool::Attack,
+                EventKind::Cast => Pool::Cast,
+                EventKind::Hit => Pool::Hit,
+                EventKind::Die => Pool::Die,
+                EventKind::LevelUp => Pool::LevelUp,
+            };
+            one_shot(&mut commands, &mut audio, pool, dist);
+        }
         // Purely visual bursts (also for our own events — they read well).
         match ev.kind {
             EventKind::Cast => {
