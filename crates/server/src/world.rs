@@ -147,6 +147,9 @@ pub const ITEMS: &[ItemDef] = &[
     // Cave-ore crafts (C09).
     ItemDef { id: "orichalcum_blade",      slot: "weapon", melee: 15, spell: 0,  hp: 0 },
     ItemDef { id: "luminous_charm",        slot: "neck",   melee: 0,  spell: 8,  hp: 10 },
+    // Faction Quartermaster wares (C10).
+    ItemDef { id: "lineage_blade",         slot: "weapon", melee: 13, spell: 5,  hp: 0 },
+    ItemDef { id: "lineage_mantle",        slot: "back",   melee: 0,  spell: 0,  hp: 40 },
 ];
 
 /// Key items: carried, never equipped or consumed.
@@ -178,6 +181,47 @@ fn active_mount(sheet: &CharacterSheet) -> Option<&str> {
 /// Bag capacity: 40, +8 while a brute mount is the active mount.
 pub fn inv_cap(sheet: &CharacterSheet) -> usize {
     40 + active_mount(sheet).map_or(0, |sp| mount_tier(sp).1)
+}
+
+// ─── Factions & reputation (C10) ─────────────────────────────────────────────
+
+pub const FACTIONS: [&str; 2] = ["sethite", "cainite"];
+
+/// Reputation rungs, WoW-ish: Neutral / Friendly 3k / Honored 9k / Revered 21k.
+pub fn rep_rank(rep: i32) -> &'static str {
+    match rep {
+        i32::MIN..=2999 => "neutral",
+        3000..=8999 => "friendly",
+        9000..=20999 => "honored",
+        _ => "revered",
+    }
+}
+
+fn rank_at_least(rep: i32, need: &str) -> bool {
+    let order = ["neutral", "friendly", "honored", "revered"];
+    let a = order.iter().position(|r| *r == rep_rank(rep)).unwrap_or(0);
+    let b = order.iter().position(|r| *r == need).unwrap_or(0);
+    a >= b
+}
+
+/// Mob tags that grant reputation to the OPPOSING lineage when killed.
+/// (rival prefix, faction that earns the rep)
+const RIVAL_KILL_REP: &[(&str, &str)] = &[
+    ("cainite", "sethite"),
+    ("azazel_cultist", "sethite"),
+    ("sethite_zealot", "cainite"),
+];
+
+/// Quartermaster wares: (item, gold, minimum rank).
+pub const QM_WARES: &[(&str, u32, &str)] = &[
+    ("healing_potion", 20, "friendly"),
+    ("lineage_blade", 150, "honored"),
+    ("lineage_mantle", 300, "revered"),
+];
+
+/// Rep multiplier for test grinds (ANTEDILUVIA_REP_MULT, default 1).
+fn rep_mult() -> i32 {
+    std::env::var("ANTEDILUVIA_REP_MULT").ok().and_then(|v| v.parse().ok()).unwrap_or(1)
 }
 
 /// Consumable quest rewards handled by `use_item` (not equipment).
@@ -309,6 +353,12 @@ impl Entity {
                 .sheet
                 .as_ref()
                 .and_then(|s| s.equipment.get("chest").cloned()),
+            // Revered cosmetic (C10): back slot + wearer's lineage drive the tint.
+            back: self
+                .sheet
+                .as_ref()
+                .and_then(|s| s.equipment.get("back").cloned()),
+            faction: self.sheet.as_ref().and_then(|s| s.faction.clone()),
             mounted: self.mounted,
             mount_species: if self.mounted {
                 self.sheet.as_ref().and_then(|s| {
@@ -489,6 +539,9 @@ impl World {
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(260.0, -170.0), "Seer"));
+        // Faction Quartermaster (C10): rep-gated vendor at every inn.
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-160.0, -60.0), "Quartermaster"));
         // Beast-Master Jabal offers the mount questline in Enoch (C06).
         if act == Act::Enoch {
             let id = self.alloc_id();
@@ -1100,6 +1153,25 @@ impl World {
                                 EntityKind::Enemy => {
                                     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
                                     s.gold += 2 + tier * 2;
+                                    // Faction rep (C10): rival kills +5, act bosses +100.
+                                    if let Some(f) = s.faction.clone() {
+                                        let t = etag.as_deref().unwrap_or("");
+                                        let mut gain = 0;
+                                        if RIVAL_KILL_REP.iter().any(|(rt, ff)| t.starts_with(rt) && *ff == f) {
+                                            gain += 5;
+                                        }
+                                        if t.ends_with("_alpha") {
+                                            gain += 100;
+                                        }
+                                        if gain > 0 {
+                                            let r = s.reputation.entry(f.clone()).or_insert(0);
+                                            *r += gain * rep_mult();
+                                            events.push(SimEvent::Info {
+                                                owner: o,
+                                                text: format!("+{} {} reputation ({})", gain * rep_mult(), f, rep_rank(*r)),
+                                            });
+                                        }
+                                    }
                                 }
                                 // Harvesting levels the matching profession.
                                 EntityKind::Resource => {
@@ -1370,6 +1442,29 @@ impl World {
         let e = self.entity_mut(act, id).unwrap();
         let s = e.sheet.as_mut().ok_or("no sheet")?;
 
+        // Quartermaster (C10): vendor, not a questgiver — list rep-gated wares.
+        if npc == "Quartermaster" {
+            let Some(f) = s.faction.clone() else {
+                return Ok("Quartermaster: I trade with the Two Lineages only. \
+                           Choose sethite or cainite at level 10 (ChooseFaction)."
+                    .into());
+            };
+            let rep = s.reputation.get(&f).copied().unwrap_or(0);
+            let wares = QM_WARES
+                .iter()
+                .map(|(i, g, need)| {
+                    let ok = if rank_at_least(rep, need) { "" } else { " [locked]" };
+                    format!("{i} {g}g ({need}){ok}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(format!(
+                "Quartermaster: {} standing — {}. Wares: {wares}. Say Buy.",
+                rep_rank(rep),
+                rep
+            ));
+        }
+
         // 1) Turn-in: any of this giver's quests active and complete?
         let turn_in = quests_for(act, &npc).find(|q| {
             s.quests.get(q.id).is_some_and(|p| *p >= q.objective.count())
@@ -1386,6 +1481,11 @@ impl World {
             s.quests.remove(q.id);
             s.quests_done.push(q.id.to_string());
             s.gold += q.gold;
+            // Faction-variant quests pay reputation (C10).
+            if let Some(f) = crate::quests::quest_faction(q.id) {
+                let r = s.reputation.entry(f.to_string()).or_insert(0);
+                *r += 250 * rep_mult();
+            }
             let mut text = format!("{npc}: It is done! (+{} xp, +{}g", q.xp, q.gold);
             if let Some(item) = q.item {
                 if s.inventory.len() < 40 {
@@ -1408,6 +1508,9 @@ impl World {
                 && !s.quests_done.iter().any(|d| d == q.id)
                 && s.level >= q.min_level
                 && q.requires.map_or(true, |r| s.quests_done.iter().any(|d| d == r))
+                // Faction variants (C10) only show to their own lineage.
+                && crate::quests::quest_faction(q.id)
+                    .map_or(true, |f| s.faction.as_deref() == Some(f))
         });
         if let Some(q) = accept {
             if s.quests.len() >= QUEST_CAP {
@@ -1544,6 +1647,59 @@ impl World {
         }
     }
 
+    /// Align with a mortal lineage (C10). Level 10+; one-shot in spirit —
+    /// re-choosing the other side is allowed but zeroes ALL reputation.
+    pub fn choose_faction(&mut self, act: Act, id: EntityId, faction: &str) -> Result<String, String> {
+        if !FACTIONS.contains(&faction) {
+            return Err("Unknown lineage. Choose sethite or cainite.".into());
+        }
+        let s = self.sheet_mut(act, id).ok_or("no sheet")?;
+        if s.level < 10 {
+            return Err("The Two Lineages open at level 10.".into());
+        }
+        match s.faction.as_deref() {
+            Some(f) if f == faction => Err(format!("You already walk the {faction} path.")),
+            Some(_) => {
+                s.faction = Some(faction.to_string());
+                s.reputation.clear();
+                Ok(format!("You forsake your line for the {faction}s. All reputation is lost."))
+            }
+            None => {
+                s.faction = Some(faction.to_string());
+                Ok(format!("You bind your lineage to the {faction}s."))
+            }
+        }
+    }
+
+    /// Buy from the inn Quartermaster (C10): rep- and gold-gated.
+    pub fn buy(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
+        let entry = self.zones.get(&act).ok_or("no zone")?.entry;
+        let e = self.entity_mut(act, id).ok_or("no player")?;
+        if e.pos.distance(entry) > INN_RADIUS {
+            return Err("The Quartermaster trades only at the inn.".into());
+        }
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        let Some(faction) = s.faction.clone() else {
+            return Err("Choose a lineage before trading with the Quartermaster.".into());
+        };
+        let Some((_, gold, need)) = QM_WARES.iter().find(|(i, _, _)| *i == item) else {
+            return Err("The Quartermaster does not stock that.".into());
+        };
+        let rep = s.reputation.get(&faction).copied().unwrap_or(0);
+        if !rank_at_least(rep, need) {
+            return Err(format!("Requires {need} standing with the {faction}s."));
+        }
+        if s.gold < *gold {
+            return Err(format!("You need {gold} gold."));
+        }
+        if s.inventory.len() >= inv_cap(s) {
+            return Err("Your bags are full.".into());
+        }
+        s.gold -= *gold;
+        s.inventory.push(item.to_string());
+        Ok(format!("Purchased {item} for {gold}g."))
+    }
+
     /// Toggle the PvP flag; returns the new state.
     pub fn toggle_pvp(&mut self, act: Act, id: EntityId) -> Option<bool> {
         let s = self.sheet_mut(act, id)?;
@@ -1677,7 +1833,7 @@ fn self_next_id(counter: &mut EntityId) -> EntityId {
 /// destructibles via `OBJECT_TAGS`.
 pub fn act_spawn_table(act: Act) -> &'static [(&'static str, usize)] {
     match act {
-        Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5), ("azazel_cultist", 6)],
+        Act::Eden => &[("serpent", 6), ("cainite", 8), ("elemental", 5), ("ember_wisp", 5), ("azazel_cultist", 6), ("sethite_zealot", 6)],
         Act::Hermon => &[("watcher", 10), ("cultist", 6), ("chasm_fiend", 8), ("caravan_wagon", 3), ("oathstone", 1), ("stargazer", 1), ("crystal_lens", 3)],
         Act::Nephilim => &[("giant", 14), ("blood_drinker", 8), ("weapon_cache", 4), ("forge_giant", 1), ("azazel_herald", 1)],
         Act::Enoch => &[("shade", 12), ("citadel_guard", 6), ("furnace_regulator", 4), ("enchanter_smith", 6), ("sorcerer", 8), ("dire_wolf", 16), ("swift_claw", 1), ("enchanted_bellows", 3), ("blood_smith", 6)],
@@ -1974,7 +2130,8 @@ mod tests {
             let e = z
                 .entities
                 .values()
-                .find(|e| e.kind == EntityKind::Resource)
+                .find(|e| e.kind == EntityKind::Resource
+                    && matches!(e.tag.as_deref(), Some("tree") | Some("rock")))
                 .expect("eden has resource nodes");
             (e.id, e.pos, e.tag.clone().unwrap())
         };
@@ -2139,10 +2296,24 @@ mod tests {
     #[test]
     fn unflagged_players_cannot_hurt_each_other_but_duelists_can() {
         let mut w = World::new(6);
-        // Far corner: no enemies wander at exactly the entry in tick 1; place
-        // the pair away from everything.
-        let a = spawn_at(&mut w, 1, "Cain", 500.0, 500.0);
-        let b = spawn_at(&mut w, 2, "Abel", 540.0, 500.0);
+        // Find a spot with nothing else nearby so the swings can only hit the
+        // duel partner (camps land anywhere as the spawn tables grow).
+        let clear = {
+            let z = &w.zones[&Act::Eden];
+            let mut p = Vec2::new(500.0, 500.0);
+            'search: for gx in -6..=6 {
+                for gy in -6..=6 {
+                    let c = Vec2::new(gx as f32 * 500.0, gy as f32 * 500.0);
+                    if z.entities.values().all(|e| e.pos.distance(c) > 450.0) {
+                        p = c;
+                        break 'search;
+                    }
+                }
+            }
+            p
+        };
+        let a = spawn_at(&mut w, 1, "Cain", clear.x, clear.y);
+        let b = spawn_at(&mut w, 2, "Abel", clear.x + 40.0, clear.y);
         // Not flagged, not dueling: melee does nothing to the other player.
         w.queue_attack(Act::Eden, a);
         w.step();
@@ -2798,6 +2969,97 @@ mod tests {
         assert!(s.inventory.iter().any(|i| i == "orichalcum_blade"));
         assert!(!s.inventory.iter().any(|i| i == "orichalcum_ore"));
     }
+
+    /// C10: lineage choice gates at level 10, switching wipes rep, rival
+    /// kills earn rep, the Quartermaster enforces rank + gold, persistence.
+    #[test]
+    fn faction_choice_rep_and_vendor() {
+        let mut w = World::new(70);
+        let pid = spawn_at(&mut w, 1, "Lamech", 0.0, 0.0);
+        assert!(w.choose_faction(Act::Eden, pid, "sethite").is_err(), "level gate");
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.level = 10;
+        }
+        assert!(w.choose_faction(Act::Eden, pid, "nephilim").is_err(), "unknown lineage");
+        w.choose_faction(Act::Eden, pid, "sethite").unwrap();
+        assert!(w.choose_faction(Act::Eden, pid, "sethite").is_err(), "re-choosing same side refused");
+
+        // Rival kill rep: kill a cainite as a sethite.
+        let s = kill_one_tagged_with(&mut w, pid, "cainite");
+        let rep = s.reputation.get("sethite").copied().unwrap_or(0);
+        assert!(rep >= 5, "rival kill grants rep, got {rep}");
+
+        // Vendor gates: under-rep and under-gold refused, then a sale works.
+        // The kill helper dragged the player to the camp — return to the inn.
+        {
+            let entry = w.zones[&Act::Eden].entry;
+            w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos = entry;
+        }
+        assert!(w.buy(Act::Eden, pid, "healing_potion").is_err(), "neutral cannot buy");
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.reputation.insert("sethite".into(), 3000);
+            s.gold = 5;
+        }
+        assert!(w.buy(Act::Eden, pid, "healing_potion").is_err(), "gold gate");
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap().gold = 50;
+        }
+        w.buy(Act::Eden, pid, "healing_potion").unwrap();
+        assert!(w.buy(Act::Eden, pid, "lineage_blade").is_err(), "honored gate");
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.inventory.iter().any(|i| i == "healing_potion"));
+        assert_eq!(s.gold, 30);
+
+        // Switching sides wipes rep.
+        w.choose_faction(Act::Eden, pid, "cainite").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.reputation.is_empty(), "switching zeroes reputation");
+        assert_eq!(s.faction.as_deref(), Some("cainite"));
+
+        // Persistence round-trip.
+        let db = crate::db::Db::open(":memory:").unwrap();
+        let mut saved = s.clone();
+        saved.reputation.insert("cainite".into(), 777);
+        db.save(&saved, Some("apple_fac")).unwrap();
+        let loaded = db.load(&saved.name).unwrap().unwrap();
+        assert_eq!(loaded.faction.as_deref(), Some("cainite"));
+        assert_eq!(loaded.reputation.get("cainite"), Some(&777));
+    }
+
+    /// Kill one enemy whose tag starts with `tag` using an existing player.
+    fn kill_one_tagged_with(w: &mut World, pid: EntityId, tag: &str) -> CharacterSheet {
+        let (tid, tpos) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z.entities.values()
+                .find(|e| e.kind == EntityKind::Enemy
+                    && e.tag.as_deref().is_some_and(|t| t.starts_with(tag)))
+                .unwrap();
+            (e.id, e.pos)
+        };
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            z.entities.get_mut(&tid).unwrap().health = 1;
+            let p = z.entities.get_mut(&pid).unwrap();
+            p.pos = tpos + Vec2::new(-12.0, 0.0);
+            if let Some(s) = p.sheet.as_mut() { s.health = 4000; s.max_health = 4000; }
+            p.health = 4000; p.max_health = 4000;
+        }
+        for _ in 0..30 {
+            w.queue_attack(Act::Eden, pid);
+            w.step();
+            let s = w.player_sheet(Act::Eden, pid).unwrap();
+            if !s.reputation.is_empty() || s.faction.is_none() {
+                return s;
+            }
+            // retarget in case the weakened mob wandered or another died first
+        }
+        w.player_sheet(Act::Eden, pid).unwrap()
+    }
 }
 
 /// A fresh level-1 character at Eden's entry point.
@@ -2827,6 +3089,8 @@ pub fn new_character(name: &str) -> CharacterSheet {
         last_logout: None,
         discovered: Vec::new(),
         stable: Vec::new(),
+        faction: None,
+        reputation: std::collections::BTreeMap::new(),
         quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),
         equipment: Default::default(),

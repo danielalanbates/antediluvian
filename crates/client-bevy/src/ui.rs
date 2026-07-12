@@ -515,7 +515,20 @@ pub fn update_ui_frames(
             **t = cs.name.clone();
         }
         if let Ok(mut t) = q_level.get_single_mut() {
-            **t = format!("Lv {}", cs.level);
+            // Unit frame shows lineage + standing once chosen (C10).
+            **t = match cs.faction.as_deref() {
+                Some(f) => {
+                    let rep = cs.reputation.get(f).copied().unwrap_or(0);
+                    let rank = match rep {
+                        i32::MIN..=2999 => "neutral",
+                        3000..=8999 => "friendly",
+                        9000..=20999 => "honored",
+                        _ => "revered",
+                    };
+                    format!("Lv {} · {f} ({rank})", cs.level)
+                }
+                None => format!("Lv {}", cs.level),
+            };
         }
 
         // HP bar.

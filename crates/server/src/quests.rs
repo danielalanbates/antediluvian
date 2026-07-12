@@ -254,7 +254,26 @@ pub const QUESTS: &[QuestDef] = &[
         offer: "A warlord has mastered all four arts — blade, root, star and word. Face Azazel's Herald and end the corruption.",
         objective: Kill { target: "azazel_herald", count: 1 },
         xp: 1500, gold: 150, item: Some("warlords_star_blade"), requires: Some("fa_scholars_request"), side: true, min_level: 10 },
+    // ============ FACTION VARIANTS (C10) — same deed, rival lore ==========
+    QuestDef { id: "sethite_purge_of_nod", act: Act::Eden, giver: "elder",
+        offer: "[Sethite] The Cainite camps profane Abel's memory. Scatter 6 of their scavengers.",
+        objective: Kill { target: "cainite", count: 6 },
+        xp: 300, gold: 30, item: None, requires: None, side: true, min_level: 10 },
+    QuestDef { id: "cainite_reprisal", act: Act::Eden, giver: "elder",
+        offer: "[Cainite] Sethite zealots burn our forges by night. Drive off 6 of them.",
+        objective: Kill { target: "sethite_zealot", count: 6 },
+        xp: 300, gold: 30, item: None, requires: None, side: true, min_level: 10 },
 ];
+
+/// Faction a quest is restricted to (C10): only that lineage sees it, and
+/// turn-in pays +250 reputation with it.
+pub fn quest_faction(id: &str) -> Option<&'static str> {
+    match id {
+        "sethite_purge_of_nod" => Some("sethite"),
+        "cainite_reprisal" => Some("cainite"),
+        _ => None,
+    }
+}
 
 /// Theme pillar a quest belongs to (client tracker prefixes these; the
 /// cross-act prerequisite exemption in the consistency test keys off it).
@@ -314,7 +333,7 @@ mod tests {
             // theme-pillar quests (C08) sit outside the per-act budget.
             let expect = if act == Act::Enoch { 9 } else { 6 };
             let n = QUESTS.iter()
-                .filter(|q| q.act == act && quest_theme(q.id).is_none())
+                .filter(|q| q.act == act && quest_theme(q.id).is_none() && quest_faction(q.id).is_none())
                 .count();
             assert_eq!(n, expect, "{act:?} quest count");
         }

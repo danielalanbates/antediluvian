@@ -419,6 +419,20 @@ fn handle_client_msg(
             }
             send_stats(world, conns, id);
         }
+        ClientMsg::ChooseFaction { faction } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.choose_faction(act, ent, &faction) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::Buy { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.buy(act, ent, &item) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
         ClientMsg::Craft { recipe } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.craft(act, ent, &recipe) {

@@ -47,6 +47,10 @@ struct SheetExt {
     discovered: Vec<String>,
     #[serde(default)]
     stable: Vec<String>,
+    #[serde(default)]
+    faction: Option<String>,
+    #[serde(default)]
+    reputation: std::collections::BTreeMap<String, i32>,
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -165,6 +169,8 @@ impl Db {
                         last_logout: ext.last_logout,
                         discovered: ext.discovered,
                         stable: ext.stable,
+                        faction: ext.faction,
+                        reputation: ext.reputation,
                     })
                 },
             )
@@ -210,6 +216,8 @@ impl Db {
             last_logout: c.last_logout,
             discovered: c.discovered.clone(),
             stable: c.stable.clone(),
+            faction: c.faction.clone(),
+            reputation: c.reputation.clone(),
         })?;
         self.conn.execute(
             "INSERT INTO accounts

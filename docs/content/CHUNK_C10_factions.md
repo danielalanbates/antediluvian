@@ -1,6 +1,6 @@
 # CHUNK C10 — Factions & reputation
 
-**Status: todo** (requires C02)
+**Status: DONE (2026-07-11)** — lineage choice @10 (switch wipes rep), rival-kill/boss/quest rep, WoW-style rungs, Quartermaster vendor + Talk listing, faction quest variants, HUD lineage tag, revered mantle tint; unit test + wire E2E (FACTION-E2E-OK) + on-screen HUD check.
 
 ## Goal
 Players align with the Sethites or the Cainites (the docs' central mortal

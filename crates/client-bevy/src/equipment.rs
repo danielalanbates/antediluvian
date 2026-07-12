@@ -13,6 +13,10 @@ use bevy::prelude::*;
 pub struct Loadout {
     pub weapon: Option<String>,
     pub chest: Option<String>,
+    /// Back slot + wearer's lineage (C10): lineage_mantle tints the torso
+    /// in the faction's color.
+    pub back: Option<String>,
+    pub faction: Option<String>,
 }
 
 /// The loadout most recently applied to this rig's nodes (None = never).
@@ -23,6 +27,9 @@ pub struct LoadoutApplied(Option<Loadout>);
 #[derive(Resource)]
 pub struct EquipAssets {
     vest: Handle<StandardMaterial>,
+    /// C10 revered mantle tints: sethite (deep blue) / cainite (ember red).
+    mantle_sethite: Handle<StandardMaterial>,
+    mantle_cainite: Handle<StandardMaterial>,
 }
 
 pub fn init_equip_assets(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -30,6 +37,18 @@ pub fn init_equip_assets(mut commands: Commands, mut materials: ResMut<Assets<St
         vest: materials.add(StandardMaterial {
             base_color: Color::srgb(0.42, 0.30, 0.18), // tanned hide
             perceptual_roughness: 0.9,
+            ..default()
+        }),
+        mantle_sethite: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.18, 0.28, 0.60),
+            emissive: LinearRgba::rgb(0.02, 0.04, 0.12),
+            perceptual_roughness: 0.6,
+            ..default()
+        }),
+        mantle_cainite: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.60, 0.16, 0.10),
+            emissive: LinearRgba::rgb(0.12, 0.02, 0.01),
+            perceptual_roughness: 0.6,
             ..default()
         }),
     });
@@ -103,14 +122,25 @@ pub fn apply_loadouts(
                 };
                 commands.entity(ent).insert(vis);
                 touched = true;
-            } else if loadout.chest.as_deref() == Some("hide_vest") && name.as_str().ends_with("_Body")
-            {
-                // Chest armor v1: tint the torso mesh (children of the *_Body
-                // node carry the Mesh3d + material).
-                if let Ok(kids) = children_q.get(ent) {
-                    for kid in kids.iter() {
-                        if meshes.get(*kid).is_ok() {
-                            commands.entity(*kid).insert(MeshMaterial3d(equip.vest.clone()));
+            } else if name.as_str().ends_with("_Body") {
+                // Torso tint: the revered lineage mantle (C10) outranks the
+                // hide vest; children of *_Body carry the Mesh3d + material.
+                let mat = if loadout.back.as_deref() == Some("lineage_mantle") {
+                    match loadout.faction.as_deref() {
+                        Some("cainite") => Some(equip.mantle_cainite.clone()),
+                        _ => Some(equip.mantle_sethite.clone()),
+                    }
+                } else if loadout.chest.as_deref() == Some("hide_vest") {
+                    Some(equip.vest.clone())
+                } else {
+                    None
+                };
+                if let Some(mat) = mat {
+                    if let Ok(kids) = children_q.get(ent) {
+                        for kid in kids.iter() {
+                            if meshes.get(*kid).is_ok() {
+                                commands.entity(*kid).insert(MeshMaterial3d(mat.clone()));
+                            }
                         }
                     }
                 }

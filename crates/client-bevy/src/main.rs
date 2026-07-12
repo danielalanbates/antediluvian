@@ -879,7 +879,12 @@ fn receive_from_server(
                 Some(m) => {
                     // Mirror the equipped weapon/chest onto the rig (players only).
                     if e.kind == EntityKind::Player {
-                        let lo = Loadout { weapon: e.weapon.clone(), chest: e.chest.clone() };
+                        let lo = Loadout {
+                            weapon: e.weapon.clone(),
+                            chest: e.chest.clone(),
+                            back: e.back.clone(),
+                            faction: e.faction.clone(),
+                        };
                         if loadouts.get(m.root).map_or(true, |cur| *cur != lo) {
                             commands.entity(m.root).insert(lo);
                         }
@@ -941,7 +946,12 @@ fn receive_from_server(
                     if e.kind == EntityKind::Player {
                         commands
                             .entity(m.root)
-                            .insert(Loadout { weapon: e.weapon.clone(), chest: e.chest.clone() });
+                            .insert(Loadout {
+                                weapon: e.weapon.clone(),
+                                chest: e.chest.clone(),
+                                back: e.back.clone(),
+                                faction: e.faction.clone(),
+                            });
                     }
                     map.0.insert(e.id, m);
                 }

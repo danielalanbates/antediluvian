@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -127,6 +127,12 @@ pub struct EntityState {
     /// Equipped chest item id (players) — drives armor presentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chest: Option<String>,
+    /// Equipped back item id (players; C10 lineage_mantle cosmetic tint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<String>,
+    /// Wearer's lineage (players; C10) — picks the mantle tint color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faction: Option<String>,
     /// Riding a mount (players; C06).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mounted: bool,
@@ -185,6 +191,13 @@ pub struct CharacterSheet {
     /// Mount items parked at the inn stable (C07).
     #[serde(default)]
     pub stable: Vec<String>,
+    /// Mortal lineage: "sethite" or "cainite" (C10). Chosen once at level 10;
+    /// switching later zeroes all reputation.
+    #[serde(default)]
+    pub faction: Option<String>,
+    /// Faction reputation totals, keyed by faction id (C10).
+    #[serde(default)]
+    pub reputation: std::collections::BTreeMap<String, i32>,
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,
@@ -245,6 +258,10 @@ pub enum ClientMsg {
     Stable { item: String },
     /// Take a mount item back out of the stable (C07).
     Unstable { item: String },
+    /// Align with a mortal lineage: "sethite" | "cainite" (C10, level 10+).
+    ChooseFaction { faction: String },
+    /// Buy an item from the faction Quartermaster at the inn (C10).
+    Buy { item: String },
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.
