@@ -183,6 +183,34 @@ pub fn inv_cap(sheet: &CharacterSheet) -> usize {
     40 + active_mount(sheet).map_or(0, |sp| mount_tier(sp).1)
 }
 
+// ─── World-PvP capital zones (C16) ───────────────────────────────────────────
+
+/// A faction capital's territory: entering it as the ENEMY lineage
+/// force-flags you for PvP until you leave (plus a cooldown).
+#[derive(serde::Deserialize)]
+pub struct PvpZone {
+    pub act: String,
+    pub name: String,
+    pub faction: String,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+}
+
+pub fn pvp_zones(act: Act) -> impl Iterator<Item = &'static PvpZone> {
+    static ZONES: std::sync::OnceLock<Vec<PvpZone>> = std::sync::OnceLock::new();
+    ZONES
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("../../../assets/data/pvp_zones.json"))
+                .expect("pvp_zones.json parses")
+        })
+        .iter()
+        .filter(move |z| z.act == act.as_str())
+}
+
+/// Seconds the forced flag lingers after leaving enemy territory.
+pub const FORCED_PVP_LINGER: f32 = 20.0;
+
 // ─── Factions & reputation (C10) ─────────────────────────────────────────────
 
 pub const FACTIONS: [&str; 2] = ["sethite", "cainite"];
@@ -227,6 +255,7 @@ fn rep_mult() -> i32 {
 /// Consumable quest rewards handled by `use_item` (not equipment).
 pub const CONSUMABLES: &[&str] = &[
     "bread", "fruit", "golden_apple", "energy_drink", "bitter_bread", "healing_potion",
+    "hearthstone",
 ];
 
 pub fn item_def(id: &str) -> Option<&'static ItemDef> {
@@ -329,6 +358,10 @@ pub struct Entity {
     pub mount_hits_left: u32,
     /// Dev-menu godmode (C14): immune to all damage. Never persisted.
     pub godmode: bool,
+    /// Force-flagged by an enemy capital zone (C16). Never persisted.
+    pub forced_pvp: bool,
+    /// Seconds of forced flag remaining after leaving the zone (C16).
+    pub forced_pvp_timer: f32,
     /// For a player entity, the owning connection id.
     pub owner: Option<u64>,
     /// For a player, its persistent sheet (kept in sync so we can save it).
@@ -613,6 +646,8 @@ impl World {
             mounted: false,
             combat_timer: 0.0,
         godmode: false,
+        forced_pvp: false,
+        forced_pvp_timer: 0.0,
             enrage_timer: 0.0,
             mount_hits_left: 0,
             owner: Some(owner),
@@ -658,7 +693,9 @@ impl World {
             .values()
             .filter(|e| e.kind == EntityKind::Player && e.health > 0)
             .map(|e| {
-                let pvp = e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
+                let pvp = e.forced_pvp
+                    || e.forced_pvp_timer > 0.0
+                    || e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
                 (e.id, e.pos, pvp, e.duel_with)
             })
             .collect();
@@ -727,6 +764,47 @@ impl World {
                         e.pos += dir * (e.speed * fatigue_penalty * mount_mult) * DT;
                         e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
                         e.rot = dir.y.atan2(dir.x);
+                    }
+                    // World-PvP capital zones (C16): standing in an ENEMY
+                    // capital force-flags you; leaving starts a linger timer.
+                    {
+                        let my_faction = e.sheet.as_ref().and_then(|s| s.faction.clone());
+                        let inside = my_faction.as_deref().and_then(|f| {
+                            pvp_zones(act).find(|z| {
+                                z.faction != f
+                                    && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius
+                            })
+                        });
+                        match (inside, e.forced_pvp) {
+                            (Some(z), false) => {
+                                e.forced_pvp = true;
+                                if let Some(o) = e.owner {
+                                    events.push(SimEvent::Info {
+                                        owner: o,
+                                        text: format!(
+                                            "You enter the {} — you are flagged for PvP!",
+                                            z.name
+                                        ),
+                                    });
+                                }
+                            }
+                            (None, true) => {
+                                e.forced_pvp = false;
+                                e.forced_pvp_timer = FORCED_PVP_LINGER;
+                                if let Some(o) = e.owner {
+                                    events.push(SimEvent::Info {
+                                        owner: o,
+                                        text: format!(
+                                            "You leave enemy territory. PvP flag drops in {FORCED_PVP_LINGER:.0}s."
+                                        ),
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                        if !e.forced_pvp && e.forced_pvp_timer > 0.0 {
+                            e.forced_pvp_timer -= DT;
+                        }
                     }
                     if e.gcd > 0.0 {
                         e.gcd -= DT;
@@ -807,7 +885,9 @@ impl World {
                     };
                     // A player may be hit by another player only in a mutual
                     // duel or when both are PvP-flagged.
-                    let my_pvp = e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
+                    let my_pvp = e.forced_pvp
+                        || e.forced_pvp_timer > 0.0
+                        || e.sheet.as_ref().map(|s| s.pvp).unwrap_or(false);
                     let pvp_targets: Vec<(EntityId, Vec2)> = player_info
                         .iter()
                         .filter(|(pid, _, ppvp, pduel)| {
@@ -1379,6 +1459,17 @@ impl World {
                 e.health = (e.health + 40).min(e.max_health);
                 s.health = e.health;
                 Ok("You eat the bread and recover 40 health.".into())
+            }
+            // Hearthstone (C16 WoW parity): return to the zone inn, 30 min cd.
+            "hearthstone" => {
+                let cd = e.cooldowns.get("hearthstone").copied().unwrap_or(0.0);
+                if cd > 0.0 {
+                    return Err(format!("Hearthstone is on cooldown ({:.0}s).", cd));
+                }
+                e.cooldowns.insert("hearthstone".into(), 1800.0);
+                let entry = Vec2::ZERO; // every act's inn sits at the entry
+                e.pos = entry;
+                Ok("You focus on the inn's hearth and are carried home.".into())
             }
             "fruit" => {
                 s.inventory.remove(idx);
@@ -2120,6 +2211,8 @@ fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         mounted: false,
         combat_timer: 0.0,
         godmode: false,
+        forced_pvp: false,
+        forced_pvp_timer: 0.0,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2159,6 +2252,8 @@ fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
         mounted: false,
         combat_timer: 0.0,
         godmode: false,
+        forced_pvp: false,
+        forced_pvp_timer: 0.0,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2198,6 +2293,8 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         mounted: false,
         combat_timer: 0.0,
         godmode: false,
+        forced_pvp: false,
+        forced_pvp_timer: 0.0,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -2237,6 +2334,8 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         mounted: false,
         combat_timer: 0.0,
         godmode: false,
+        forced_pvp: false,
+        forced_pvp_timer: 0.0,
         enrage_timer: 0.0,
         mount_hits_left: 0,
         owner: None,
@@ -3219,6 +3318,41 @@ mod tests {
         assert_eq!(w.gold_sunk, bread as u64);
     }
 
+    /// C16: entering an ENEMY capital force-flags PvP; own capital doesn't;
+    /// the flag drops after the linger cooldown once outside.
+    #[test]
+    fn enemy_capital_zone_forces_pvp_flag() {
+        let mut w = World::new(73);
+        let pid = spawn_at(&mut w, 1, "Irad", 0.0, 0.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.faction = Some("sethite".into());
+        }
+        let flagged = |w: &World, pid| {
+            let e = &w.zones[&Act::Eden].entities[&pid];
+            e.forced_pvp || e.forced_pvp_timer > 0.0
+        };
+        // Own capital (sethite, -2400,-2400): no flag.
+        w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos =
+            Vec2::new(-2400.0, -2400.0);
+        w.step();
+        assert!(!flagged(&w, pid), "own capital must not flag");
+        // Enemy capital (cainite, 2400,2400): flagged.
+        w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos =
+            Vec2::new(2400.0, 2400.0);
+        w.step();
+        assert!(flagged(&w, pid), "enemy capital flags");
+        // Leave: linger, then drop.
+        w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos = Vec2::ZERO;
+        w.step();
+        assert!(flagged(&w, pid), "flag lingers right after leaving");
+        for _ in 0..(TICK_HZ as usize * 21) {
+            w.step();
+        }
+        assert!(!flagged(&w, pid), "flag drops after linger");
+    }
+
     /// C15: players never collide — two players can stand on the same spot
     /// and walking "through" another player causes no displacement.
     #[test]
@@ -3285,6 +3419,7 @@ pub fn new_character_with(
         class,
         faction,
         appearance,
+        inventory: vec!["hearthstone".to_string()],
         act: Act::Eden,
         x: 0.0,
         y: 0.0,
@@ -3295,7 +3430,6 @@ pub fn new_character_with(
         max_health: 100,
         mana: 50,
         max_mana: 50,
-        inventory: Vec::new(),
         gold: 0,
         talent_points: 0,
         talents: Default::default(),

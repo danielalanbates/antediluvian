@@ -918,7 +918,7 @@ fn receive_from_server(
                 push_chat(&mut session, format!("Login rejected: {reason}"));
             }
             ServerMsg::Notice { text } => {
-                if text.starts_with("Discovered:") {
+                if text.starts_with("Discovered:") || text.contains("flagged for PvP") {
                     session.banner = Some((text.clone(), 5.0));
                 }
                 push_chat(&mut session, text);

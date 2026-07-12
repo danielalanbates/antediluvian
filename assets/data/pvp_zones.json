@@ -1,0 +1,82 @@
+[
+ {
+  "act": "eden",
+  "name": "Sethite capital of Eden",
+  "faction": "sethite",
+  "x": -2400.0,
+  "y": -2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "eden",
+  "name": "Cainite capital of Eden",
+  "faction": "cainite",
+  "x": 2400.0,
+  "y": 2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "hermon",
+  "name": "Sethite capital of Hermon",
+  "faction": "sethite",
+  "x": -2400.0,
+  "y": -2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "hermon",
+  "name": "Cainite capital of Hermon",
+  "faction": "cainite",
+  "x": 2400.0,
+  "y": 2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "nephilim",
+  "name": "Sethite capital of Nephilim",
+  "faction": "sethite",
+  "x": -2400.0,
+  "y": -2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "nephilim",
+  "name": "Cainite capital of Nephilim",
+  "faction": "cainite",
+  "x": 2400.0,
+  "y": 2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "enoch",
+  "name": "Sethite capital of Enoch",
+  "faction": "sethite",
+  "x": -2400.0,
+  "y": -2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "enoch",
+  "name": "Cainite capital of Enoch",
+  "faction": "cainite",
+  "x": 2400.0,
+  "y": 2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "flood",
+  "name": "Sethite capital of Flood",
+  "faction": "sethite",
+  "x": -2400.0,
+  "y": -2400.0,
+  "radius": 900.0
+ },
+ {
+  "act": "flood",
+  "name": "Cainite capital of Flood",
+  "faction": "cainite",
+  "x": 2400.0,
+  "y": 2400.0,
+  "radius": 900.0
+ }
+]

@@ -73,7 +73,7 @@ window (read → implement → verify → commit).
 | C13 | CHUNK_C13_character_builder.md | Character-creation step (name/class/faction/appearance) behind Apple login | DONE |
 | C14 | CHUNK_C14_dev_menu.md | Server-gated developer menu for alpha testers (teleport, give, spawn, godmode) | DONE |
 | C15 | CHUNK_C15_thousand_players.md | 1,000 players on screen: AoI deltas, binary wire, instanced rigs, bot swarm | DONE |
-| C16 | CHUNK_C16_wow_parity_pvp_zones.md | WoW-Classic parity audit + auto-flag PvP zones near enemy capitals | todo |
+| C16 | CHUNK_C16_wow_parity_pvp_zones.md | WoW-Classic parity audit + auto-flag PvP zones near enemy capitals | DONE |
 
 Art-pass chunks 09 (visible equipment) and 10 (performance) still live in
 `docs/art/` and can be interleaved; C05 before C04 if map scale blocks POI
