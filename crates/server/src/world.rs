@@ -359,6 +359,7 @@ impl Entity {
                 .as_ref()
                 .and_then(|s| s.equipment.get("back").cloned()),
             faction: self.sheet.as_ref().and_then(|s| s.faction.clone()),
+            appearance: self.sheet.as_ref().map(|s| s.appearance),
             mounted: self.mounted,
             mount_species: if self.mounted {
                 self.sheet.as_ref().and_then(|s| {
@@ -3145,8 +3146,21 @@ mod tests {
 
 /// A fresh level-1 character at Eden's entry point.
 pub fn new_character(name: &str) -> CharacterSheet {
+    new_character_with(name, None, None, [0, 0, 0])
+}
+
+/// Builder-driven creation (C13): class/faction/appearance chosen up front.
+pub fn new_character_with(
+    name: &str,
+    class: Option<antediluvia_protocol::Class>,
+    faction: Option<String>,
+    appearance: [u32; 3],
+) -> CharacterSheet {
     CharacterSheet {
         name: name.to_string(),
+        class,
+        faction,
+        appearance,
         act: Act::Eden,
         x: 0.0,
         y: 0.0,
@@ -3158,7 +3172,6 @@ pub fn new_character(name: &str) -> CharacterSheet {
         mana: 50,
         max_mana: 50,
         inventory: Vec::new(),
-        class: None,
         gold: 0,
         talent_points: 0,
         talents: Default::default(),
@@ -3170,7 +3183,6 @@ pub fn new_character(name: &str) -> CharacterSheet {
         last_logout: None,
         discovered: Vec::new(),
         stable: Vec::new(),
-        faction: None,
         reputation: std::collections::BTreeMap::new(),
         quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),

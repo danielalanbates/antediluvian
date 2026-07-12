@@ -62,6 +62,7 @@ pub fn start_network(url: String, apple_id: String, character_name: Option<Strin
                     proto: PROTOCOL_VERSION,
                     apple_id,
                     character_name,
+                    create: None,
                 };
                 if let Ok(txt) = serde_json::to_string(&login) {
                     let _ = sink.send(Message::Text(txt.into())).await;

@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             proto: PROTOCOL_VERSION,
             apple_id: format!("test_{name}"),
             character_name: Some(name.clone()),
+            create: None,
         }).into()))
         .await?;
 

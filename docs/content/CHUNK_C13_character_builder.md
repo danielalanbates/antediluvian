@@ -1,6 +1,6 @@
 # CHUNK C13 — Character builder + Apple login flow
 
-**Status: todo** (Daniel directive 2026-07-11: alpha readiness)
+**Status: DONE (2026-07-11)** — Login carries optional CharacterCreate{name,class,faction,appearance}; server rejects accountless entry (legacy character_name path kept for test tooling); appearance [body,skin,hair] on sheet (3-place) + EntityState broadcast; body picks the rig model on all clients; keyboard builder screen (letters=name, F1–F4 class, F5 lineage, arrows body/skin, F6 hair, Enter) with rotating preview; in-world classless F1–F4 pick removed; proto v11. Verified: wire E2E (reject→create→relog-skip→appearance broadcast) + live client run (created Adah, hunter/sethite/Barbarian, straight to world). Skin/hair ints round-trip but are not yet rendered as tints — future polish.
 
 ## Goal
 A real character-creation step between login and the world: the player signs

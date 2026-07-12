@@ -51,6 +51,8 @@ struct SheetExt {
     faction: Option<String>,
     #[serde(default)]
     reputation: std::collections::BTreeMap<String, i32>,
+    #[serde(default)]
+    appearance: [u32; 3],
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -171,6 +173,7 @@ impl Db {
                         stable: ext.stable,
                         faction: ext.faction,
                         reputation: ext.reputation,
+                        appearance: ext.appearance,
                     })
                 },
             )
@@ -218,6 +221,7 @@ impl Db {
             stable: c.stable.clone(),
             faction: c.faction.clone(),
             reputation: c.reputation.clone(),
+            appearance: c.appearance,
         })?;
         self.conn.execute(
             "INSERT INTO accounts

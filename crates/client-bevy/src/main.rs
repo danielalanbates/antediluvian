@@ -54,6 +54,7 @@ fn main() {
 
     // Start the network thread before the app so login is already in flight.
     let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
+    let apple_id_for_session = apple_id.clone();
     let (tx, rx) = start_network(url, apple_id, character_name);
 
     // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
@@ -87,7 +88,11 @@ fn main() {
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
-        .insert_resource(Session { name: display_name, ..default() })
+        .insert_resource(Session {
+            name: display_name,
+            apple_id: apple_id_for_session,
+            ..default()
+        })
         .add_event::<CombatEvt>()
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets))
         .add_systems(
@@ -101,6 +106,7 @@ fn main() {
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
+                builder_screen,
             ),
         )
         .add_systems(
@@ -222,6 +228,33 @@ pub struct Session {
     pub target_id: Option<u64>,
     /// Big centered announcement (text, seconds remaining).
     pub banner: Option<(String, f32)>,
+    /// Apple account id this session logs in with (C13 re-login from builder).
+    pub apple_id: String,
+    /// Character-builder state; `Some` while the create screen is up (C13).
+    pub builder: Option<Builder>,
+}
+
+/// Character-builder working state (C13).
+pub struct Builder {
+    pub name: String,
+    pub class: Class,
+    pub faction: Option<String>,
+    pub appearance: [u32; 3],
+    pub submitted: bool,
+    pub error: Option<String>,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            class: Class::Warrior,
+            faction: None,
+            appearance: [0, 0, 0],
+            submitted: false,
+            error: None,
+        }
+    }
 }
 
 impl Default for Session {
@@ -238,7 +271,9 @@ impl Default for Session {
             time_of_day: 0.5,
             target: None,
             target_id: None,
+            apple_id: String::new(),
             banner: None,
+            builder: None,
         }
     }
 }
@@ -288,12 +323,20 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
     const SKEL: [usize; 3] = [40, 54, 24];
     match e.kind {
         EntityKind::Player => {
-            let (file, attack) = match e.tag.as_deref() {
+            let (class_file, attack) = match e.tag.as_deref() {
                 Some("warrior") => ("models/characters/Barbarian.glb", 8),
                 Some("hunter") => ("models/characters/Rogue.glb", 1),
                 Some("priest") => ("models/characters/Knight.glb", 62),
                 Some("mage") => ("models/characters/Mage.glb", 62),
                 _ => ("models/characters/Knight.glb", 1),
+            };
+            // Builder appearance (C13): body index overrides the rig model.
+            let file = match e.appearance.map(|a| a[0]) {
+                Some(1) => "models/characters/Barbarian.glb",
+                Some(2) => "models/characters/Rogue.glb",
+                Some(3) => "models/characters/Mage.glb",
+                Some(0) => "models/characters/Knight.glb",
+                _ => class_file,
             };
             (file, [ADV[0], ADV[1], attack, ADV[2]], CHAR_SCALE)
         }
@@ -808,6 +851,7 @@ fn receive_from_server(
             ServerMsg::Welcome { entity_id, character } => {
                 session.my_id = Some(entity_id);
                 session.class = character.class;
+                session.builder = None;
                 set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
                 push_chat(&mut session, format!("Welcome to {}, {}!", character.act.as_str(), character.name));
                 session.sheet = Some(character);
@@ -824,6 +868,15 @@ fn receive_from_server(
                 session.sheet = Some(character);
             }
             ServerMsg::LoginRejected { reason } => {
+                if reason.contains("no character on this account") {
+                    // First launch on this Apple account: open the builder (C13).
+                    if session.builder.is_none() {
+                        session.builder = Some(Builder::default());
+                    }
+                } else if let Some(b) = session.builder.as_mut() {
+                    b.submitted = false;
+                    b.error = Some(reason.clone());
+                }
                 push_chat(&mut session, format!("Login rejected: {reason}"));
             }
             ServerMsg::Notice { text } => {
@@ -1060,17 +1113,180 @@ fn send_input(
             tx.send(ClientMsg::Cast { ability: b.into() });
             cooldowns.trigger(2, now);
         }
-    } else {
-        for (key, class) in [
-            (KeyCode::F1, Class::Warrior),
-            (KeyCode::F2, Class::Hunter),
-            (KeyCode::F3, Class::Priest),
-            (KeyCode::F4, Class::Mage),
-        ] {
-            if keys.just_pressed(key) {
-                tx.send(ClientMsg::SelectClass { class });
-            }
+    }
+    // (Classless in-world F1–F4 pick removed — class is chosen in the
+    // character builder now, C13.)
+}
+
+/// Marker for builder UI root and rotating preview rig (C13).
+#[derive(Component)]
+struct BuilderUi;
+#[derive(Component)]
+struct BuilderPreview {
+    body: u32,
+}
+
+/// Character-builder screen (C13): name typing, F1–F4 class, F5 lineage,
+/// Left/Right body model, Up/Down skin, F6 hair, Enter to create. Keeps a
+/// rotating rig preview in the empty pre-login world.
+#[allow(clippy::too_many_arguments)]
+fn builder_screen(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut kb_events: EventReader<KeyboardInput>,
+    mut session: ResMut<Session>,
+    tx: Res<NetTx>,
+    time: Res<Time>,
+    asset_server: Res<AssetServer>,
+    ui_root: Query<Entity, With<BuilderUi>>,
+    mut ui_text: Query<&mut Text, With<BuilderUi>>,
+    mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
+) {
+    let apple_id = session.apple_id.clone();
+    let Some(b) = session.builder.as_mut() else {
+        // Builder closed: clear any leftovers (screen + preview).
+        for e in &ui_root {
+            commands.entity(e).despawn_recursive();
         }
+        for (e, _, _) in &preview {
+            commands.entity(e).despawn_recursive();
+        }
+        kb_events.clear();
+        return;
+    };
+
+    // ── Input ────────────────────────────────────────────────────────────
+    for ev in kb_events.read() {
+        if !ev.state.is_pressed() {
+            continue;
+        }
+        if let bevy::input::keyboard::Key::Character(ref c) = ev.logical_key {
+            if b.name.len() < 24 && c.chars().all(|ch| ch.is_alphanumeric()) {
+                b.name.push_str(c);
+            }
+        } else if ev.logical_key == bevy::input::keyboard::Key::Backspace {
+            b.name.pop();
+        }
+    }
+    for (key, class) in [
+        (KeyCode::F1, Class::Warrior),
+        (KeyCode::F2, Class::Hunter),
+        (KeyCode::F3, Class::Priest),
+        (KeyCode::F4, Class::Mage),
+    ] {
+        if keys.just_pressed(key) {
+            b.class = class;
+        }
+    }
+    if keys.just_pressed(KeyCode::F5) {
+        b.faction = match b.faction.as_deref() {
+            None => Some("sethite".into()),
+            Some("sethite") => Some("cainite".into()),
+            _ => None,
+        };
+    }
+    if keys.just_pressed(KeyCode::ArrowRight) {
+        b.appearance[0] = (b.appearance[0] + 1) % 4;
+    }
+    if keys.just_pressed(KeyCode::ArrowLeft) {
+        b.appearance[0] = (b.appearance[0] + 3) % 4;
+    }
+    if keys.just_pressed(KeyCode::ArrowUp) {
+        b.appearance[1] = (b.appearance[1] + 1) % 6;
+    }
+    if keys.just_pressed(KeyCode::ArrowDown) {
+        b.appearance[1] = (b.appearance[1] + 5) % 6;
+    }
+    if keys.just_pressed(KeyCode::F6) {
+        b.appearance[2] = (b.appearance[2] + 1) % 6;
+    }
+    if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
+        b.submitted = true;
+        b.error = None;
+        tx.send(ClientMsg::Login {
+            proto: antediluvia_protocol::PROTOCOL_VERSION,
+            apple_id,
+            character_name: None,
+            create: Some(antediluvia_protocol::CharacterCreate {
+                name: b.name.trim().to_string(),
+                class: b.class,
+                faction: b.faction.clone(),
+                appearance: b.appearance,
+            }),
+        });
+    }
+
+    // ── Screen text ──────────────────────────────────────────────────────
+    let body_names = ["Knight", "Barbarian", "Rogue", "Mage"];
+    let text = format!(
+        "CREATE YOUR CHARACTER
+
+         Name: {}_
+         Class [F1-F4]: {}   ({})
+         Lineage [F5]: {}
+         Body [Left/Right]: {}   Skin [Up/Down]: {}   Hair [F6]: {}
+
+         {}
+         Press ENTER to walk the earth",
+        b.name,
+        b.class.as_str(),
+        match b.class {
+            Class::Warrior => "Savage Strike / War Cry",
+            Class::Hunter => "Piercing Shot / Trap",
+            Class::Priest => "Mend / Smite",
+            Class::Mage => "Firebolt / Frost Nova",
+        },
+        b.faction.as_deref().unwrap_or("undecided (choose at level 10)"),
+        body_names[b.appearance[0] as usize % 4],
+        b.appearance[1],
+        b.appearance[2],
+        match (&b.error, b.submitted) {
+            (Some(e), _) => format!("!! {e}"),
+            (None, true) => "Creating...".into(),
+            _ => String::new(),
+        },
+    );
+    if let Ok(mut t) = ui_text.get_single_mut() {
+        **t = text;
+    } else if ui_root.is_empty() {
+        commands.spawn((
+            Text::new(text),
+            TextFont { font_size: 22.0, ..default() },
+            TextColor(Color::srgb(0.95, 0.9, 0.75)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(8.0),
+                top: Val::Percent(18.0),
+                ..default()
+            },
+            BuilderUi,
+        ));
+    }
+
+    // ── Rotating preview rig ─────────────────────────────────────────────
+    let want_body = b.appearance[0];
+    let mut have = false;
+    for (e, p, mut t) in &mut preview {
+        if p.body != want_body {
+            commands.entity(e).despawn_recursive();
+        } else {
+            have = true;
+            t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 0.8);
+        }
+    }
+    if !have {
+        let file = [
+            "models/characters/Knight.glb",
+            "models/characters/Barbarian.glb",
+            "models/characters/Rogue.glb",
+            "models/characters/Mage.glb",
+        ][want_body as usize % 4];
+        commands.spawn((
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))),
+            Transform::from_translation(Vec3::new(0.0, 0.0, 0.0))
+                .with_scale(Vec3::splat(CHAR_SCALE)),
+            BuilderPreview { body: want_body },
+        ));
     }
 }
 
@@ -1081,6 +1297,9 @@ fn chat_input(
     mut session: ResMut<Session>,
     tx: Res<NetTx>,
 ) {
+    if session.builder.is_some() {
+        return; // the character builder owns the keyboard (C13)
+    }
     if keys.just_pressed(KeyCode::Enter) {
         if session.chat_active {
             // Send the message if non-empty, then close chat.

@@ -183,7 +183,7 @@ fn handle_client_msg(
     db: &Db,
 ) {
     match msg {
-        ClientMsg::Login { proto, apple_id, character_name } => {
+        ClientMsg::Login { proto, apple_id, character_name, create } => {
             let apple_id = apple_id.trim().to_string();
             let reject = |conns: &HashMap<u64, Conn>, reason: &str| {
                 if let Some(c) = conns.get(&id) {
@@ -210,9 +210,26 @@ fn handle_client_msg(
                     s
                 },
                 Ok(None) => {
-                    // Account does not exist, need a character name
-                    let Some(name) = character_name else {
-                        return reject(conns, "New Apple account. Please provide a character name.");
+                    // No character on this account: the builder must create
+                    // one (C13). The legacy character_name path still works
+                    // for headless test tooling.
+                    let (name, class, faction, appearance) = match (create, character_name) {
+                        (Some(c), _) => {
+                            if let Some(f) = &c.faction {
+                                if !crate::world::FACTIONS.contains(&f.as_str()) {
+                                    return reject(conns, "unknown lineage");
+                                }
+                            }
+                            (c.name, Some(c.class), c.faction, [
+                                c.appearance[0].min(3),
+                                c.appearance[1].min(5),
+                                c.appearance[2].min(5),
+                            ])
+                        }
+                        (None, Some(n)) => (n, None, None, [0, 0, 0]),
+                        (None, None) => {
+                            return reject(conns, "no character on this account — run the character builder");
+                        }
                     };
                     let name = name.trim().to_string();
                     if name.is_empty() || name.len() > 24 {
@@ -221,7 +238,7 @@ fn handle_client_msg(
                     if let Ok(Some(_)) = db.load(&name) {
                         return reject(conns, "character name already taken");
                     }
-                    let s = new_character(&name);
+                    let s = crate::world::new_character_with(&name, class, faction, appearance);
                     if let Err(e) = db.save(&s, Some(&apple_id)) {
                         tracing::error!("db save new: {e}");
                         return reject(conns, "server error creating character");

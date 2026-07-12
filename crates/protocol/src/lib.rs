@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -133,6 +133,9 @@ pub struct EntityState {
     /// Wearer's lineage (players; C10) — picks the mantle tint color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub faction: Option<String>,
+    /// Builder appearance [body, skin, hair] (players; C13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<[u32; 3]>,
     /// Riding a mount (players; C06).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mounted: bool,
@@ -198,6 +201,9 @@ pub struct CharacterSheet {
     /// Faction reputation totals, keyed by faction id (C10).
     #[serde(default)]
     pub reputation: std::collections::BTreeMap<String, i32>,
+    /// Appearance indices from the character builder (C13): [body, skin, hair].
+    #[serde(default)]
+    pub appearance: [u32; 3],
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,
@@ -212,6 +218,20 @@ pub struct CharacterSheet {
     pub equipment: std::collections::BTreeMap<String, String>,
 }
 
+/// First-time character creation payload (C13). Sent inside `Login`; the
+/// server refuses world entry for an account with no character otherwise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterCreate {
+    pub name: String,
+    pub class: Class,
+    /// Optional lineage pre-pick ("sethite"/"cainite"); also choosable at 10.
+    #[serde(default)]
+    pub faction: Option<String>,
+    /// Appearance indices: [body rig, skin tint, hair tint].
+    #[serde(default)]
+    pub appearance: [u32; 3],
+}
+
 // ─── Client → Server ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,7 +239,15 @@ pub struct CharacterSheet {
 pub enum ClientMsg {
     /// First message on a connection. Authenticates an account via Apple ID.
     /// If creating a new account, a character name must be provided.
-    Login { proto: u32, apple_id: String, character_name: Option<String> },
+    Login {
+        proto: u32,
+        apple_id: String,
+        /// Legacy pre-C13 creation path — ignored when `create` is present.
+        character_name: Option<String>,
+        /// First-time character builder payload (C13).
+        #[serde(default)]
+        create: Option<CharacterCreate>,
+    },
     /// Desired movement direction this tick, as a unit-ish vector. The server
     /// clamps magnitude and applies speed — the client never sets position.
     Move { dx: f32, dy: f32 },
