@@ -1,6 +1,6 @@
 # CHUNK C11 — Loot economy & auction house life
 
-**Status: todo** (requires C03)
+**Status: DONE (2026-07-11)** — prices.json from drop rarity+act tier (gen_prices.py), Innkeeper buy-at-80%/staples-at-120% + Talk listing, AH boot+daily seeding (King List NPCs, idempotent top-up to 5), 5% AH cut, gold minted/sunk hourly log; 4 unit tests + wire E2E (ECON-E2E-OK, exact balances) + restart no-flood check.
 
 ## Goal
 Make the economy breathe: bestiary drops have vendor value, inns buy/sell,

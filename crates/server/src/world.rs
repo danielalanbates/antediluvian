@@ -214,7 +214,7 @@ const RIVAL_KILL_REP: &[(&str, &str)] = &[
 
 /// Quartermaster wares: (item, gold, minimum rank).
 pub const QM_WARES: &[(&str, u32, &str)] = &[
-    ("healing_potion", 20, "friendly"),
+    ("thick_hide", 25, "friendly"),
     ("lineage_blade", 150, "honored"),
     ("lineage_mantle", 300, "revered"),
 ];
@@ -383,6 +383,9 @@ pub struct Zone {
 }
 
 pub struct World {
+    /// C11 economy telemetry (since boot, not persisted).
+    pub gold_minted: u64,
+    pub gold_sunk: u64,
     pub zones: HashMap<Act, Zone>,
     next_id: EntityId,
     rng: Rng,
@@ -407,6 +410,8 @@ impl World {
             zones: HashMap::new(),
             next_id: 1,
             rng: Rng::new(seed),
+            gold_minted: 0,
+            gold_sunk: 0,
         };
         for act in Act::ALL {
             let mut zone = Zone {
@@ -539,6 +544,9 @@ impl World {
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(260.0, -170.0), "Seer"));
+        // Innkeeper (C11): buys anything priced, sells staples.
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(40.0, -120.0), "Innkeeper"));
         // Faction Quartermaster (C10): rep-gated vendor at every inn.
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-160.0, -60.0), "Quartermaster"));
@@ -1442,6 +1450,18 @@ impl World {
         let e = self.entity_mut(act, id).unwrap();
         let s = e.sheet.as_mut().ok_or("no sheet")?;
 
+        // Innkeeper (C11): vendor — list staples and the buyback rate.
+        if npc == "Innkeeper" {
+            let wares = crate::economy::STAPLES
+                .iter()
+                .filter_map(|i| crate::economy::staple_price(i).map(|p| format!("{i} {p}g")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(format!(
+                "Innkeeper: I stock {wares}. I buy most anything at four-fifths its worth. Say Buy or Sell."
+            ));
+        }
+
         // Quartermaster (C10): vendor, not a questgiver — list rep-gated wares.
         if npc == "Quartermaster" {
             let Some(f) = s.faction.clone() else {
@@ -1671,7 +1691,28 @@ impl World {
         }
     }
 
-    /// Buy from the inn Quartermaster (C10): rep- and gold-gated.
+    /// Sell an item to the innkeeper at 80% of table price (C11).
+    pub fn sell(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
+        let entry = self.zones.get(&act).ok_or("no zone")?.entry;
+        let e = self.entity_mut(act, id).ok_or("no player")?;
+        if e.pos.distance(entry) > INN_RADIUS {
+            return Err("The Innkeeper trades only at the inn.".into());
+        }
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        let Some(price) = crate::economy::sell_price(item) else {
+            return Err("The Innkeeper has no use for that.".into());
+        };
+        let Some(idx) = s.inventory.iter().position(|i| i == item) else {
+            return Err("You don't have that item.".into());
+        };
+        s.inventory.remove(idx);
+        s.gold += price;
+        self.gold_minted += price as u64;
+        Ok(format!("Sold {item} for {price}g."))
+    }
+
+    /// Buy from the inn vendors: innkeeper staples (C11) need only gold;
+    /// Quartermaster wares (C10) are rep- and lineage-gated.
     pub fn buy(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
         let entry = self.zones.get(&act).ok_or("no zone")?.entry;
         let e = self.entity_mut(act, id).ok_or("no player")?;
@@ -1679,6 +1720,19 @@ impl World {
             return Err("The Quartermaster trades only at the inn.".into());
         }
         let s = e.sheet.as_mut().ok_or("no sheet")?;
+        // Innkeeper staples first — no faction required (C11).
+        if let Some(price) = crate::economy::staple_price(item) {
+            if s.gold < price {
+                return Err(format!("You need {price} gold."));
+            }
+            if s.inventory.len() >= inv_cap(s) {
+                return Err("Your bags are full.".into());
+            }
+            s.gold -= price;
+            s.inventory.push(item.to_string());
+            self.gold_sunk += price as u64;
+            return Ok(format!("Purchased {item} for {price}g."));
+        }
         let Some(faction) = s.faction.clone() else {
             return Err("Choose a lineage before trading with the Quartermaster.".into());
         };
@@ -1697,6 +1751,7 @@ impl World {
         }
         s.gold -= *gold;
         s.inventory.push(item.to_string());
+        self.gold_sunk += *gold as u64;
         Ok(format!("Purchased {item} for {gold}g."))
     }
 
@@ -2997,23 +3052,23 @@ mod tests {
             let entry = w.zones[&Act::Eden].entry;
             w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos = entry;
         }
-        assert!(w.buy(Act::Eden, pid, "healing_potion").is_err(), "neutral cannot buy");
+        assert!(w.buy(Act::Eden, pid, "thick_hide").is_err(), "neutral cannot buy");
         {
             let z = w.zones.get_mut(&Act::Eden).unwrap();
             let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
             s.reputation.insert("sethite".into(), 3000);
             s.gold = 5;
         }
-        assert!(w.buy(Act::Eden, pid, "healing_potion").is_err(), "gold gate");
+        assert!(w.buy(Act::Eden, pid, "thick_hide").is_err(), "gold gate");
         {
             let z = w.zones.get_mut(&Act::Eden).unwrap();
             z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap().gold = 50;
         }
-        w.buy(Act::Eden, pid, "healing_potion").unwrap();
+        w.buy(Act::Eden, pid, "thick_hide").unwrap();
         assert!(w.buy(Act::Eden, pid, "lineage_blade").is_err(), "honored gate");
         let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.inventory.iter().any(|i| i == "healing_potion"));
-        assert_eq!(s.gold, 30);
+        assert!(s.inventory.iter().any(|i| i == "thick_hide"));
+        assert_eq!(s.gold, 25);
 
         // Switching sides wipes rep.
         w.choose_faction(Act::Eden, pid, "cainite").unwrap();
@@ -3029,6 +3084,32 @@ mod tests {
         let loaded = db.load(&saved.name).unwrap().unwrap();
         assert_eq!(loaded.faction.as_deref(), Some("cainite"));
         assert_eq!(loaded.reputation.get("cainite"), Some(&777));
+    }
+
+    /// C11: innkeeper sells staples for gold alone and buys drops at 80%.
+    #[test]
+    fn innkeeper_sell_and_staples() {
+        let mut w = World::new(71);
+        let pid = spawn_at(&mut w, 1, "Naamah", 0.0, 0.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.gold = 10;
+            s.inventory.push("thick_hide".into()); // table 25 -> sells for 20
+        }
+        assert!(w.sell(Act::Eden, pid, "no_such").is_err());
+        w.sell(Act::Eden, pid, "thick_hide").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.gold, 30);
+        assert!(!s.inventory.iter().any(|i| i == "thick_hide"));
+        // Staple purchase needs no faction: bread at 120% of 2 = 2 (floored, min 1).
+        let bread = crate::economy::staple_price("bread").unwrap();
+        w.buy(Act::Eden, pid, "bread").unwrap();
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert_eq!(s.gold, 30 - bread);
+        assert!(s.inventory.iter().any(|i| i == "bread"));
+        assert_eq!(w.gold_minted, 20);
+        assert_eq!(w.gold_sunk, bread as u64);
     }
 
     /// Kill one enemy whose tag starts with `tag` using an existing player.

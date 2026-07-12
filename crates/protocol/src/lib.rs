@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -260,8 +260,11 @@ pub enum ClientMsg {
     Unstable { item: String },
     /// Align with a mortal lineage: "sethite" | "cainite" (C10, level 10+).
     ChooseFaction { faction: String },
-    /// Buy an item from the faction Quartermaster at the inn (C10).
+    /// Buy an item from the faction Quartermaster at the inn (C10),
+    /// or an innkeeper staple (C11).
     Buy { item: String },
+    /// Sell an item to the innkeeper at 80% of table price (C11).
+    Sell { item: String },
     /// Craft a recipe by id (consumes materials; may need profession skill).
     Craft { recipe: String },
     /// Guild management.

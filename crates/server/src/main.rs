@@ -6,6 +6,7 @@
 //! only through channels, so the simulation stays lock-free and deterministic.
 
 mod db;
+mod economy;
 mod mobs;
 mod net;
 mod caves;
@@ -99,6 +100,8 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     let mut tick = tokio::time::interval(Duration::from_millis(1000 / TICK_HZ));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ticks: u64 = 0;
+    let mut seed_round: u64 = 0;
+    seed_auctions(&db, &mut seed_round);
 
     loop {
         tokio::select! {
@@ -110,6 +113,16 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 // Persist all online characters every ~10s.
                 if ticks % (TICK_HZ * 10) == 0 {
                     save_all(&world, &conns, &db);
+                }
+                // Economy heartbeat (C11): hourly gold-flow log, daily AH re-seed.
+                if ticks % (TICK_HZ * 3600) == 0 && ticks > 0 {
+                    tracing::info!(
+                        minted = world.gold_minted, sunk = world.gold_sunk,
+                        "economy: gold flow since boot"
+                    );
+                }
+                if ticks % (TICK_HZ * 86_400) == 0 && ticks > 0 {
+                    seed_auctions(&db, &mut seed_round);
                 }
             }
             maybe = rx.recv() => {
@@ -433,6 +446,13 @@ fn handle_client_msg(
             }
             send_stats(world, conns, id);
         }
+        ClientMsg::Sell { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.sell(act, ent, &item) {
+                Ok(text) | Err(text) => notice(conns, id, text),
+            }
+            send_stats(world, conns, id);
+        }
         ClientMsg::Craft { recipe } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.craft(act, ent, &recipe) {
@@ -615,13 +635,17 @@ fn handle_client_msg(
             match seller_conn {
                 Some(scid) => {
                     if let Some((sact, sent)) = conn_entity(conns, scid) {
-                        world.add_gold(sact, sent, listing.price);
+                        // The house keeps 5% (C11 gold sink).
+                        world.add_gold(sact, sent, economy::ah_cut(listing.price));
                     }
-                    notice(conns, scid, format!("Your {} sold for {}g.", listing.item, listing.price));
+                    notice(conns, scid, format!(
+                        "Your {} sold for {}g ({}g after the house cut).",
+                        listing.item, listing.price, economy::ah_cut(listing.price)
+                    ));
                     send_stats(world, conns, scid);
                 }
                 None => {
-                    if let Err(e) = db.credit_gold(&listing.seller, listing.price) {
+                    if let Err(e) = db.credit_gold(&listing.seller, economy::ah_cut(listing.price)) {
                         tracing::error!("credit_gold: {e}");
                     }
                 }
@@ -639,6 +663,20 @@ fn handle_client_msg(
             if let Some(c) = conns.get(&id) {
                 c.send(ServerMsg::Pong);
             }
+        }
+    }
+}
+
+/// Seed the auction house with NPC listings when it runs thin (C11) so a
+/// lone player still sees a market. Idempotent: only tops up below 5 lots.
+fn seed_auctions(db: &Db, round: &mut u64) {
+    let live = db.auction_list().map(|l| l.len()).unwrap_or(0);
+    for _ in live..5 {
+        let (seller, item, price) = economy::seed_listing(*round);
+        *round += 1;
+        match db.auction_insert(seller, item, price) {
+            Ok(_) => tracing::info!("AH seed: {seller} lists {item} at {price}g"),
+            Err(e) => tracing::error!("AH seed: {e}"),
         }
     }
 }
