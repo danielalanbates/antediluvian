@@ -280,8 +280,8 @@ fn handle_client_msg(
                             }
                             (c.name, Some(c.class), c.faction, [
                                 c.appearance[0].min(3),
-                                c.appearance[1].min(5),
-                                c.appearance[2].min(5),
+                                c.appearance[1].min(9),
+                                c.appearance[2].min(9),
                             ])
                         }
                         (None, Some(n)) => (n, None, None, [0, 0, 0]),

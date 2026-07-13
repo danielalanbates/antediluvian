@@ -22,6 +22,7 @@ mod equipment;
 mod net;
 mod terrain;
 mod ui;
+mod variety;
 mod vfx;
 
 use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
@@ -32,6 +33,7 @@ use antediluvia_protocol::{
 };
 use terrain::{build_terrain_mesh, terrain_height};
 use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
+use variety::{apply_tints, formation_color, formation_mesh, hair_hue, skin_hue, species_variation, TintCache, TintRig};
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::keyboard::KeyboardInput;
@@ -88,6 +90,7 @@ fn main() {
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
+        .insert_resource(TintCache::default())
         .insert_resource(Session {
             name: display_name,
             apple_id: apple_id_for_session,
@@ -123,6 +126,7 @@ fn main() {
                 update_atmosphere,
                 ambient_system,
                 apply_loadouts,
+                apply_tints,
                 smooth_motion,
             ),
         )
@@ -574,6 +578,31 @@ fn spawn_act_scenery(
         commands.entity(e).insert(Terrain);
     }
 
+    // Procedural formations (2026-07-12 directive): 500 per act, every one a
+    // unique deformed mesh — thousands of distinct terrain models world-wide.
+    for i in 0..500u64 {
+        let seed = act_idx * 1_000_003 + i * 7919;
+        let x = (hash01(seed * 4 + 11) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
+        let z = (hash01(seed * 4 + 12) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
+        if (x * x + z * z).sqrt() < 320.0 {
+            continue; // keep the inn clearing open
+        }
+        let size = 14.0 + hash01(seed * 4 + 13) * 46.0;
+        let y = terrain_height(act, x, z);
+        commands.spawn((
+            Mesh3d(meshes.add(formation_mesh(seed))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: formation_color(seed),
+                perceptual_roughness: 0.95,
+                ..default()
+            })),
+            Transform::from_xyz(x, y, z)
+                .with_scale(Vec3::splat(size))
+                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
+            Terrain,
+        ));
+    }
+
     // Cave mouths (C09): two big flanking rocks and a leaning capstone make
     // a readable entrance arch at each cave center.
     for (i, cave) in caves_for_act(act).enumerate() {
@@ -769,7 +798,21 @@ fn spawn_visual(
             model = Some(m);
         }
         EntityKind::Player | EntityKind::Enemy | EntityKind::Npc | EntityKind::Wildlife => {
-            let (file, [i_idle, i_run, i_attack, i_death], scale) = rig_for(e);
+            let (file, [i_idle, i_run, i_attack, i_death], mut scale) = rig_for(e);
+            // Visual variety: species-stable tint+scale for mobs, rendered
+            // skin/hair choices for players (hundreds of combos each).
+            let tint = match e.kind {
+                EntityKind::Enemy | EntityKind::Wildlife => {
+                    let (hue, light, k) = species_variation(e.tag.as_deref().unwrap_or(""));
+                    scale *= k;
+                    Some(TintRig { hue, light, hair_hue: None })
+                }
+                EntityKind::Player => e.appearance.map(|a| {
+                    let (hue, light) = skin_hue(a[1]);
+                    TintRig { hue, light, hair_hue: Some(hair_hue(a[2])) }
+                }),
+                _ => None,
+            };
             let clips = RigClips {
                 idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
                 run: asset_server.load(GltfAssetLabel::Animation(i_run).from_asset(file)),
@@ -796,6 +839,9 @@ fn spawn_visual(
                     })
                     .id();
             });
+            if let Some(t) = tint {
+                commands.entity(rig).insert(t);
+            }
             commands.entity(root).insert(Mover {
                 rig,
                 last: pos,
@@ -1194,7 +1240,7 @@ fn send_input(
 struct BuilderUi;
 #[derive(Component)]
 struct BuilderPreview {
-    body: u32,
+    look: [u32; 3],
 }
 
 /// Character-builder screen (C13): name typing, F1–F4 class, F5 lineage,
@@ -1263,13 +1309,13 @@ fn builder_screen(
         b.appearance[0] = (b.appearance[0] + 3) % 4;
     }
     if keys.just_pressed(KeyCode::ArrowUp) {
-        b.appearance[1] = (b.appearance[1] + 1) % 6;
+        b.appearance[1] = (b.appearance[1] + 1) % 10;
     }
     if keys.just_pressed(KeyCode::ArrowDown) {
-        b.appearance[1] = (b.appearance[1] + 5) % 6;
+        b.appearance[1] = (b.appearance[1] + 9) % 10;
     }
     if keys.just_pressed(KeyCode::F6) {
-        b.appearance[2] = (b.appearance[2] + 1) % 6;
+        b.appearance[2] = (b.appearance[2] + 1) % 10;
     }
     if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
         b.submitted = true;
@@ -1335,10 +1381,10 @@ fn builder_screen(
     }
 
     // ── Rotating preview rig ─────────────────────────────────────────────
-    let want_body = b.appearance[0];
+    let want = b.appearance;
     let mut have = false;
     for (e, p, mut t) in &mut preview {
-        if p.body != want_body {
+        if p.look != want {
             commands.entity(e).despawn_recursive();
         } else {
             have = true;
@@ -1351,12 +1397,14 @@ fn builder_screen(
             "models/characters/Barbarian.glb",
             "models/characters/Rogue.glb",
             "models/characters/Mage.glb",
-        ][want_body as usize % 4];
+        ][want[0] as usize % 4];
+        let (hue, light) = skin_hue(want[1]);
         commands.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))),
             Transform::from_translation(Vec3::new(0.0, 0.0, 0.0))
                 .with_scale(Vec3::splat(CHAR_SCALE)),
-            BuilderPreview { body: want_body },
+            BuilderPreview { look: want },
+            TintRig { hue, light, hair_hue: Some(hair_hue(want[2])) },
         ));
     }
 }
