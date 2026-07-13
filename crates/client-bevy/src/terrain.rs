@@ -56,6 +56,114 @@ fn act_shape(act: Act) -> (f32, f32) {
     }
 }
 
+// ─── Location-doc landforms (docs/locations/01–05) ───────────────────────────
+
+const B: f32 = antediluvia_protocol::WORLD_BOUNDS;
+
+/// Distance from p to segment ab.
+fn seg_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (px, pz) = p;
+    let (ax, az) = a;
+    let (bx, bz) = b;
+    let (dx, dz) = (bx - ax, bz - az);
+    let t = (((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz)).clamp(0.0, 1.0);
+    ((px - ax - t * dx).powi(2) + (pz - az - t * dz).powi(2)).sqrt()
+}
+
+/// Smooth valley carved along a segment: depth at center, 0 beyond width.
+fn channel(p: (f32, f32), a: (f32, f32), b: (f32, f32), width: f32, depth: f32) -> f32 {
+    let d = seg_dist(p, a, b);
+    if d >= width {
+        0.0
+    } else {
+        let t = 1.0 - d / width;
+        -depth * t * t
+    }
+}
+
+/// Round hill/plateau: height at center, 0 beyond radius (cosine falloff).
+fn dome(p: (f32, f32), c: (f32, f32), radius: f32, height: f32) -> f32 {
+    let d = ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt();
+    if d >= radius {
+        0.0
+    } else {
+        height * (0.5 + 0.5 * (std::f32::consts::PI * d / radius).cos())
+    }
+}
+
+/// The four rivers of Eden converge in the eastern basin (doc 01):
+/// Pishon, Gihon, Tigris, Euphrates — carved channels meeting at (2300, 0).
+const EDEN_CONFLUENCE: (f32, f32) = (2300.0, 0.0);
+const EDEN_RIVERS: [(f32, f32); 4] =
+    [(-3400.0, -2600.0), (-2200.0, 3400.0), (900.0, -3400.0), (1400.0, 3400.0)];
+
+/// Doc-driven landform offset added onto the base fBm relief.
+fn landforms(act: Act, x: f32, z: f32) -> f32 {
+    let p = (x, z);
+    match act {
+        // 01 — Edenic Basin east (land dips toward the confluence), the four
+        // rivers carved into it, Plains of Nod rising dry to the west, and
+        // the impassable Flaming Boundary rampart on the far east rim.
+        Act::Eden => {
+            let mut h = -40.0 * ((x / B).clamp(-1.0, 1.0) * 0.5 + 0.5) // eastward dip
+                + 30.0 * ((-x / B).clamp(0.0, 1.0)); // Nod rises west
+            for src in EDEN_RIVERS {
+                h += channel(p, src, EDEN_CONFLUENCE, 170.0, 26.0);
+            }
+            // Flaming Boundary: steep rampart past x = 3250.
+            if x > 3250.0 {
+                h += (x - 3250.0) * 0.9;
+            }
+            h
+        }
+        // 02 — City of Enoch: flattened urban shelf with the Ziggurat of
+        // Lamech as a terraced plateau to the north-east.
+        Act::Enoch => {
+            let zig = dome(p, (2100.0, -2100.0), 1100.0, 130.0);
+            (zig / 32.0).floor() * 32.0 // terraced megalith steps
+        }
+        // 03 — Hermon Range: continuous ascent to the Summit of the Oath in
+        // the north-west; the summit itself is a flat oath-ground.
+        Act::Hermon => {
+            let toward = ((-(x + z)) / (2.0 * B)).clamp(-1.0, 1.0); // rises NW
+            let ascent = 260.0 * (toward * 0.5 + 0.5).powi(2);
+            let summit = dome(p, (-2700.0, -2700.0), 900.0, 160.0);
+            ascent + summit.min(120.0) // cap = flat oath-ground
+        }
+        // 04 — Nephilim Wastes: strip-mined canyons, feeding pits, and the
+        // rest quantized into red mesas.
+        Act::Nephilim => {
+            let mut h = 0.0;
+            h += channel(p, (-3200.0, 800.0), (2600.0, 1900.0), 240.0, 55.0);
+            h += channel(p, (-1400.0, -3200.0), (600.0, 3200.0), 200.0, 45.0);
+            for pit in [(1800.0, -1600.0), (-2200.0, 2400.0), (2600.0, 2800.0)] {
+                h -= dome(p, pit, 420.0, 50.0);
+            }
+            h
+        }
+        // 05 — Abyssal Basins: the whole land sinks below the coming sea,
+        // torn by fissures of the great deep; the Ark plateau at the zone
+        // entry stays high and dry.
+        Act::Flood => {
+            let mut h = -55.0;
+            h += dome(p, (0.0, 0.0), 1000.0, 75.0); // Ark construction plateau
+            h += channel(p, (-3400.0, -1200.0), (3400.0, 600.0), 190.0, 40.0);
+            h += channel(p, (-800.0, 3400.0), (400.0, -3400.0), 170.0, 35.0);
+            h
+        }
+    }
+}
+
+/// Water table per act (render height of the translucent water plane):
+/// Eden's rivers fill their channels; the Abyssal Basins sit in floodwater.
+pub fn water_level(act: Act) -> Option<f32> {
+    match act {
+        Act::Eden => Some(-16.0),
+        Act::Flood => Some(-28.0),
+        _ => None,
+    }
+}
+
 /// Visual ground height at a server-world position (server y == render z).
 pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     let (amp, wl) = act_shape(act);
@@ -64,6 +172,7 @@ pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     if h < 0.0 {
         h *= 0.35; // shallow basins, no pits to hide in
     }
+    h += landforms(act, x, z);
     let d = (x * x + z * z).sqrt();
     let t = ((d - FLAT_RADIUS) / BLEND_DIST).clamp(0.0, 1.0);
     // The road cuts a flat strip through the hills.
@@ -87,6 +196,13 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 fn color_for(act: Act, h: f32) -> [f32; 4] {
+    // River/sea beds shade darker below the water table.
+    if let Some(w) = water_level(act) {
+        if h < w {
+            let lin = Color::srgb(0.13, 0.20, 0.16).to_linear();
+            return [lin.red, lin.green, lin.blue, 1.0];
+        }
+    }
     let (low, mid, high) = act_palette(act);
     let (amp, _) = act_shape(act);
     let t1 = (h / (amp * 0.45)).clamp(0.0, 1.0);
@@ -145,6 +261,53 @@ pub fn build_terrain_mesh(act: Act) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Doc-driven landforms (docs/locations 01–05) are present where the
+    /// docs put them.
+    #[test]
+    fn location_landforms_exist() {
+        // 01: a river channel near the Eden confluence dips below the water
+        // table somewhere along each carved river.
+        let mut wet = 0;
+        for src in EDEN_RIVERS {
+            for t in 1..40 {
+                let f = t as f32 / 40.0;
+                let x = src.0 + (EDEN_CONFLUENCE.0 - src.0) * f;
+                let z = src.1 + (EDEN_CONFLUENCE.1 - src.1) * f;
+                if terrain_height(Act::Eden, x, z) < water_level(Act::Eden).unwrap() {
+                    wet += 1;
+                    break;
+                }
+            }
+        }
+        assert!(wet >= 3, "at least 3 of Eden's four rivers hold water, got {wet}");
+        // 01: the Flaming Boundary rampart rises steeply on the far east rim.
+        assert!(
+            terrain_height(Act::Eden, 3500.0, 0.0) > terrain_height(Act::Eden, 3000.0, 0.0) + 80.0,
+            "flaming-boundary rampart"
+        );
+        // 02: the Ziggurat of Lamech plateau stands above the Enoch plain.
+        assert!(
+            terrain_height(Act::Enoch, 2100.0, -2100.0)
+                > terrain_height(Act::Enoch, 0.0, 1500.0) + 60.0,
+            "ziggurat plateau"
+        );
+        // 03: Hermon climbs continuously toward the north-west summit.
+        let low = terrain_height(Act::Hermon, 2000.0, 2000.0);
+        let high = terrain_height(Act::Hermon, -2600.0, -2600.0);
+        assert!(high > low + 150.0, "Hermon ascent: {low} -> {high}");
+        // 04: the Nephilim strip-mine canyon is carved well below its rim.
+        assert!(
+            terrain_height(Act::Nephilim, 0.0, 1450.0)
+                < terrain_height(Act::Nephilim, 0.0, 2200.0) - 25.0,
+            "strip-mine canyon"
+        );
+        // 05: the Abyssal Basins drown below the floodwater, but the Ark
+        // plateau at the entry stays dry.
+        let w = water_level(Act::Flood).unwrap();
+        assert!(terrain_height(Act::Flood, 2500.0, 1500.0) < w, "basins flooded");
+        assert!(terrain_height(Act::Flood, 0.0, 0.0) > w, "Ark plateau stays dry");
+    }
 
     #[test]
     fn road_is_flat_and_bounded() {

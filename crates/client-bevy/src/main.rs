@@ -123,6 +123,7 @@ fn main() {
                 update_atmosphere,
                 ambient_system,
                 apply_loadouts,
+                smooth_motion,
             ),
         )
         .run();
@@ -132,7 +133,7 @@ fn main() {
 
 /// A server-owned entity mirrored into the Bevy world. Holds the server id.
 #[derive(Component)]
-struct ServerEnt(#[allow(dead_code)] u64);
+struct ServerEnt(u64);
 
 /// The local player's entity (the one whose server id matches our own).
 #[derive(Component)]
@@ -146,6 +147,14 @@ struct MainCamera;
 /// A node that should always face the camera (health-bar holders).
 #[derive(Component)]
 struct Billboard;
+
+/// Where the server last put this entity (10 Hz); the render transform eases
+/// toward it every frame so movement stays smooth between snapshots.
+#[derive(Component)]
+struct NetTarget {
+    pos: Vec3,
+    rot: f32,
+}
 
 /// On the SceneRoot entity of a character: the animation clips this rig uses.
 /// `attach_rigs` finds this by walking up from the scene's `AnimationPlayer`.
@@ -505,6 +514,25 @@ fn spawn_act_scenery(
         Transform::default(),
         Terrain,
     ));
+
+    // Water plane (doc-driven): Eden's rivers, the Abyssal Basins' floodwater.
+    if let Some(level) = terrain::water_level(act) {
+        commands.spawn((
+            Mesh3d(meshes.add(Plane3d::default().mesh().size(
+                antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0,
+                antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0,
+            ))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgba(0.16, 0.34, 0.45, 0.62),
+                alpha_mode: AlphaMode::Blend,
+                perceptual_roughness: 0.15,
+                metallic: 0.1,
+                ..default()
+            })),
+            Transform::from_xyz(0.0, level, 0.0),
+            Terrain,
+        ));
+    }
 
     // Inn set at the zone entry (flat by construction). Enoch is the city act.
     let inn: &[(&str, Vec3, f32, f32)] = if act == Act::Enoch {
@@ -983,14 +1011,14 @@ fn receive_from_server(
                             commands.entity(m.root).insert(lo);
                         }
                     }
-                    if let Ok(mut t) = transforms.get_mut(m.root) {
-                        t.translation.x = e.x;
-                        t.translation.y = terrain_height(session.act, e.x, e.y);
-                        t.translation.z = e.y;
-                    }
+                    // Movement smoothing: record the authoritative target;
+                    // `smooth_motion` eases the transform toward it per frame.
+                    commands.entity(m.root).insert(NetTarget {
+                        pos: Vec3::new(e.x, terrain_height(session.act, e.x, e.y), e.y),
+                        rot: e.rot,
+                    });
                     if let Some(model) = m.model {
                         if let Ok(mut t) = transforms.get_mut(model) {
-                            t.rotation = Quat::from_rotation_y(-e.rot);
                             // Rider sits on the wolf's back while mounted.
                             t.translation.y = if e.mounted { 16.0 } else { 0.0 };
                         }
@@ -1708,6 +1736,33 @@ fn apply_combat_events(
                 mv.attack_until = now + 2.5;
             }
             EventKind::Hit | EventKind::LevelUp => {}
+        }
+    }
+}
+
+/// Ease every networked transform toward its latest server target (C15's
+/// 10 Hz snapshots would otherwise stutter at snapshot rate). Exponential
+/// smoothing ~14/s ≈ dead-on within a frame or two without rubber-banding;
+/// rotation slerps on the model child.
+fn smooth_motion(
+    time: Res<Time>,
+    mut roots: Query<(&NetTarget, &mut Transform, &ServerEnt)>,
+    map: Res<EntityMap>,
+    mut models: Query<&mut Transform, Without<NetTarget>>,
+) {
+    let k = 1.0 - (-14.0 * time.delta_secs()).exp();
+    for (target, mut t, ent) in &mut roots {
+        let d = target.pos - t.translation;
+        if d.length_squared() > 200.0 * 200.0 {
+            t.translation = target.pos; // teleport/travel: snap, don't glide
+        } else {
+            t.translation += d * k;
+        }
+        if let Some(m) = map.0.get(&ent.0).and_then(|m| m.model) {
+            if let Ok(mut mt) = models.get_mut(m) {
+                let want = Quat::from_rotation_y(-target.rot);
+                mt.rotation = mt.rotation.slerp(want, k);
+            }
         }
     }
 }
