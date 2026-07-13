@@ -48,11 +48,11 @@ fn fbm(act: Act) -> &'static Fbm<Perlin> {
 /// Hermon foothills, Nephilim badlands, Enoch outskirts, Flood stormy coast.
 fn act_shape(act: Act) -> (f32, f32) {
     match act {
-        Act::Eden => (26.0, 700.0),
-        Act::Hermon => (62.0, 540.0),
-        Act::Nephilim => (44.0, 480.0),
-        Act::Enoch => (20.0, 640.0),
-        Act::Flood => (36.0, 460.0),
+        Act::Eden => (72.0, 700.0),
+        Act::Hermon => (120.0, 540.0),
+        Act::Nephilim => (95.0, 480.0),
+        Act::Enoch => (42.0, 640.0),
+        Act::Flood => (75.0, 460.0),
     }
 }
 
@@ -108,7 +108,7 @@ fn landforms(act: Act, x: f32, z: f32) -> f32 {
             let mut h = -40.0 * ((x / B).clamp(-1.0, 1.0) * 0.5 + 0.5) // eastward dip
                 + 30.0 * ((-x / B).clamp(0.0, 1.0)); // Nod rises west
             for src in EDEN_RIVERS {
-                h += channel(p, src, EDEN_CONFLUENCE, 170.0, 26.0);
+                h += channel(p, src, EDEN_CONFLUENCE, 210.0, 55.0);
             }
             // Flaming Boundary: steep rampart past x = 3250.
             if x > 3250.0 {
@@ -164,6 +164,9 @@ pub fn water_level(act: Act) -> Option<f32> {
     }
 }
 
+/// New-character start: the Gate of Eden glade flattens like the inn does.
+const GATE: (f32, f32) = (2950.0, 0.0);
+
 /// Visual ground height at a server-world position (server y == render z).
 pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     let (amp, wl) = act_shape(act);
@@ -174,7 +177,12 @@ pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     }
     h += landforms(act, x, z);
     let d = (x * x + z * z).sqrt();
-    let t = ((d - FLAT_RADIUS) / BLEND_DIST).clamp(0.0, 1.0);
+    let mut t = ((d - FLAT_RADIUS) / BLEND_DIST).clamp(0.0, 1.0);
+    if act == Act::Eden {
+        // The Gate of Eden glade (new-character start) is flat too.
+        let dg = ((x - GATE.0).powi(2) + (z - GATE.1).powi(2)).sqrt();
+        t = t.min(((dg - FLAT_RADIUS) / BLEND_DIST).clamp(0.0, 1.0));
+    }
     // The road cuts a flat strip through the hills.
     let r = ((road_dist(x, z) - ROAD_HALF_WIDTH) / ROAD_BLEND).clamp(0.0, 1.0);
     h * t * t * r * r

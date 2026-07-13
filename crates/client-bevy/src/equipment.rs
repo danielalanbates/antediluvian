@@ -130,7 +130,7 @@ pub fn apply_loadouts(
                         Some("cainite") => Some(equip.mantle_cainite.clone()),
                         _ => Some(equip.mantle_sethite.clone()),
                     }
-                } else if loadout.chest.as_deref() == Some("hide_vest") {
+                } else if matches!(loadout.chest.as_deref(), Some("hide_vest") | Some("animal_skins")) {
                     Some(equip.vest.clone())
                 } else {
                     None

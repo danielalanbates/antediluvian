@@ -147,13 +147,15 @@ pub const ITEMS: &[ItemDef] = &[
     // Cave-ore crafts (C09).
     ItemDef { id: "orichalcum_blade",      slot: "weapon", melee: 15, spell: 0,  hp: 0 },
     ItemDef { id: "luminous_charm",        slot: "neck",   melee: 0,  spell: 8,  hp: 10 },
+    // Starting garment (Gen 3:21): skins given at the gate of the garden.
+    ItemDef { id: "animal_skins",          slot: "chest",  melee: 0,  spell: 0,  hp: 15 },
     // Faction Quartermaster wares (C10).
     ItemDef { id: "lineage_blade",         slot: "weapon", melee: 13, spell: 5,  hp: 0 },
     ItemDef { id: "lineage_mantle",        slot: "back",   melee: 0,  spell: 0,  hp: 40 },
 ];
 
 /// Key items: carried, never equipped or consumed.
-pub const KEY_ITEMS: &[&str] = &["dire_wolf_horn"];
+pub const KEY_ITEMS: &[&str] = &["dire_wolf_horn", "gate_token"];
 
 /// Mount performance tiers by species keyword (C07, one place only):
 /// swift predators run 1.7x; brutes haul slower but add 8 bag slots;
@@ -210,6 +212,9 @@ pub fn pvp_zones(act: Act) -> impl Iterator<Item = &'static PvpZone> {
 
 /// Seconds the forced flag lingers after leaving enemy territory.
 pub const FORCED_PVP_LINGER: f32 = 20.0;
+
+/// Where new mortals step out of the garden (east end of the Eden road).
+pub const GATE_OF_EDEN: Vec2 = Vec2::new(2950.0, 0.0);
 
 // ─── Factions & reputation (C10) ─────────────────────────────────────────────
 
@@ -583,6 +588,12 @@ impl World {
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-70.0, 110.0), "Wanderer"));
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(260.0, -170.0), "Seer"));
+        // Cherub Sentinel at the Gate of Eden: the new-character starting
+        // questgiver (storyline: exile from the garden, clothed in skins).
+        if act == Act::Eden {
+            let id = self.alloc_id();
+            zone.entities.insert(id, make_npc(id, GATE_OF_EDEN + Vec2::new(60.0, -40.0), "Sentinel"));
+        }
         // Innkeeper (C11): buys anything priced, sells staples.
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(40.0, -120.0), "Innkeeper"));
@@ -598,7 +609,9 @@ impl World {
         // rare drop (thick_hide) and big XP.
         let pos = self.rng.point(WORLD_BOUNDS * 0.7);
         let id = self.alloc_id();
-        let mut boss = make_enemy(id, pos, enemy_tag, act);
+        // Raw stats: the boss is elite even if it rolls near the entry
+        // (the starting-area mercy nerf must never touch it).
+        let mut boss = make_enemy_raw(id, pos, enemy_tag, act);
         boss.tag = Some(format!("{enemy_tag}_alpha"));
         boss.max_health *= 4;
         boss.health = boss.max_health;
@@ -1065,6 +1078,10 @@ impl World {
                             }
                             let dir = (e.wander_target - e.pos).normalize_or_zero();
                             e.pos += dir * (e.speed * 0.35) * DT;
+                            // Face where we graze-walk (fixes backwards-running animals).
+                            if dir.length_squared() > 0.0 {
+                                e.rot = dir.y.atan2(dir.x);
+                            }
                         }
                     }
                     e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
@@ -2098,6 +2115,22 @@ const OBJECT_TAGS: &[&str] = &[
 ];
 
 fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
+    let mut e = make_enemy_raw(id, pos, tag, act);
+    // Starting-area mercy (Eden): anything near the inn road or the Gate of
+    // Eden fights at half strength so fresh exiles can find their feet.
+    if act == Act::Eden
+        && (pos.distance(Vec2::ZERO) < 1500.0 || pos.distance(GATE_OF_EDEN) < 1200.0)
+        && !tag.ends_with("_alpha")
+    {
+        e.max_health = (e.max_health / 2).max(20);
+        e.health = e.max_health;
+        e.damage = (e.damage / 2).max(2);
+        e.aggro_range *= 0.7;
+    }
+    e
+}
+
+fn make_enemy_raw(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as i32;
     // Bestiary species: stats scale with the entry's level, and the display
     // name comes from the bestiary for nameplates.
@@ -3105,11 +3138,12 @@ mod tests {
         let s = w.player_sheet(Act::Eden, pid).unwrap();
         assert_eq!(s.equipment.get("weapon").map(String::as_str), Some("stone_axe"));
         assert!(s.inventory.iter().any(|i| i == "bronze_sword"));
-        // Chest piece adds max health.
+        // Chest piece adds max health (swapping out the starting
+        // animal_skins, +15, for the hide_vest, +30).
         let hp_before = s.max_health;
         w.equip(Act::Eden, pid, "hide_vest").unwrap();
         let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert_eq!(s.max_health, hp_before + 30);
+        assert_eq!(s.max_health, hp_before + 15);
     }
 
     #[test]
@@ -3414,15 +3448,20 @@ pub fn new_character_with(
     faction: Option<String>,
     appearance: [u32; 3],
 ) -> CharacterSheet {
+    let mut equipment = std::collections::BTreeMap::new();
+    equipment.insert("chest".to_string(), "animal_skins".to_string());
     CharacterSheet {
         name: name.to_string(),
         class,
         faction,
         appearance,
         inventory: vec!["hearthstone".to_string()],
+        equipment,
         act: Act::Eden,
-        x: 0.0,
-        y: 0.0,
+        // New mortals begin at the Gate of Eden (east, on the road), clothed
+        // in skins, with the Flaming Boundary at their backs (Gen 3).
+        x: GATE_OF_EDEN.x,
+        y: GATE_OF_EDEN.y,
         level: 1,
         xp: 0,
         max_xp: 100,
@@ -3444,6 +3483,5 @@ pub fn new_character_with(
         reputation: std::collections::BTreeMap::new(),
         quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),
-        equipment: Default::default(),
     }
 }

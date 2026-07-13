@@ -254,6 +254,15 @@ pub const QUESTS: &[QuestDef] = &[
         offer: "A warlord has mastered all four arts — blade, root, star and word. Face Azazel's Herald and end the corruption.",
         objective: Kill { target: "azazel_herald", count: 1 },
         xp: 1500, gold: 150, item: Some("warlords_star_blade"), requires: Some("fa_scholars_request"), side: true, min_level: 10 },
+    // ============ GATE OF EDEN — the exile prologue (starting area) =======
+    QuestDef { id: "garments_of_mercy", act: Act::Eden, giver: "sentinel",
+        offer: "The garden is shut behind you, child of Adam, and the sword turns every way. Those skins on your back were mercy's first gift — earn the rest. Serpents of the Brood nest along the road west; slay 3 and prove you can live outside the garden.",
+        objective: Kill { target: "serpent", count: 3 },
+        xp: 60, gold: 5, item: Some("bread"), requires: None, side: false, min_level: 1 },
+    QuestDef { id: "the_road_west", act: Act::Eden, giver: "sentinel",
+        offer: "You will not stand at this gate forever. The serpent matriarchs swallow tokens of the garden — cut one free and return it to me, and I will bless your road. Then walk WEST along this road: an inn rises where the four rivers meet the plain, and the Elder there keeps the memory of your line.",
+        objective: Collect { item: "gate_token", count: 1, source: "serpent" },
+        xp: 80, gold: 10, item: None, requires: Some("garments_of_mercy"), side: false, min_level: 1 },
     // ============ FACTION VARIANTS (C10) — same deed, rival lore ==========
     QuestDef { id: "sethite_purge_of_nod", act: Act::Eden, giver: "elder",
         offer: "[Sethite] The Cainite camps profane Abel's memory. Scatter 6 of their scavengers.",
@@ -331,14 +340,20 @@ mod tests {
             );
             // 6 doc quests per act (+3 mount-chain quests parked in Enoch);
             // theme-pillar quests (C08) sit outside the per-act budget.
-            let expect = if act == Act::Enoch { 9 } else { 6 };
+            // Eden carries the two Gate-of-Eden prologue quests on top of
+            // its per-act budget.
+            let expect = match act {
+                Act::Enoch => 9,
+                Act::Eden => 8,
+                _ => 6,
+            };
             let n = QUESTS.iter()
                 .filter(|q| q.act == act && quest_theme(q.id).is_none() && quest_faction(q.id).is_none())
                 .count();
             assert_eq!(n, expect, "{act:?} quest count");
         }
         for q in QUESTS {
-            assert!(["elder", "wanderer", "seer", "jabal"].contains(&q.giver), "{}: unknown giver {}", q.id, q.giver);
+            assert!(["elder", "wanderer", "seer", "jabal", "sentinel"].contains(&q.giver), "{}: unknown giver {}", q.id, q.giver);
             if let Some(r) = q.requires {
                 let pre = quest(r).unwrap_or_else(|| panic!("{}: missing prerequisite {r}", q.id));
                 // Theme pillars (C08) hop acts on purpose; everything else stays local.

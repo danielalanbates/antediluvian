@@ -255,6 +255,7 @@ fn handle_client_msg(
             }
 
             // Load or create the character via apple_id
+            let mut newborn = false;
             let mut sheet = match db.load_by_apple_id(&apple_id) {
                 Ok(Some(mut s)) => {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
@@ -295,6 +296,7 @@ fn handle_client_msg(
                     if let Ok(Some(_)) = db.load(&name) {
                         return reject(conns, "character name already taken");
                     }
+                    newborn = true;
                     let s = crate::world::new_character_with(&name, class, faction, appearance);
                     if let Err(e) = db.save(&s, Some(&apple_id)) {
                         tracing::error!("db save new: {e}");
@@ -327,6 +329,11 @@ fn handle_client_msg(
                 c.guild = guild;
                 c.is_dev = is_dev;
                 c.send(ServerMsg::Welcome { entity_id, character: sheet, is_dev });
+                if newborn {
+                    // Prologue (Gen 3): every mortal's story starts at the
+                    // shut gate, clothed in skins.
+                    c.send(ServerMsg::Notice { text: "The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins — mercy's first gift. A Sentinel waits by the gate; the road runs west.".into() });
+                }
             }
             tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
         }
