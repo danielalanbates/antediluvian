@@ -1097,6 +1097,30 @@ impl World {
             }
         }
 
+        // Battleground v1 (P6): holding ground inside an enemy capital zone
+        // while PvP-flagged earns honor every 60 seconds.
+        if zone.tick % (TICK_HZ as u64 * 60) == 0 {
+            for e in zone.entities.values_mut() {
+                if e.kind != EntityKind::Player || e.health <= 0 || !e.forced_pvp {
+                    continue;
+                }
+                let Some(s) = e.sheet.as_mut() else { continue };
+                let Some(f) = s.faction.clone() else { continue };
+                let inside = pvp_zones(act)
+                    .any(|z| z.faction != f && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius);
+                if inside {
+                    let h = s.reputation.entry("honor".to_string()).or_insert(0);
+                    *h += 10;
+                    if let Some(o) = e.owner {
+                        events.push(SimEvent::Info {
+                            owner: o,
+                            text: format!("+10 honor for holding contested ground ({} total)", h),
+                        });
+                    }
+                }
+            }
+        }
+
         // Apply damage; collect kills. A dueling player never dies to duel
         // damage — at 0 HP the duel ends and they stay at 1 HP.
         let mut killed: Vec<(EntityId, Option<EntityId>)> = Vec::new();
@@ -1335,6 +1359,22 @@ impl World {
                                     }
                                 }
                                 _ => {}
+                            }
+                            // Dungeon v1 (P5): cave bosses are dungeon
+                            // encounters — every party member present gets
+                            // the rare drop, not just the killer.
+                            if !is_killer {
+                                if let Some(res) =
+                                    etag.as_deref().and_then(|t| t.strip_suffix("_dweller"))
+                                {
+                                    if s.inventory.len() < inv_cap(s) {
+                                        s.inventory.push(res.to_string());
+                                        events.push(SimEvent::Info {
+                                            owner: o,
+                                            text: format!("Dungeon loot: {res}!"),
+                                        });
+                                    }
+                                }
                             }
                             // Advance every active quest this kill/harvest
                             // satisfies: Kill objectives count enemy kills,
@@ -1823,6 +1863,175 @@ impl World {
             s.inventory.push(it);
             Ok(format!("{item} retrieved from the stable."))
         }
+    }
+
+    /// Read-only view of a player's sheet (P3 mail pre-checks).
+    pub fn sheet_of(&self, act: Act, id: EntityId) -> Option<&CharacterSheet> {
+        self.zones.get(&act)?.entities.get(&id)?.sheet.as_ref()
+    }
+
+    /// Remove a mail attachment from the sender (pre-validated) (P3).
+    pub fn mail_debit(&mut self, act: Act, id: EntityId, item: Option<&str>, gold: u32) {
+        if let Some(s) = self.sheet_mut(act, id) {
+            if let Some(it) = item {
+                if let Some(idx) = s.inventory.iter().position(|i| i == it) {
+                    s.inventory.remove(idx);
+                }
+            }
+            s.gold = s.gold.saturating_sub(gold);
+        }
+    }
+
+    /// Deliver a mail attachment; false if the bags can't take the item (P3).
+    pub fn mail_credit(&mut self, act: Act, id: EntityId, item: Option<&str>, gold: u32) -> bool {
+        let Some(s) = self.sheet_mut(act, id) else { return false };
+        if let Some(it) = item {
+            if s.inventory.len() >= inv_cap(s) {
+                return false;
+            }
+            s.inventory.push(it.to_string());
+        }
+        s.gold += gold;
+        true
+    }
+
+    /// Bank vault (P2): move an item in/out at the inn. `put_in` deposits.
+    pub fn bank_item(&mut self, act: Act, id: EntityId, item: &str, put_in: bool) -> Result<String, String> {
+        let entry = self.zones.get(&act).ok_or("no zone")?.entry;
+        let e = self.entity_mut(act, id).ok_or("no player")?;
+        if e.pos.distance(entry) > INN_RADIUS {
+            return Err("You must be at the inn to use your bank vault.".into());
+        }
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        if put_in {
+            let idx = s.inventory.iter().position(|i| i == item).ok_or("You don't have that item.")?;
+            if s.bank.len() >= 60 {
+                return Err("Your bank vault is full.".into());
+            }
+            let it = s.inventory.remove(idx);
+            s.bank.push(it);
+            Ok(format!("{item} deposited. Vault: {} items.", s.bank.len()))
+        } else {
+            let idx = s.bank.iter().position(|i| i == item).ok_or("That item is not in your vault.")?;
+            if s.inventory.len() >= inv_cap(s) {
+                return Err("Your bags are full.".into());
+            }
+            let it = s.bank.remove(idx);
+            s.inventory.push(it);
+            Ok(format!("{item} withdrawn."))
+        }
+    }
+
+    /// Bank gold (P2): positive deposits, negative withdraws.
+    pub fn bank_gold(&mut self, act: Act, id: EntityId, amount: i64) -> Result<String, String> {
+        let entry = self.zones.get(&act).ok_or("no zone")?.entry;
+        let e = self.entity_mut(act, id).ok_or("no player")?;
+        if e.pos.distance(entry) > INN_RADIUS {
+            return Err("You must be at the inn to use your bank vault.".into());
+        }
+        let s = e.sheet.as_mut().ok_or("no sheet")?;
+        if amount > 0 {
+            let a = amount as u32;
+            if s.gold < a {
+                return Err("You don't have that much gold.".into());
+            }
+            s.gold -= a;
+            s.bank_gold += a;
+        } else {
+            let a = (-amount) as u32;
+            if s.bank_gold < a {
+                return Err("Your vault doesn't hold that much gold.".into());
+            }
+            s.bank_gold -= a;
+            s.gold += a;
+        }
+        Ok(format!("Vault: {}g. Bags: {}g.", s.bank_gold, s.gold))
+    }
+
+    /// Direct trade (P4): hand an item or gold to a nearby player. Returns
+    /// (message-to-giver, message-to-receiver, receiver owner conn).
+    pub fn trade_give(
+        &mut self,
+        act: Act,
+        giver: EntityId,
+        to_name: &str,
+        item: Option<&str>,
+        gold: u32,
+    ) -> Result<(String, String, u64), String> {
+        const TRADE_RANGE: f32 = 80.0;
+        let z = self.zones.get(&act).ok_or("no zone")?;
+        let gpos = z.entities.get(&giver).ok_or("no player")?.pos;
+        let (rid, rowner) = z
+            .entities
+            .values()
+            .find(|e| {
+                e.id != giver
+                    && e.kind == EntityKind::Player
+                    && e.sheet.as_ref().map(|s| s.name.eq_ignore_ascii_case(to_name)) == Some(true)
+            })
+            .map(|e| (e.id, e.owner))
+            .ok_or("No such player nearby.")?;
+        let rowner = rowner.ok_or("No such player nearby.")?;
+        let rpos = self.zones[&act].entities[&rid].pos;
+        if gpos.distance(rpos) > TRADE_RANGE {
+            return Err("They are too far away to trade.".into());
+        }
+        // Take from the giver first.
+        let gname;
+        {
+            let gs = self
+                .entity_mut(act, giver)
+                .and_then(|e| e.sheet.as_mut())
+                .ok_or("no sheet")?;
+            gname = gs.name.clone();
+            if let Some(it) = item {
+                let idx = gs.inventory.iter().position(|i| i == it).ok_or("You don't have that item.")?;
+                gs.inventory.remove(idx);
+            }
+            if gold > 0 {
+                if gs.gold < gold {
+                    return Err("You don't have that much gold.".into());
+                }
+                gs.gold -= gold;
+            }
+        }
+        // Give to the receiver; on a full bag, refund the giver.
+        let full = {
+            let rs = self
+                .entity_mut(act, rid)
+                .and_then(|e| e.sheet.as_mut())
+                .ok_or("no sheet")?;
+            if let Some(it) = item {
+                if rs.inventory.len() >= inv_cap(rs) {
+                    true
+                } else {
+                    rs.inventory.push(it.to_string());
+                    rs.gold += gold;
+                    false
+                }
+            } else {
+                rs.gold += gold;
+                false
+            }
+        };
+        if full {
+            let gs = self.entity_mut(act, giver).and_then(|e| e.sheet.as_mut()).ok_or("no sheet")?;
+            if let Some(it) = item {
+                gs.inventory.push(it.to_string());
+            }
+            gs.gold += gold;
+            return Err("Their bags are full.".into());
+        }
+        let what = match (item, gold) {
+            (Some(it), 0) => it.to_string(),
+            (Some(it), g) => format!("{it} and {g}g"),
+            (None, g) => format!("{g}g"),
+        };
+        Ok((
+            format!("You give {what} to {to_name}."),
+            format!("{gname} gives you {what}."),
+            rowner,
+        ))
     }
 
     /// Align with a mortal lineage (C10). Level 10+; one-shot in spirit —
@@ -2460,6 +2669,67 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P2: bank vault round-trips items and gold at the inn.
+    #[test]
+    fn bank_round_trip() {
+        let mut w = World::new(42);
+        let entry = w.zones[&Act::Eden].entry;
+        let mut a = new_character("Banker");
+        a.x = entry.x;
+        a.y = entry.y;
+        a.gold = 50;
+        let pa = w.spawn_player(1, a);
+        assert!(w.bank_item(Act::Eden, pa, "hearthstone", true).is_ok());
+        assert!(w.sheet_of(Act::Eden, pa).unwrap().bank.contains(&"hearthstone".to_string()));
+        assert!(w.bank_item(Act::Eden, pa, "hearthstone", false).is_ok());
+        assert!(w.bank_gold(Act::Eden, pa, 30).is_ok());
+        let s = w.sheet_of(Act::Eden, pa).unwrap();
+        assert_eq!((s.gold, s.bank_gold), (20, 30));
+        assert!(w.bank_gold(Act::Eden, pa, -30).is_ok());
+        assert_eq!(w.sheet_of(Act::Eden, pa).unwrap().gold, 50);
+        // Not at the inn → refused.
+        let mut b = new_character("Roamer");
+        b.x = entry.x + 5000.0;
+        b.y = entry.y;
+        let pb = w.spawn_player(2, b);
+        assert!(w.bank_item(Act::Eden, pb, "hearthstone", true).is_err());
+    }
+
+    /// P4: direct trade hands items and gold to a nearby player only.
+    #[test]
+    fn trade_give_item_and_gold() {
+        let mut w = World::new(42);
+        let entry = w.zones[&Act::Eden].entry;
+        let mut a = new_character("Giver");
+        a.x = entry.x;
+        a.y = entry.y;
+        a.gold = 40;
+        let mut b = new_character("Taker");
+        b.x = entry.x + 10.0;
+        b.y = entry.y;
+        let pa = w.spawn_player(1, a);
+        let _pb = w.spawn_player(2, b);
+        let (gm, rm, rowner) = w
+            .trade_give(Act::Eden, pa, "Taker", Some("hearthstone"), 15)
+            .expect("trade should succeed");
+        assert_eq!(rowner, 2);
+        assert!(gm.contains("hearthstone") && rm.contains("Giver"));
+        let sb = w
+            .zones[&Act::Eden]
+            .entities
+            .values()
+            .find(|e| e.sheet.as_ref().map(|s| s.name == "Taker") == Some(true))
+            .and_then(|e| e.sheet.clone())
+            .unwrap();
+        assert_eq!(sb.gold, 15);
+        assert_eq!(sb.inventory.iter().filter(|i| *i == "hearthstone").count(), 2);
+        let sa = w.sheet_of(Act::Eden, pa).unwrap();
+        assert_eq!(sa.gold, 25);
+        assert!(!sa.inventory.contains(&"hearthstone".to_string()));
+        // Too far → refused.
+        assert!(w.trade_give(Act::Eden, pa, "Nobody", None, 5).is_err());
+    }
 
     /// P1: party members near a kill split the XP and both get quest credit;
     /// loot goes only to the killer.
@@ -3579,6 +3849,8 @@ pub fn new_character_with(
         wakefulness: 100.0,
         last_logout: None,
         discovered: Vec::new(),
+        bank: Vec::new(),
+        bank_gold: 0,
         stable: Vec::new(),
         reputation: std::collections::BTreeMap::new(),
         quests: std::collections::BTreeMap::new(),

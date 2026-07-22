@@ -46,6 +46,10 @@ struct SheetExt {
     #[serde(default)]
     discovered: Vec<String>,
     #[serde(default)]
+    bank: Vec<String>,
+    #[serde(default)]
+    bank_gold: u32,
+    #[serde(default)]
     stable: Vec<String>,
     #[serde(default)]
     faction: Option<String>,
@@ -98,6 +102,14 @@ impl Db {
                 member_key TEXT NOT NULL,
                 member     TEXT NOT NULL,
                 PRIMARY KEY (guild_key, member_key)
+            );
+            CREATE TABLE IF NOT EXISTS mail (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                to_key    TEXT NOT NULL,
+                from_name TEXT NOT NULL,
+                item      TEXT,
+                gold      INTEGER NOT NULL DEFAULT 0,
+                sent_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS auctions (
                 id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,6 +182,8 @@ impl Db {
                         wakefulness: ext.wakefulness,
                         last_logout: ext.last_logout,
                         discovered: ext.discovered,
+                        bank: ext.bank,
+                        bank_gold: ext.bank_gold,
                         stable: ext.stable,
                         faction: ext.faction,
                         reputation: ext.reputation,
@@ -218,6 +232,8 @@ impl Db {
             wakefulness: c.wakefulness,
             last_logout: c.last_logout,
             discovered: c.discovered.clone(),
+            bank: c.bank.clone(),
+            bank_gold: c.bank_gold,
             stable: c.stable.clone(),
             faction: c.faction.clone(),
             reputation: c.reputation.clone(),
@@ -279,6 +295,45 @@ impl Db {
             .prepare("SELECT member FROM guild_members WHERE guild_key = ?1 ORDER BY member")?;
         let rows = stmt.query_map(params![guild.trim().to_lowercase()], |r| r.get(0))?;
         Ok(rows.collect::<std::result::Result<Vec<String>, _>>()?)
+    }
+
+    // ── Mail (P3) ────────────────────────────────────────────────────────────
+
+    /// Character name exists (has a saved sheet)?
+    pub fn character_exists(&self, name: &str) -> Result<bool> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM accounts WHERE name_key = ?1",
+            params![name.trim().to_lowercase()],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn mail_send(&self, to: &str, from: &str, item: Option<&str>, gold: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO mail (to_key, from_name, item, gold) VALUES (?1, ?2, ?3, ?4)",
+            params![to.trim().to_lowercase(), from, item, gold as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Pop up to `limit` pending mails for a character: (from, item, gold).
+    pub fn mail_take(&self, to: &str, limit: usize) -> Result<Vec<(String, Option<String>, u32)>> {
+        let key = to.trim().to_lowercase();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_name, item, gold FROM mail WHERE to_key = ?1 ORDER BY id LIMIT ?2",
+        )?;
+        let rows: Vec<(i64, String, Option<String>, i64)> = stmt
+            .query_map(params![key, limit as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut out = Vec::new();
+        for (id, from, item, gold) in rows {
+            self.conn.execute("DELETE FROM mail WHERE id = ?1", params![id])?;
+            out.push((from, item, gold as u32));
+        }
+        Ok(out)
     }
 
     // ── Auction house ────────────────────────────────────────────────────────

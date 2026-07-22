@@ -188,6 +188,12 @@ pub struct CharacterSheet {
     /// Wakefulness (100.0 = fully awake, 0.0 = exhausted). Decreases while logged in, increases while logged out.
     #[serde(default = "default_wakefulness")]
     pub wakefulness: f32,
+    /// Bank vault items (P2) — stored at any inn, shared across acts.
+    #[serde(default)]
+    pub bank: Vec<String>,
+    /// Bank vault gold (P2).
+    #[serde(default)]
+    pub bank_gold: u32,
     /// POI names this character has discovered (C04).
     #[serde(default)]
     pub discovered: Vec<String>,
@@ -329,6 +335,18 @@ pub enum ClientMsg {
     PartyInvite { player: String },
     PartyAccept,
     PartyLeave,
+    /// Bank vault at any inn (P2): move an item in/out, or gold (positive
+    /// deposits, negative withdraws).
+    BankDeposit { item: String },
+    BankWithdraw { item: String },
+    BankGold { amount: i64 },
+    /// Direct trade (P4): hand an item or gold to a nearby player.
+    TradeGive { player: String, item: String },
+    TradeGold { player: String, amount: u32 },
+    /// Mail (P3): send an item or gold to any character (even offline);
+    /// MailCheck at an inn lists and delivers pending mail.
+    MailSend { to: String, item: Option<String>, gold: u32 },
+    MailCheck,
     /// Auction house (usable near a zone's inn/entry).
     AuctionList { item: String, price: u32 },
     AuctionBuy { id: i64 },

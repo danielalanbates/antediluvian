@@ -783,6 +783,127 @@ fn handle_client_msg(
                 }
             }
         }
+        ClientMsg::BankDeposit { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.bank_item(act, ent, &item, true) {
+                Ok(t) | Err(t) => notice(conns, id, t),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::BankWithdraw { item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.bank_item(act, ent, &item, false) {
+                Ok(t) | Err(t) => notice(conns, id, t),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::BankGold { amount } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.bank_gold(act, ent, amount) {
+                Ok(t) | Err(t) => notice(conns, id, t),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::TradeGive { player, item } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.trade_give(act, ent, &player, Some(&item), 0) {
+                Ok((gm, rm, rowner)) => {
+                    notice(conns, id, gm);
+                    notice(conns, rowner, rm);
+                    send_stats(world, conns, rowner);
+                }
+                Err(t) => notice(conns, id, t),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::TradeGold { player, amount } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            if amount == 0 {
+                return notice(conns, id, "Give how much gold?".into());
+            }
+            match world.trade_give(act, ent, &player, None, amount) {
+                Ok((gm, rm, rowner)) => {
+                    notice(conns, id, gm);
+                    notice(conns, rowner, rm);
+                    send_stats(world, conns, rowner);
+                }
+                Err(t) => notice(conns, id, t),
+            }
+            send_stats(world, conns, id);
+        }
+        ClientMsg::MailSend { to, item, gold } => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            let from = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            if to.eq_ignore_ascii_case(&from) {
+                return notice(conns, id, "You can't mail yourself.".into());
+            }
+            match db.character_exists(&to) {
+                Ok(true) => {}
+                Ok(false) => return notice(conns, id, "No character by that name.".into()),
+                Err(e) => {
+                    tracing::error!("mail lookup: {e}");
+                    return notice(conns, id, "Server error.".into());
+                }
+            }
+            // Take the attachment from the sender up front.
+            if let Some(sheet) = world.sheet_of(act, ent) {
+                if let Some(it) = &item {
+                    if !sheet.inventory.iter().any(|i| i == it) {
+                        return notice(conns, id, "You don't have that item.".into());
+                    }
+                }
+                if sheet.gold < gold {
+                    return notice(conns, id, "You don't have that much gold.".into());
+                }
+            } else {
+                return;
+            }
+            world.mail_debit(act, ent, item.as_deref(), gold);
+            if let Err(e) = db.mail_send(&to, &from, item.as_deref(), gold) {
+                tracing::error!("mail_send: {e}");
+                return notice(conns, id, "Server error sending mail.".into());
+            }
+            notice(conns, id, format!("Mail sent to {to}."));
+            send_stats(world, conns, id);
+            // Instant delivery ping if they're online.
+            if let Some((tid, _)) = conns.iter().find(|(_, c)| {
+                c.logged_in && c.name.as_deref().map(|n| n.eq_ignore_ascii_case(&to)) == Some(true)
+            }) {
+                notice(conns, *tid, format!("You have new mail from {from}. /mailcheck at an inn."));
+            }
+        }
+        ClientMsg::MailCheck => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            let me = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            if !world.at_inn(act, ent) {
+                return notice(conns, id, "Visit an inn to collect your mail.".into());
+            }
+            match db.mail_take(&me, 10) {
+                Ok(mails) if mails.is_empty() => notice(conns, id, "No mail.".into()),
+                Ok(mails) => {
+                    for (from, item, gold) in mails {
+                        let ok = world.mail_credit(act, ent, item.as_deref(), gold);
+                        if !ok {
+                            // Bags full: return to sender's mailbox.
+                            let _ = db.mail_send(&me, &from, item.as_deref(), gold);
+                            notice(conns, id, "Bags full — remaining mail kept at the inn.".into());
+                            break;
+                        }
+                        let what = match (&item, gold) {
+                            (Some(it), 0) => it.clone(),
+                            (Some(it), g) => format!("{it} and {g}g"),
+                            (None, g) => format!("{g}g"),
+                        };
+                        notice(conns, id, format!("Mail from {from}: {what}."));
+                    }
+                    send_stats(world, conns, id);
+                }
+                Err(e) => {
+                    tracing::error!("mail_take: {e}");
+                    notice(conns, id, "Server error reading mail.".into());
+                }
+            }
+        }
         ClientMsg::AuctionList { item, price } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             if !world.at_inn(act, ent) {

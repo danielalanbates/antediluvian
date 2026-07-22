@@ -1585,6 +1585,42 @@ fn chat_input(
                     tx.send(ClientMsg::PartyAccept);
                 } else if text == "/pleave" {
                     tx.send(ClientMsg::PartyLeave);
+                } else if let Some(it) = text.strip_prefix("/bank ") {
+                    tx.send(ClientMsg::BankDeposit { item: it.trim().to_string() });
+                } else if let Some(it) = text.strip_prefix("/unbank ") {
+                    tx.send(ClientMsg::BankWithdraw { item: it.trim().to_string() });
+                } else if let Some(n) = text.strip_prefix("/bankgold ") {
+                    if let Ok(a) = n.trim().parse::<i64>() {
+                        tx.send(ClientMsg::BankGold { amount: a });
+                    }
+                } else if let Some(n) = text.strip_prefix("/unbankgold ") {
+                    if let Ok(a) = n.trim().parse::<i64>() {
+                        tx.send(ClientMsg::BankGold { amount: -a });
+                    }
+                } else if let Some(rest) = text.strip_prefix("/give ") {
+                    // /give <player> <item>
+                    let mut parts = rest.trim().splitn(2, ' ');
+                    if let (Some(p2), Some(it)) = (parts.next(), parts.next()) {
+                        tx.send(ClientMsg::TradeGive { player: p2.to_string(), item: it.trim().to_string() });
+                    }
+                } else if let Some(rest) = text.strip_prefix("/givegold ") {
+                    let mut parts = rest.trim().splitn(2, ' ');
+                    if let (Some(p2), Some(Ok(a))) = (parts.next(), parts.next().map(|n| n.trim().parse::<u32>())) {
+                        tx.send(ClientMsg::TradeGold { player: p2.to_string(), amount: a });
+                    }
+                } else if let Some(rest) = text.strip_prefix("/mail ") {
+                    // /mail <player> <item>  |  /mailgold <player> <n>
+                    let mut parts = rest.trim().splitn(2, ' ');
+                    if let (Some(p2), Some(it)) = (parts.next(), parts.next()) {
+                        tx.send(ClientMsg::MailSend { to: p2.to_string(), item: Some(it.trim().to_string()), gold: 0 });
+                    }
+                } else if let Some(rest) = text.strip_prefix("/mailgold ") {
+                    let mut parts = rest.trim().splitn(2, ' ');
+                    if let (Some(p2), Some(Ok(a))) = (parts.next(), parts.next().map(|n| n.trim().parse::<u32>())) {
+                        tx.send(ClientMsg::MailSend { to: p2.to_string(), item: None, gold: a });
+                    }
+                } else if text == "/mailcheck" {
+                    tx.send(ClientMsg::MailCheck);
                 } else {
                     tx.send(ClientMsg::Chat { text });
                 }
