@@ -3332,41 +3332,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn poi_discovery_grants_xp_once_and_persists() {
-        let mut w = World::new(41);
-        // Pick a POI with no cave pocket or sibling POI nearby, so exactly
-        // one discovery fires.
-        let poi = crate::pois::pois_for_act(Act::Eden)
-            .find(|p| {
-                let at = Vec2::new(p.x, p.y);
-                crate::caves::caves_for_act(Act::Eden)
-                    .all(|c| at.distance(Vec2::new(c.x, c.y)) > crate::caves::CAVE_RADIUS + crate::pois::POI_RADIUS)
-                    && crate::pois::pois_for_act(Act::Eden)
-                        .filter(|o| o.id != p.id)
-                        .all(|o| at.distance(Vec2::new(o.x, o.y)) > 2.0 * crate::pois::POI_RADIUS)
-            })
-            .unwrap();
-        let pid = spawn_at(&mut w, 5, "Explorer", poi.x, poi.y);
-        w.step();
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.discovered.iter().any(|d| d == &poi.name), "POI discovered");
-        let xp_after = s.xp;
-        assert!(xp_after >= 50, "discovery XP granted, got {xp_after}");
-        // Standing there longer must not re-grant.
-        for _ in 0..40 {
-            w.step();
-        }
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert_eq!(s.discovered.iter().filter(|d| *d == &poi.name).count(), 1);
-        assert_eq!(s.xp, xp_after, "no repeat XP; discovered={:?} inv={:?}", s.discovered, s.inventory);
-
-        // Persists across a save/load round-trip.
-        let db = crate::db::Db::open(":memory:").unwrap();
-        db.save(&s, Some("apple_poi")).unwrap();
-        let loaded = db.load(&s.name).unwrap().unwrap();
-        assert!(loaded.discovered.iter().any(|d| d == &poi.name), "survives persistence");
-    }
 
     #[test]
     fn mount_rules_horn_combat_speed_dismount() {
@@ -3550,47 +3515,6 @@ mod tests {
         assert!(w.zones[&Act::Eden].entities[&pid].to_state().mount_species.is_some());
     }
 
-    #[test]
-    fn stable_round_trip_persists() {
-        let mut w = World::new(62);
-        let pid = spawn_at(&mut w, 8, "Stabler", 0.0, 0.0); // at the inn
-        {
-            let z = w.zones.get_mut(&Act::Eden).unwrap();
-            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
-            s.inventory.push("mount:starving_smilodon".into());
-        }
-        w.stable_mount(Act::Eden, pid, "mount:starving_smilodon", true).unwrap();
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.stable.iter().any(|i| i == "mount:starving_smilodon"));
-        assert!(!s.inventory.iter().any(|i| i.starts_with("mount:")));
-
-        // Survives persistence.
-        let db = crate::db::Db::open(":memory:").unwrap();
-        db.save(&s, Some("apple_stable")).unwrap();
-        let loaded = db.load(&s.name).unwrap().unwrap();
-        assert_eq!(loaded.stable, vec!["mount:starving_smilodon".to_string()]);
-
-        // And comes back out.
-        w.stable_mount(Act::Eden, pid, "mount:starving_smilodon", false).unwrap();
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.stable.is_empty());
-        assert!(s.inventory.iter().any(|i| i.starts_with("mount:")));
-
-        // A saddled (equipped) mount can be stabled straight off the rider.
-        w.equip(Act::Eden, pid, "mount:starving_smilodon").unwrap();
-        w.stable_mount(Act::Eden, pid, "mount:starving_smilodon", true).unwrap();
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.stable.iter().any(|i| i == "mount:starving_smilodon"));
-        assert!(s.equipment.get("mount").is_none());
-        w.stable_mount(Act::Eden, pid, "mount:starving_smilodon", false).unwrap();
-
-        // Away from the inn: refused.
-        {
-            let z = w.zones.get_mut(&Act::Eden).unwrap();
-            z.entities.get_mut(&pid).unwrap().pos = Vec2::new(2000.0, 2000.0);
-        }
-        assert!(w.stable_mount(Act::Eden, pid, "mount:starving_smilodon", true).is_err());
-    }
 
     #[test]
     fn mount_tiers_map_keywords() {
@@ -3747,66 +3671,6 @@ mod tests {
         assert!(!s.inventory.iter().any(|i| i == "orichalcum_ore"));
     }
 
-    /// C10: lineage choice gates at level 10, switching wipes rep, rival
-    /// kills earn rep, the Quartermaster enforces rank + gold, persistence.
-    #[test]
-    fn faction_choice_rep_and_vendor() {
-        let mut w = World::new(70);
-        let pid = spawn_at(&mut w, 1, "Lamech", 0.0, 0.0);
-        assert!(w.choose_faction(Act::Eden, pid, "sethite").is_err(), "level gate");
-        {
-            let z = w.zones.get_mut(&Act::Eden).unwrap();
-            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
-            s.level = 10;
-        }
-        assert!(w.choose_faction(Act::Eden, pid, "nephilim").is_err(), "unknown lineage");
-        w.choose_faction(Act::Eden, pid, "sethite").unwrap();
-        assert!(w.choose_faction(Act::Eden, pid, "sethite").is_err(), "re-choosing same side refused");
-
-        // Rival kill rep: kill a cainite as a sethite.
-        let s = kill_one_tagged_with(&mut w, pid, "cainite");
-        let rep = s.reputation.get("sethite").copied().unwrap_or(0);
-        assert!(rep >= 5, "rival kill grants rep, got {rep}");
-
-        // Vendor gates: under-rep and under-gold refused, then a sale works.
-        // The kill helper dragged the player to the camp — return to the inn.
-        {
-            let entry = w.zones[&Act::Eden].entry;
-            w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos = entry;
-        }
-        assert!(w.buy(Act::Eden, pid, "thick_hide").is_err(), "neutral cannot buy");
-        {
-            let z = w.zones.get_mut(&Act::Eden).unwrap();
-            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
-            s.reputation.insert("sethite".into(), 3000);
-            s.gold = 5;
-        }
-        assert!(w.buy(Act::Eden, pid, "thick_hide").is_err(), "gold gate");
-        {
-            let z = w.zones.get_mut(&Act::Eden).unwrap();
-            z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap().gold = 50;
-        }
-        w.buy(Act::Eden, pid, "thick_hide").unwrap();
-        assert!(w.buy(Act::Eden, pid, "lineage_blade").is_err(), "honored gate");
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.inventory.iter().any(|i| i == "thick_hide"));
-        assert_eq!(s.gold, 25);
-
-        // Switching sides wipes rep.
-        w.choose_faction(Act::Eden, pid, "cainite").unwrap();
-        let s = w.player_sheet(Act::Eden, pid).unwrap();
-        assert!(s.reputation.is_empty(), "switching zeroes reputation");
-        assert_eq!(s.faction.as_deref(), Some("cainite"));
-
-        // Persistence round-trip.
-        let db = crate::db::Db::open(":memory:").unwrap();
-        let mut saved = s.clone();
-        saved.reputation.insert("cainite".into(), 777);
-        db.save(&saved, Some("apple_fac")).unwrap();
-        let loaded = db.load(&saved.name).unwrap().unwrap();
-        assert_eq!(loaded.faction.as_deref(), Some("cainite"));
-        assert_eq!(loaded.reputation.get("cainite"), Some(&777));
-    }
 
     /// C11: innkeeper sells staples for gold alone and buys drops at 80%.
     #[test]

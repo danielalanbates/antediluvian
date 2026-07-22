@@ -1746,7 +1746,8 @@ fn orbit_camera(
     mut cam: Query<&mut Transform, (With<MainCamera>, Without<PlayerTag>)>,
     player: Query<&Transform, With<PlayerTag>>,
 ) {
-    if buttons.pressed(MouseButton::Right) {
+    // Right-button (or two-finger click-hold) drag orbits both axes.
+    if buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle) {
         for m in motion.read() {
             orbit.yaw -= m.delta.x * 0.005;
             orbit.pitch = (orbit.pitch + m.delta.y * 0.004).clamp(0.08, 1.35);
@@ -1754,8 +1755,15 @@ fn orbit_camera(
     } else {
         motion.clear();
     }
+    // Trackpad: two-finger swipe. Horizontal turns the camera (standard),
+    // vertical zooms. Pixel-unit scrolls (trackpad) are small, so scale up.
     for w in wheel.read() {
-        orbit.dist = (orbit.dist - w.y * 30.0).clamp(140.0, 900.0);
+        let k = match w.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => (1.0, 30.0),
+            bevy::input::mouse::MouseScrollUnit::Pixel => (0.02, 1.2),
+        };
+        orbit.yaw -= w.x * k.0;
+        orbit.dist = (orbit.dist - w.y * k.1).clamp(140.0, 900.0);
     }
 
     let Ok(mut cam_t) = cam.get_single_mut() else { return };

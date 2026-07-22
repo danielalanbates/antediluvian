@@ -6,13 +6,7 @@
 //! only through channels, so the simulation stays lock-free and deterministic.
 
 mod db;
-mod economy;
-mod mobs;
 mod net;
-mod caves;
-mod pois;
-mod quests;
-mod world;
 
 use antediluvia_protocol::{DevCmd, Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};
 use db::Db;
@@ -21,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use world::{new_character, World, SimEvent, TICK_HZ};
+use antediluvia_sim::world::{new_character, World, SimEvent, TICK_HZ};
 
 /// Commands funneled from connection tasks into the single game loop.
 pub enum GameCmd {
@@ -284,7 +278,7 @@ fn handle_client_msg(
                     let (name, class, faction, appearance) = match (create, character_name) {
                         (Some(c), _) => {
                             if let Some(f) = &c.faction {
-                                if !crate::world::FACTIONS.contains(&f.as_str()) {
+                                if !antediluvia_sim::world::FACTIONS.contains(&f.as_str()) {
                                     return reject(conns, "unknown lineage");
                                 }
                             }
@@ -307,7 +301,7 @@ fn handle_client_msg(
                         return reject(conns, "character name already taken");
                     }
                     newborn = true;
-                    let s = crate::world::new_character_with(&name, class, faction, appearance);
+                    let s = antediluvia_sim::world::new_character_with(&name, class, faction, appearance);
                     if let Err(e) = db.save(&s, Some(&apple_id)) {
                         tracing::error!("db save new: {e}");
                         return reject(conns, "server error creating character");
@@ -966,16 +960,16 @@ fn handle_client_msg(
                 Some(scid) => {
                     if let Some((sact, sent)) = conn_entity(conns, scid) {
                         // The house keeps 5% (C11 gold sink).
-                        world.add_gold(sact, sent, economy::ah_cut(listing.price));
+                        world.add_gold(sact, sent, antediluvia_sim::economy::ah_cut(listing.price));
                     }
                     notice(conns, scid, format!(
                         "Your {} sold for {}g ({}g after the house cut).",
-                        listing.item, listing.price, economy::ah_cut(listing.price)
+                        listing.item, listing.price, antediluvia_sim::economy::ah_cut(listing.price)
                     ));
                     send_stats(world, conns, scid);
                 }
                 None => {
-                    if let Err(e) = db.credit_gold(&listing.seller, economy::ah_cut(listing.price)) {
+                    if let Err(e) = db.credit_gold(&listing.seller, antediluvia_sim::economy::ah_cut(listing.price)) {
                         tracing::error!("credit_gold: {e}");
                     }
                 }
@@ -1007,7 +1001,7 @@ fn handle_client_msg(
 fn seed_auctions(db: &Db, round: &mut u64) {
     let live = db.auction_list().map(|l| l.len()).unwrap_or(0);
     for _ in live..5 {
-        let (seller, item, price) = economy::seed_listing(*round);
+        let (seller, item, price) = antediluvia_sim::economy::seed_listing(*round);
         *round += 1;
         match db.auction_insert(seller, item, price) {
             Ok(_) => tracing::info!("AH seed: {seller} lists {item} at {price}g"),

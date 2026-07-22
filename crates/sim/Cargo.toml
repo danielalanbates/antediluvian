@@ -1,0 +1,14 @@
+[package]
+name = "antediluvia-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Pure-Rust authoritative game simulation (world, mobs, quests, caves, POIs,
+# economy). No OS/native deps → compiles to wasm32 for the in-browser
+# single-player client as well as the native server.
+[dependencies]
+antediluvia-protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+glam = { workspace = true }

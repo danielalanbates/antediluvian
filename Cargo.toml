@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/server", "crates/test-client", "crates/client-bevy"]
+members = ["crates/protocol", "crates/sim", "crates/server", "crates/test-client", "crates/client-bevy"]
 # client-bevy pulls in Bevy (very heavy compile), so it's excluded from the
 # default `cargo build`/`cargo run` set. Build it explicitly when needed.
-default-members = ["crates/protocol", "crates/server", "crates/test-client"]
+default-members = ["crates/protocol", "crates/sim", "crates/server", "crates/test-client"]
 
 [workspace.package]
 version = "0.1.0"
