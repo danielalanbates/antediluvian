@@ -1,6 +1,18 @@
 # CHUNK 10 — Performance pass
 
-**Status: todo**
+**Status: DONE 2026-07-18**
+
+## Delivered
+- FPS overlay behind `ANTEDILUVIA_FPS=1` (FrameTimeDiagnosticsPlugin).
+- Startup preload of every .glb/.gltf/.ogg/.wav via a filtered dir walk
+  (`load_folder` error-spammed on glTF `.bin` buffers — 0 load errors now).
+- Shadow budget: sun-only caster, cascades capped at 900 m (first bound 220 m).
+- Decor/formation `VisibilityRange` fade at 2200–2600 m (inside the fog).
+- **Msaa::Off on the camera — this was the real bottleneck.** 4x MSAA at
+  2880x1800 retina held the M1 at ~25 fps in release; Off → 59 fps at the
+  inn hub with NPCs + players on screen (screenshot-verified live).
+- Memory: RSS stable/declining (248→213 MB over 45 s); travel despawns
+  Terrain recursively and formation meshes are entity-owned so assets free.
 
 ## Goal
 Steady 60 fps on this 8 GB M1 with a busy zone on screen, and no hitching

@@ -624,6 +624,10 @@ pub fn update_ui_panels(
         if has_quests {
             if let Ok(mut t) = q_quest_text.get_single_mut() {
                 let mut lines = String::new();
+                // Party roster (P1) rides at the top of the tracker panel.
+                if !session.party.is_empty() {
+                    lines.push_str(&format!("⚑ Party: {}\n", session.party.join(", ")));
+                }
                 for (name, progress) in &cs.quests {
                     if !lines.is_empty() {
                         lines.push('\n');

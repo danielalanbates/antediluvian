@@ -54,6 +54,10 @@ struct Conn {
     pending_duel: Option<u64>,
     /// Guild we've been invited to.
     pending_guild_invite: Option<String>,
+    /// Party membership (P1) — ephemeral shared-credit group id.
+    party: Option<u64>,
+    /// (party id or 0=new, inviter conn id) of the latest party invite.
+    pending_party_invite: Option<u64>,
 }
 
 impl Conn {
@@ -209,6 +213,8 @@ fn handle_cmd(
                 aoi: AOI_RADIUS,
                 pending_duel: None,
                 pending_guild_invite: None,
+                party: None,
+                pending_party_invite: None,
             });
         }
         GameCmd::Disconnect { id } => {
@@ -224,6 +230,10 @@ fn handle_cmd(
                 }
                 if let Some(n) = c.name {
                     active_names.remove(&n.to_lowercase());
+                }
+                if let Some(pid) = c.party {
+                    world.set_party(id, None);
+                    broadcast_party_info(conns, pid);
                 }
             }
         }
@@ -280,8 +290,8 @@ fn handle_client_msg(
                             }
                             (c.name, Some(c.class), c.faction, [
                                 c.appearance[0].min(3),
-                                c.appearance[1].min(9),
-                                c.appearance[2].min(9),
+                                c.appearance[1].min(15), // 16 skins (Alpha-2 A3)
+                                c.appearance[2].min(11), // 12 hair colors/styles
                             ])
                         }
                         (None, Some(n)) => (n, None, None, [0, 0, 0]),
@@ -690,6 +700,89 @@ fn handle_client_msg(
                 }
             }
         }
+        ClientMsg::PartyInvite { player } => {
+            let from = match conns.get(&id) {
+                Some(c) if c.logged_in => c.name.clone().unwrap_or_default(),
+                _ => return,
+            };
+            let target = conns.iter().find_map(|(cid, c)| {
+                (*cid != id
+                    && c.logged_in
+                    && c.name.as_deref().map(|n| n.eq_ignore_ascii_case(&player)) == Some(true))
+                .then_some(*cid)
+            });
+            match target {
+                Some(tid) => {
+                    if conns.get(&tid).map(|c| c.party.is_some()).unwrap_or(false) {
+                        return notice(conns, id, format!("{player} is already in a party."));
+                    }
+                    if let Some(t) = conns.get_mut(&tid) {
+                        t.pending_party_invite = Some(id);
+                        t.send(ServerMsg::Notice {
+                            text: format!("{from} invites you to a party. /paccept to join."),
+                        });
+                    }
+                    notice(conns, id, format!("Invited {player} to your party."));
+                }
+                None => notice(conns, id, "No such player online.".into()),
+            }
+        }
+        ClientMsg::PartyAccept => {
+            let inviter = match conns.get_mut(&id) {
+                Some(c) if c.logged_in => c.pending_party_invite.take(),
+                _ => return,
+            };
+            let Some(inviter) = inviter else {
+                return notice(conns, id, "No pending party invite.".into());
+            };
+            if conns.get(&id).map(|c| c.party.is_some()).unwrap_or(false) {
+                return notice(conns, id, "You are already in a party.".into());
+            }
+            if !conns.get(&inviter).map(|c| c.logged_in).unwrap_or(false) {
+                return notice(conns, id, "The inviter is no longer online.".into());
+            }
+            // Reuse the inviter's party or mint a new id (inviter conn id is
+            // unique and stable for the session — use it as the party id).
+            let pid = conns.get(&inviter).and_then(|c| c.party).unwrap_or(inviter);
+            if let Some(c) = conns.get_mut(&inviter) {
+                c.party = Some(pid);
+            }
+            world.set_party(inviter, Some(pid));
+            if let Some(c) = conns.get_mut(&id) {
+                c.party = Some(pid);
+            }
+            world.set_party(id, Some(pid));
+            broadcast_party_info(conns, pid);
+        }
+        ClientMsg::PartyLeave => {
+            let pid = match conns.get_mut(&id) {
+                Some(c) if c.logged_in => c.party.take(),
+                _ => return,
+            };
+            let Some(pid) = pid else {
+                return notice(conns, id, "You are not in a party.".into());
+            };
+            world.set_party(id, None);
+            notice(conns, id, "You left the party.".into());
+            broadcast_party_info(conns, pid);
+            // A party of one dissolves.
+            let rest: Vec<u64> = conns
+                .iter()
+                .filter(|(_, c)| c.party == Some(pid))
+                .map(|(cid, _)| *cid)
+                .collect();
+            if rest.len() == 1 {
+                let last = rest[0];
+                if let Some(c) = conns.get_mut(&last) {
+                    c.party = None;
+                }
+                world.set_party(last, None);
+                notice(conns, last, "Your party has disbanded.".into());
+                if let Some(c) = conns.get(&last) {
+                    c.send(ServerMsg::PartyInfo { members: Vec::new() });
+                }
+            }
+        }
         ClientMsg::AuctionList { item, price } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             if !world.at_inn(act, ent) {
@@ -797,6 +890,20 @@ fn seed_auctions(db: &Db, round: &mut u64) {
 }
 
 /// (act, entity) for a logged-in connection.
+/// Send the current roster to every member of a party (P1).
+fn broadcast_party_info(conns: &HashMap<u64, Conn>, pid: u64) {
+    let members: Vec<String> = conns
+        .values()
+        .filter(|c| c.party == Some(pid))
+        .filter_map(|c| c.name.clone())
+        .collect();
+    for c in conns.values() {
+        if c.party == Some(pid) {
+            c.send(ServerMsg::PartyInfo { members: members.clone() });
+        }
+    }
+}
+
 fn conn_entity(conns: &HashMap<u64, Conn>, id: u64) -> Option<(Act, EntityId)> {
     let c = conns.get(&id)?;
     if !c.logged_in {

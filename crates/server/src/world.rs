@@ -15,6 +15,8 @@ pub use antediluvia_protocol::WORLD_BOUNDS;
 
 /// No hostile spawns within this distance of the inn (C05).
 pub const SAFE_RING: f32 = 400.0;
+/// Party shared-credit radius (P1): members must be near the kill.
+const PARTY_SHARE_RANGE: f32 = 900.0;
 
 /// Seconds after dealing/taking damage during which you count as in combat.
 const COMBAT_LOCK_SECS: f32 = 5.0;
@@ -432,6 +434,8 @@ pub struct World {
     pub zones: HashMap<Act, Zone>,
     next_id: EntityId,
     rng: Rng,
+    /// Party id by owner conn id (P1) — ephemeral shared-credit groups.
+    party_of: HashMap<u64, u64>,
 }
 
 /// Something that happened this tick and needs to be reported outside the sim
@@ -453,6 +457,7 @@ impl World {
             zones: HashMap::new(),
             next_id: 1,
             rng: Rng::new(seed),
+            party_of: HashMap::new(),
             gold_minted: 0,
             gold_sunk: 0,
             time_override: None,
@@ -696,6 +701,8 @@ impl World {
         let mut next_id = self.next_id;
         let rng = &mut rng;
 
+        // P1: snapshot party membership before borrowing the zone mutably.
+        let party_of = self.party_of.clone();
         let zone = self.zones.get_mut(&act).unwrap();
         zone.tick += 1;
 
@@ -1248,11 +1255,40 @@ impl World {
                 _ => continue,
             };
 
-            // Award xp + loot to the killer/harvester.
+            // Award xp + loot. Party members (P1) within PARTY_SHARE_RANGE
+            // of the killer split the XP evenly and all gain quest credit;
+            // loot, gold, rep, and profession skill stay with the killer.
+            let mut recipients: Vec<(EntityId, bool)> = Vec::new();
             if let Some(owner_ent) = attacker_ent {
+                recipients.push((owner_ent, true));
+                let kinfo = zone
+                    .entities
+                    .get(&owner_ent)
+                    .and_then(|e| e.owner.map(|o| (o, e.pos)));
+                if let Some((ko, kp)) = kinfo {
+                    if let Some(pid) = party_of.get(&ko) {
+                        for e in zone.entities.values() {
+                            if e.id != owner_ent
+                                && e.kind == EntityKind::Player
+                                && e.health > 0
+                                && e.owner.map(|o| party_of.get(&o) == Some(pid)).unwrap_or(false)
+                                && e.pos.distance(kp) < PARTY_SHARE_RANGE
+                            {
+                                recipients.push((e.id, false));
+                            }
+                        }
+                    }
+                }
+            }
+            let share = if recipients.len() > 1 {
+                (xp / recipients.len() as u32).max(1)
+            } else {
+                xp
+            };
+            for (owner_ent, is_killer) in recipients {
                 if let Some(p) = zone.entities.get_mut(&owner_ent) {
                     if let Some(o) = p.owner {
-                        if xp > 0 && award_xp(p, xp) {
+                        if share > 0 && award_xp(p, share) {
                             let lvl = p.sheet.as_ref().map(|s| s.level).unwrap_or(1);
                             events.push(SimEvent::LevelUp { owner: o, level: lvl });
                             events.push(SimEvent::Combat {
@@ -1264,8 +1300,9 @@ impl World {
                         }
                         if let Some(s) = p.sheet.as_mut() {
                             match kind {
-                                // Enemy kills also pay gold and advance quests.
-                                EntityKind::Enemy => {
+                                // Enemy kills also pay gold and advance quests
+                                // (gold/rep to the killer only).
+                                EntityKind::Enemy if is_killer => {
                                     let tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u32;
                                     s.gold += 2 + tier * 2;
                                     // Faction rep (C10): rival kills +5, act bosses +100.
@@ -1289,7 +1326,7 @@ impl World {
                                     }
                                 }
                                 // Harvesting levels the matching profession.
-                                EntityKind::Resource => {
+                                EntityKind::Resource if is_killer => {
                                     let is_ore = etag.as_deref().is_some_and(|t| t.starts_with("ore_"));
                                     let prof = if reward_item == "stone" || is_ore { "mining" } else { "woodcutting" };
                                     let skill = s.professions.entry(prof.to_string()).or_insert(0);
@@ -1335,15 +1372,18 @@ impl World {
                                     }
                                 }
                             }
-                            // Cave ore nodes yield double (C09).
-                            let yield_n = if kind == EntityKind::Resource
-                                && etag.as_deref().is_some_and(|t| t.starts_with("ore_")) { 2 } else { 1 };
-                            for _ in 0..yield_n {
-                                if s.inventory.len() < inv_cap(s) {
-                                    s.inventory.push(reward_item.clone());
+                            // Loot goes to the killer only.
+                            if is_killer {
+                                // Cave ore nodes yield double (C09).
+                                let yield_n = if kind == EntityKind::Resource
+                                    && etag.as_deref().is_some_and(|t| t.starts_with("ore_")) { 2 } else { 1 };
+                                for _ in 0..yield_n {
+                                    if s.inventory.len() < inv_cap(s) {
+                                        s.inventory.push(reward_item.clone());
+                                    }
                                 }
+                                events.push(SimEvent::Loot { owner: o, item: reward_item.clone() });
                             }
-                            events.push(SimEvent::Loot { owner: o, item: reward_item });
                         }
                     }
                 }
@@ -1999,6 +2039,14 @@ impl World {
         }
     }
 
+    /// Party membership by OWNER conn id (P1) — ephemeral, not persisted.
+    pub fn set_party(&mut self, owner: u64, party: Option<u64>) {
+        match party {
+            Some(pid) => { self.party_of.insert(owner, pid); }
+            None => { self.party_of.remove(&owner); }
+        }
+    }
+
     pub fn set_guild(&mut self, act: Act, id: EntityId, guild: Option<String>) {
         if let Some(s) = self.sheet_mut(act, id) {
             s.guild = guild;
@@ -2412,6 +2460,58 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P1: party members near a kill split the XP and both get quest credit;
+    /// loot goes only to the killer.
+    #[test]
+    fn party_shares_xp_and_quest_credit() {
+        let mut w = World::new(42);
+        // Find an enemy in Eden.
+        let (foe_id, foe_pos, foe_xp) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z
+                .entities
+                .values()
+                .find(|e| e.kind == EntityKind::Enemy)
+                .expect("eden has enemies");
+            (e.id, e.pos, e.xp_value)
+        };
+        let mut a = new_character("Slayer");
+        a.x = foe_pos.x - 12.0;
+        a.y = foe_pos.y;
+        let mut b = new_character("Buddy");
+        b.x = foe_pos.x - 60.0;
+        b.y = foe_pos.y;
+        let pa = w.spawn_player(1, a);
+        let pb = w.spawn_player(2, b);
+        w.set_party(1, Some(99));
+        w.set_party(2, Some(99));
+
+        // Hammer attacks until the enemy dies (bounded).
+        for _ in 0..200 {
+            if !w.zones[&Act::Eden].entities.contains_key(&foe_id) {
+                break;
+            }
+            w.queue_attack(Act::Eden, pa);
+            w.step();
+        }
+        assert!(
+            !w.zones[&Act::Eden].entities.contains_key(&foe_id),
+            "enemy should die"
+        );
+        let sa = w.player_sheet(Act::Eden, pa).unwrap();
+        let sb = w.player_sheet(Act::Eden, pb).unwrap();
+        let share = (foe_xp / 2).max(1);
+        assert!(sa.xp >= share, "killer xp {} < share {share}", sa.xp);
+        assert!(sb.xp >= share, "buddy xp {} < share {share}", sb.xp);
+        // (No strict sum check — rested bonus can top up either share.)
+        // Loot went only to the killer: buddy keeps just the starter kit.
+        assert!(
+            sb.inventory.iter().all(|i| i == "hearthstone"),
+            "buddy looted: {:?}",
+            sb.inventory
+        );
+    }
 
     /// A player who swings with a resource node in front of them harvests it and
     /// gains a material (wood/stone), and the node is replaced.

@@ -24,6 +24,10 @@ chmod +x "$APP/Contents/MacOS/Antediluvia"
 cp scripts/app/AppIcon.icns "$APP/Contents/Resources/"
 cp target/release/antediluvia-server target/release/antediluvia-client-bevy \
    "$APP/Contents/Resources/"
+
+# Sign in with Apple helper (real SIWA when the bundle is provisioned with the
+# applesignin entitlement; stable local UUID fallback otherwise).
+swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swift
 cp -R assets "$APP/Contents/Resources/assets"
 
 STAGE=$(mktemp -d)/Antediluvia.app

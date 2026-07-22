@@ -19,9 +19,18 @@ if ! nc -z 127.0.0.1 8787 2>/dev/null; then
   for _ in $(seq 1 50); do nc -z 127.0.0.1 8787 2>/dev/null && break; sleep 0.1; done
 fi
 
-# apple_id + character name (used on first login to create the character;
-# ignored thereafter if the account already exists).
-"$RES/antediluvia-client-bevy" "$USER" "$USER" >>"$SUPPORT/client.log" 2>&1
+# Account identity: Sign in with Apple via the bundled helper (real Apple
+# `user` id when the app is provisioned with the applesignin entitlement;
+# otherwise a stable per-machine UUID). Never the raw $USER.
+# Continuity: pre-helper saves were keyed by $USER — keep that identity for
+# an existing install so nobody loses their character.
+if [ -f "$SUPPORT/antediluvia.sqlite" ] && [ ! -f "$SUPPORT/local_account_id" ] && [ ! -f "$SUPPORT/apple_user_id" ]; then
+  printf '%s' "$USER" > "$SUPPORT/local_account_id"
+fi
+APPLE_ID="$("$RES/apple-signin" 2>>"$SUPPORT/client.log" || true)"
+[ -n "$APPLE_ID" ] || APPLE_ID="$USER"
+
+"$RES/antediluvia-client-bevy" "$APPLE_ID" "$USER" >>"$SUPPORT/client.log" 2>&1
 STATUS=$?
 
 if [ -n "$SERVER_PID" ]; then

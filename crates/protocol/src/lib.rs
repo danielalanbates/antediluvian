@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -324,6 +324,11 @@ pub enum ClientMsg {
     GuildLeave,
     /// Guild-wide chat (crosses zones).
     GuildChat { text: String },
+    /// Party (P1): invite a same-zone player by name; nearby party members
+    /// share kill XP and quest credit. Accept takes the latest invite.
+    PartyInvite { player: String },
+    PartyAccept,
+    PartyLeave,
     /// Auction house (usable near a zone's inn/entry).
     AuctionList { item: String, price: u32 },
     AuctionBuy { id: i64 },
@@ -362,6 +367,8 @@ pub enum ServerMsg {
     Auctions { listings: Vec<AuctionListing> },
     /// Guild roster (on join/create/query).
     GuildInfo { name: String, members: Vec<String> },
+    /// Current party roster (empty = left/disbanded) (P1).
+    PartyInfo { members: Vec<String> },
     /// A combat event in the player's zone: `src` swung/cast/was hit/died.
     /// Drives remote-entity animations; safe to ignore.
     Event { act: Act, kind: EventKind, src: EntityId, dst: Option<EntityId> },

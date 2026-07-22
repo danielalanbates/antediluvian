@@ -214,6 +214,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ServerMsg::GuildInfo { name, members } => {
                 println!("[guild] <{name}> members: {}", members.join(", "));
             }
+            ServerMsg::PartyInfo { members } => {
+                println!("[party] members: {}", members.join(", "));
+            }
             ServerMsg::Auctions { listings } => {
                 for l in listings {
                     println!("[ah] #{} {} — {}g (seller {})", l.id, l.item, l.price, l.seller);

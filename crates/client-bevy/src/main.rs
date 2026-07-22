@@ -20,6 +20,7 @@ mod atmosphere;
 mod audio;
 mod equipment;
 mod net;
+mod perf;
 mod terrain;
 mod ui;
 mod variety;
@@ -33,7 +34,11 @@ use antediluvia_protocol::{
 };
 use terrain::{build_terrain_mesh, terrain_height};
 use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
-use variety::{apply_tints, formation_color, formation_mesh, hair_hue, skin_hue, species_variation, TintCache, TintRig};
+use variety::{
+    apply_tints, attach_hair_style, attach_species_parts, formation_color, formation_mesh,
+    hair_hue, skin_hue, species_parts_seed, species_stretch, species_variation, HairStyle,
+    SpeciesParts, TintCache, TintRig, HAIR_CHOICES, SKIN_CHOICES,
+};
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::keyboard::KeyboardInput;
@@ -82,6 +87,7 @@ fn main() {
                     ..default()
                 }),
         )
+        .add_plugins(perf::PerfPlugin)
         // Sky.
         .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
         .insert_resource(AmbientLight { color: Color::WHITE, brightness: 300.0 })
@@ -127,6 +133,8 @@ fn main() {
                 ambient_system,
                 apply_loadouts,
                 apply_tints,
+                attach_species_parts,
+                attach_hair_style,
                 smooth_motion,
             ),
         )
@@ -250,6 +258,8 @@ pub struct Session {
     pub is_dev: bool,
     /// Dev console: `Some(input)` while open (backquote toggles).
     pub dev_input: Option<String>,
+    /// Current party roster (P1); empty = not in a party.
+    pub party: Vec<String>,
 }
 
 /// Character-builder working state (C13).
@@ -294,6 +304,7 @@ impl Default for Session {
             dev_input: None,
             banner: None,
             builder: None,
+            party: Vec::new(),
         }
     }
 }
@@ -479,6 +490,15 @@ const ROCKS: [&str; 3] = [
 const TREE_SCALE: f32 = 34.0;
 const ROCK_SCALE: f32 = 26.0;
 
+/// CHUNK_10: scatter decor / formations only render within this band; the
+/// fade end sits deep enough in the fog that the pop is invisible, and the
+/// far field drops ~hundreds of unique-mesh draw calls per frame.
+const DECOR_RANGE: bevy::render::view::VisibilityRange = bevy::render::view::VisibilityRange {
+    start_margin: 0.0..0.0,
+    end_margin: 2200.0..2600.0,
+    use_aabb: false,
+};
+
 /// Spawn one static prop scene (no server entity) and return it.
 fn spawn_prop(
     commands: &mut Commands,
@@ -575,15 +595,29 @@ fn spawn_act_scenery(
         };
         let pos = Vec3::new(x, terrain_height(act, x, z), z);
         let e = spawn_prop(commands, asset_server, path, pos, scale, hash01(s * 4 + 5) * 6.283);
-        commands.entity(e).insert(Terrain);
+        // CHUNK_10: decor fades out into the fog instead of drawing world-wide.
+        commands.entity(e).insert((Terrain, DECOR_RANGE));
     }
 
-    // Procedural formations (2026-07-12 directive): 500 per act, every one a
-    // unique deformed mesh — thousands of distinct terrain models world-wide.
-    for i in 0..500u64 {
+    // Procedural formations (Alpha-2 A1): 1,200 per act across eight
+    // families, every one a unique deformed mesh — thousands of distinct
+    // terrain models world-wide. A4 finding: every third site clusters near
+    // a POI so the variety is visible where players actually walk.
+    let poi_sites: Vec<(f32, f32)> = pois_for_act(act).map(|p| (p.x, p.y)).collect();
+    for i in 0..1200u64 {
         let seed = act_idx * 1_000_003 + i * 7919;
-        let x = (hash01(seed * 4 + 11) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
-        let z = (hash01(seed * 4 + 12) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
+        let (x, z) = if i % 3 == 0 && !poi_sites.is_empty() {
+            let (px, pz) = poi_sites[(seed / 3 % poi_sites.len() as u64) as usize];
+            (
+                px + (hash01(seed * 4 + 11) - 0.5) * 900.0,
+                pz + (hash01(seed * 4 + 12) - 0.5) * 900.0,
+            )
+        } else {
+            (
+                (hash01(seed * 4 + 11) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
+                (hash01(seed * 4 + 12) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
+            )
+        };
         if (x * x + z * z).sqrt() < 320.0 {
             continue; // keep the inn clearing open
         }
@@ -600,6 +634,7 @@ fn spawn_act_scenery(
                 .with_scale(Vec3::splat(size))
                 .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
             Terrain,
+            DECOR_RANGE,
         ));
     }
 
@@ -706,12 +741,23 @@ fn setup(
             falloff: FogFalloff::Exponential { density: initial_mood.fog_density },
             ..default()
         },
+        // CHUNK_10: 4x MSAA at full retina res is the single biggest GPU cost
+        // on the 8 GB M1 — the low-poly art loses nothing at Off.
+        Msaa::Off,
         MainCamera,
     ));
 
     // Sun.
     commands.spawn((
         DirectionalLight { illuminance: 12_000.0, shadows_enabled: true, ..default() },
+        // CHUNK_10 shadow budget: the sun is the only caster; keep its
+        // cascades tight so a busy zone doesn't pay for kilometer shadows.
+        bevy::pbr::CascadeShadowConfigBuilder {
+            maximum_distance: 900.0,
+            first_cascade_far_bound: 220.0,
+            ..default()
+        }
+        .build(),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.6, 0.0)),
         Sun,
     ));
@@ -801,10 +847,17 @@ fn spawn_visual(
             let (file, [i_idle, i_run, i_attack, i_death], mut scale) = rig_for(e);
             // Visual variety: species-stable tint+scale for mobs, rendered
             // skin/hair choices for players (hundreds of combos each).
+            let mut stretch = Vec3::ONE;
+            let mut parts = None;
             let tint = match e.kind {
                 EntityKind::Enemy | EntityKind::Wildlife => {
-                    let (hue, light, k) = species_variation(e.tag.as_deref().unwrap_or(""));
+                    let tag = e.tag.as_deref().unwrap_or("");
+                    let (hue, light, k) = species_variation(tag);
                     scale *= k;
+                    // Species-unique geometry: body-plan stretch + grafted
+                    // adornment meshes (silhouette, not just tint).
+                    stretch = species_stretch(tag);
+                    parts = Some(SpeciesParts { seed: species_parts_seed(tag) });
                     Some(TintRig { hue, light, hair_hue: None })
                 }
                 EntityKind::Player => e.appearance.map(|a| {
@@ -831,7 +884,7 @@ fn spawn_visual(
                         rig = yaw
                             .spawn((
                                 SceneRoot(scene),
-                                Transform::from_scale(Vec3::splat(scale))
+                                Transform::from_scale(Vec3::splat(scale) * stretch)
                                     .with_rotation(Quat::from_rotation_y(FRAC_PI_2)),
                                 clips,
                             ))
@@ -841,6 +894,15 @@ fn spawn_visual(
             });
             if let Some(t) = tint {
                 commands.entity(rig).insert(t);
+            }
+            if let Some(p) = parts {
+                commands.entity(rig).insert(p);
+            }
+            // A3: players also grow their chosen hairstyle geometry.
+            if e.kind == EntityKind::Player {
+                if let Some(a) = e.appearance {
+                    commands.entity(rig).insert(HairStyle { style: a[2], hue: hair_hue(a[2]) });
+                }
             }
             commands.entity(root).insert(Mover {
                 rig,
@@ -1004,6 +1066,14 @@ fn receive_from_server(
             }
             ServerMsg::GuildInfo { name, members } => {
                 push_chat(&mut session, format!("<{name}>: {}", members.join(", ")));
+            }
+            ServerMsg::PartyInfo { members } => {
+                session.party = members.clone();
+                if members.is_empty() {
+                    push_chat(&mut session, "Party disbanded.".into());
+                } else {
+                    push_chat(&mut session, format!("Party: {}", members.join(", ")));
+                }
             }
             ServerMsg::Auctions { listings } => {
                 push_chat(&mut session, format!("{} auction lots", listings.len()));
@@ -1309,13 +1379,13 @@ fn builder_screen(
         b.appearance[0] = (b.appearance[0] + 3) % 4;
     }
     if keys.just_pressed(KeyCode::ArrowUp) {
-        b.appearance[1] = (b.appearance[1] + 1) % 10;
+        b.appearance[1] = (b.appearance[1] + 1) % SKIN_CHOICES;
     }
     if keys.just_pressed(KeyCode::ArrowDown) {
-        b.appearance[1] = (b.appearance[1] + 9) % 10;
+        b.appearance[1] = (b.appearance[1] + SKIN_CHOICES - 1) % SKIN_CHOICES;
     }
     if keys.just_pressed(KeyCode::F6) {
-        b.appearance[2] = (b.appearance[2] + 1) % 10;
+        b.appearance[2] = (b.appearance[2] + 1) % HAIR_CHOICES;
     }
     if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
         b.submitted = true;
@@ -1405,6 +1475,7 @@ fn builder_screen(
                 .with_scale(Vec3::splat(CHAR_SCALE)),
             BuilderPreview { look: want },
             TintRig { hue, light, hair_hue: Some(hair_hue(want[2])) },
+            HairStyle { style: want[2], hue: hair_hue(want[2]) },
         ));
     }
 }
@@ -1507,7 +1578,16 @@ fn chat_input(
             // Send the message if non-empty, then close chat.
             let text = session.chat_input.trim().to_string();
             if !text.is_empty() {
-                tx.send(ClientMsg::Chat { text });
+                // Slash commands (P1): party management from the chat box.
+                if let Some(name) = text.strip_prefix("/party ") {
+                    tx.send(ClientMsg::PartyInvite { player: name.trim().to_string() });
+                } else if text == "/paccept" {
+                    tx.send(ClientMsg::PartyAccept);
+                } else if text == "/pleave" {
+                    tx.send(ClientMsg::PartyLeave);
+                } else {
+                    tx.send(ClientMsg::Chat { text });
+                }
             }
             session.chat_input.clear();
             session.chat_active = false;
