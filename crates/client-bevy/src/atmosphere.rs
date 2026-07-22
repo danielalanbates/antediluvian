@@ -153,12 +153,12 @@ pub fn update_atmosphere(
         // Intensity peaks at noon, zero at night.
         let is_day = t > 0.2 && t < 0.8;
         let day_factor = if is_day { (angle.sin()).max(0.0) } else { 0.0 };
-        sun_light.illuminance = 12_000.0 * day_factor;
+        sun_light.illuminance = 22_000.0 * day_factor;
         sun_light.color = mood.sun_color;
     }
 
     let day_factor = (angle.sin()).max(0.0);
-    ambient.brightness = 80.0 + 220.0 * day_factor;
+    ambient.brightness = 260.0 + 520.0 * day_factor;
     ambient.color = mood.ambient_color;
 
     // Cave interiors (C09): darken ambient + tighten fog inside a pocket.

@@ -188,6 +188,9 @@ pub struct CharacterSheet {
     /// Wakefulness (100.0 = fully awake, 0.0 = exhausted). Decreases while logged in, increases while logged out.
     #[serde(default = "default_wakefulness")]
     pub wakefulness: f32,
+    /// Home inn act (v0.5.0): where the player respawns. Defaults to Eden.
+    #[serde(default)]
+    pub home_act: Option<Act>,
     /// Bank vault items (P2) — stored at any inn, shared across acts.
     #[serde(default)]
     pub bank: Vec<String>,
@@ -340,6 +343,8 @@ pub enum ClientMsg {
     BankDeposit { item: String },
     BankWithdraw { item: String },
     BankGold { amount: i64 },
+    /// Set this inn as your home/respawn point (v0.5.0). Must be at an inn.
+    SetHome,
     /// Direct trade (P4): hand an item or gold to a nearby player.
     TradeGive { player: String, item: String },
     TradeGold { player: String, amount: u32 },

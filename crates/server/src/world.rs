@@ -442,7 +442,7 @@ pub struct World {
 /// (e.g. pushed to a specific player's connection).
 pub enum SimEvent {
     LevelUp { owner: u64, level: u32 },
-    Died { owner: u64 },
+    Died { owner: u64, home: Option<Act> },
     Loot { owner: u64, item: String },
     /// Generic per-player info line (cast failures, duel results, PvP kills).
     Info { owner: u64, text: String },
@@ -748,10 +748,13 @@ impl World {
                     if e.health <= 0 {
                         e.dead_timer -= DT;
                         if e.dead_timer <= 0.0 {
+                            let home = e.sheet.as_ref().and_then(|s| s.home_act);
                             e.health = e.max_health;
                             e.pos = entry;
                             if let Some(o) = e.owner {
-                                events.push(SimEvent::Died { owner: o });
+                                // If home is in another act, main.rs migrates
+                                // the player there on Died; otherwise this inn.
+                                events.push(SimEvent::Died { owner: o, home });
                             }
                         }
                         continue;
@@ -1094,6 +1097,33 @@ impl World {
                     e.pos = e.pos.clamp(Vec2::splat(-WORLD_BOUNDS), Vec2::splat(WORLD_BOUNDS));
                 }
                 EntityKind::Resource | EntityKind::Npc => {}
+            }
+        }
+
+        // Mob collision (v0.5.0, Daniel): players walk through each other,
+        // but never through living mobs or NPCs — resolve overlap by pushing
+        // the player out along the contact normal after movement.
+        const MOB_RADIUS: f32 = 9.0;
+        let solids: Vec<Vec2> = zone
+            .entities
+            .values()
+            .filter(|e| {
+                matches!(e.kind, EntityKind::Enemy | EntityKind::Wildlife | EntityKind::Npc)
+                    && e.health > 0
+            })
+            .map(|e| e.pos)
+            .collect();
+        for e in zone.entities.values_mut() {
+            if e.kind != EntityKind::Player || e.health <= 0 {
+                continue;
+            }
+            for sp in &solids {
+                let d = e.pos - *sp;
+                let len = d.length();
+                if len < MOB_RADIUS {
+                    let push = if len > 0.001 { d / len } else { Vec2::X };
+                    e.pos = *sp + push * MOB_RADIUS;
+                }
             }
         }
 
@@ -1863,6 +1893,17 @@ impl World {
             s.inventory.push(it);
             Ok(format!("{item} retrieved from the stable."))
         }
+    }
+
+    /// Set the player's home/respawn inn to their current act (v0.5.0).
+    /// Must be standing in the inn.
+    pub fn set_home(&mut self, act: Act, id: EntityId) -> Result<String, String> {
+        if !self.at_inn(act, id) {
+            return Err("You must be at an inn to make it your home.".into());
+        }
+        let s = self.sheet_mut(act, id).ok_or("no sheet")?;
+        s.home_act = Some(act);
+        Ok(format!("Home set. You will return to the {} inn when slain.", act.as_str()))
     }
 
     /// Read-only view of a player's sheet (P3 mail pre-checks).
@@ -2670,6 +2711,73 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
 mod tests {
     use super::*;
 
+    /// v0.5.0: /sethome only works at an inn, and sets the home act.
+    #[test]
+    fn set_home_requires_inn() {
+        let mut w = World::new(42);
+        let entry = w.zones[&Act::Eden].entry;
+        let mut a = new_character("Homebody");
+        a.x = entry.x + 5000.0; // far from the inn
+        a.y = entry.y;
+        let pa = w.spawn_player(1, a);
+        assert!(w.set_home(Act::Eden, pa).is_err());
+        assert!(w.sheet_of(Act::Eden, pa).unwrap().home_act.is_none());
+        // Move to the inn and retry.
+        if let Some(e) = w.zones.get_mut(&Act::Eden).and_then(|z| z.entities.get_mut(&pa)) {
+            e.pos = entry;
+        }
+        assert!(w.set_home(Act::Eden, pa).is_ok());
+        assert_eq!(w.sheet_of(Act::Eden, pa).unwrap().home_act, Some(Act::Eden));
+    }
+
+    /// v0.5.0: players collide with mobs (no walking through), but still
+    /// pass through other players.
+    #[test]
+    fn players_collide_with_mobs_not_players() {
+        let mut w = World::new(42);
+        let (foe_pos, _fid) = {
+            let z = &w.zones[&Act::Eden];
+            let e = z.entities.values().find(|e| e.kind == EntityKind::Enemy).unwrap();
+            (e.pos, e.id)
+        };
+        let mut a = new_character("Runner");
+        a.x = foe_pos.x - 30.0;
+        a.y = foe_pos.y;
+        let pa = w.spawn_player(1, a);
+        // Run straight at/through the mob for 3 seconds.
+        for _ in 0..(TICK_HZ * 3) {
+            w.set_intent(Act::Eden, pa, Vec2::X);
+            w.step();
+        }
+        let ppos = w.zones[&Act::Eden].entities[&pa].pos;
+        // The mob may have moved (aggro), so check against its live position.
+        let foe_now = w.zones[&Act::Eden]
+            .entities
+            .values()
+            .filter(|e| e.kind == EntityKind::Enemy)
+            .map(|e| e.pos.distance(ppos))
+            .fold(f32::INFINITY, f32::min);
+        assert!(foe_now >= 8.9, "player inside a mob: nearest {foe_now}");
+
+        // Players still pass through each other — verify in mob-free space
+        // (near the inn, offset away from its NPCs).
+        let entry = w.zones[&Act::Eden].entry;
+        let spot = entry + Vec2::new(90.0, 40.0);
+        let mut c1 = new_character("GhostA");
+        c1.x = spot.x;
+        c1.y = spot.y;
+        let mut c2 = new_character("GhostB");
+        c2.x = spot.x;
+        c2.y = spot.y;
+        let p1 = w.spawn_player(3, c1);
+        let p2 = w.spawn_player(4, c2);
+        w.step();
+        let d = w.zones[&Act::Eden].entities[&p1]
+            .pos
+            .distance(w.zones[&Act::Eden].entities[&p2].pos);
+        assert!(d < 8.0, "players should overlap freely, got {d}");
+    }
+
     /// P2: bank vault round-trips items and gold at the inn.
     #[test]
     fn bank_round_trip() {
@@ -2749,6 +2857,10 @@ mod tests {
         let mut a = new_character("Slayer");
         a.x = foe_pos.x - 12.0;
         a.y = foe_pos.y;
+        // Collision (v0.5.0) keeps the fight at contact range, so the enemy
+        // lands real hits now — give the attacker the durability to win.
+        a.max_health = 5000;
+        a.health = 5000;
         let mut b = new_character("Buddy");
         b.x = foe_pos.x - 60.0;
         b.y = foe_pos.y;
@@ -3849,6 +3961,7 @@ pub fn new_character_with(
         wakefulness: 100.0,
         last_logout: None,
         discovered: Vec::new(),
+        home_act: None,
         bank: Vec::new(),
         bank_gold: 0,
         stable: Vec::new(),

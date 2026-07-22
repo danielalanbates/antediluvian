@@ -368,7 +368,7 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
             ));
             // Ability name (centre).
             let default_name = match slot {
-                0 => "Attack",
+                0 => "Atk/Jump",
                 1 => "—",
                 _ => "—",
             };

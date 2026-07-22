@@ -19,6 +19,11 @@
 mod atmosphere;
 mod audio;
 mod equipment;
+mod grass;
+
+/// Local player's visual jump arc (v0.5.0): height offset over time.
+#[derive(Resource, Default)]
+struct PlayerJump { start: Option<f32> }
 mod net;
 mod perf;
 mod terrain;
@@ -97,13 +102,14 @@ fn main() {
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
         .insert_resource(TintCache::default())
+        .insert_resource(PlayerJump::default())
         .insert_resource(Session {
             name: display_name,
             apple_id: apple_id_for_session,
             ..default()
         })
         .add_event::<CombatEvt>()
-        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets))
+        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass))
         .add_systems(
             Update,
             (
@@ -130,6 +136,8 @@ fn main() {
                 update_banner,
                 update_ui_panels,
                 update_atmosphere,
+                grass::update_grass,
+                player_jump,
                 ambient_system,
                 apply_loadouts,
                 apply_tints,
@@ -518,20 +526,70 @@ fn spawn_prop(
         .id()
 }
 
+/// Tiling ground detail texture handle (generated once at startup).
+#[derive(Resource)]
+struct GroundDetail(Handle<Image>);
+
+/// Procedural turf/soil speckle: value noise multiplied over the terrain's
+/// vertex-color palette. sRGB, tileable by construction (hash per texel).
+fn ground_detail_texture() -> Image {
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    const N: usize = 256;
+    let mut data = vec![0u8; N * N * 4];
+    for y in 0..N {
+        for x in 0..N {
+            let h = {
+                let s = (x as u64) << 32 | y as u64;
+                let mut v = s.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                v ^= v >> 33;
+                v = v.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+                ((v >> 40) & 0xFF) as f32 / 255.0
+            };
+            // Mostly bright with sparse dark blades/pebbles.
+            let v = if h > 0.92 { 0.62 } else { 0.86 + h * 0.14 };
+            let g = (v * 255.0) as u8;
+            let i = (y * N + x) * 4;
+            data[i] = g;
+            data[i + 1] = g;
+            data[i + 2] = g;
+            data[i + 3] = 255;
+        }
+    }
+    let mut img = Image::new(
+        Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        bevy::render::render_asset::RenderAssetUsages::default(),
+    );
+    img.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+        address_mode_u: bevy::image::ImageAddressMode::Repeat,
+        address_mode_v: bevy::image::ImageAddressMode::Repeat,
+        ..default()
+    });
+    img
+}
+
 /// Everything act-scoped and purely visual: the terrain mesh, the inn set at
 /// the entry, and a deterministic decor scatter. All tagged `Terrain` so zone
 /// travel despawns and rebuilds the lot.
 fn spawn_act_scenery(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    ground_detail: Handle<Image>,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
     act: Act,
 ) {
+    // Fidelity (v0.5.0): a tiling procedural detail texture multiplies the
+    // vertex-color palette so the ground reads as turf/soil instead of flat
+    // polygons.
     commands.spawn((
         Mesh3d(meshes.add(build_terrain_mesh(act))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
+            base_color_texture: Some(ground_detail),
+            uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(700.0)),
             perceptual_roughness: 1.0,
             ..default()
         })),
@@ -733,23 +791,31 @@ fn setup(
 ) {
     let initial_mood = act_mood(Act::Eden);
 
+    // Fidelity pass (v0.5.0): HDR + filmic tonemap + bloom + FXAA + SSAO —
+    // modern-MMO image quality on top of the stylized art. MSAA stays Off
+    // (retina cost, and SSAO requires it); FXAA covers the edges.
     commands.spawn((
         Camera3d::default(),
+        Camera { hdr: true, ..default() },
+        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
+        bevy::core_pipeline::bloom::Bloom::NATURAL,
+        bevy::core_pipeline::fxaa::Fxaa::default(),
+        bevy::core_pipeline::prepass::DepthPrepass,
+        bevy::core_pipeline::prepass::NormalPrepass,
+        bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
         Transform::from_xyz(0.0, 300.0, 420.0).looking_at(Vec3::ZERO, Vec3::Y),
         DistanceFog {
             color: initial_mood.fog_color,
             falloff: FogFalloff::Exponential { density: initial_mood.fog_density },
             ..default()
         },
-        // CHUNK_10: 4x MSAA at full retina res is the single biggest GPU cost
-        // on the 8 GB M1 — the low-poly art loses nothing at Off.
         Msaa::Off,
         MainCamera,
     ));
 
     // Sun.
     commands.spawn((
-        DirectionalLight { illuminance: 12_000.0, shadows_enabled: true, ..default() },
+        DirectionalLight { illuminance: 16_000.0, shadows_enabled: true, ..default() },
         // CHUNK_10 shadow budget: the sun is the only caster; keep its
         // cascades tight so a busy zone doesn't pay for kilometer shadows.
         bevy::pbr::CascadeShadowConfigBuilder {
@@ -766,7 +832,9 @@ fn setup(
     spawn_sky(&mut commands, &mut meshes, &mut materials, &mut images, &initial_mood);
 
     // Terrain + inn + decor (rebuilt on zone travel).
-    spawn_act_scenery(&mut commands, &mut meshes, &mut materials, &asset_server, Act::Eden);
+    let ground_detail = images.add(ground_detail_texture());
+    commands.insert_resource(GroundDetail(ground_detail.clone()));
+    spawn_act_scenery(&mut commands, &mut meshes, ground_detail, &mut materials, &asset_server, Act::Eden);
 
     // Inn ring at the zone entry (the rest / auction-house area). Pulses.
     let ring_mat = materials.add(StandardMaterial {
@@ -1002,6 +1070,7 @@ fn receive_from_server(
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain_q: Query<Entity, With<Terrain>>,
     loadouts: Query<&Loadout>,
+    ground: Res<GroundDetail>,
 ) {
     // Rebuild the terrain when the character's act changes (login or travel).
     let set_act = |commands: &mut Commands,
@@ -1016,7 +1085,7 @@ fn receive_from_server(
         for t in terrain_q.iter() {
             commands.entity(t).despawn_recursive();
         }
-        spawn_act_scenery(commands, meshes, materials, &asset_server, act);
+        spawn_act_scenery(commands, meshes, ground.0.clone(), materials, &asset_server, act);
     };
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
@@ -1227,6 +1296,7 @@ fn receive_from_server(
 /// Chat mode (Enter-to-chat) steals all keys while active.
 fn send_input(
     keys: Res<ButtonInput<KeyCode>>,
+    mut jump: ResMut<PlayerJump>,
     tx: Res<NetTx>,
     orbit: Res<Orbit>,
     session: Res<Session>,
@@ -1276,6 +1346,7 @@ fn send_input(
     if keys.just_pressed(KeyCode::Space) {
         tx.send(ClientMsg::Attack);
         cooldowns.trigger(0, now);
+        jump.start.get_or_insert(now); // visual hop (ignored mid-air)
     }
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
@@ -1621,6 +1692,8 @@ fn chat_input(
                     }
                 } else if text == "/mailcheck" {
                     tx.send(ClientMsg::MailCheck);
+                } else if text == "/sethome" {
+                    tx.send(ClientMsg::SetHome);
                 } else {
                     tx.send(ClientMsg::Chat { text });
                 }
@@ -1802,8 +1875,40 @@ fn trigger_attack_anim(
     let Ok(mut mv) = me.get_single_mut() else { return };
     let Ok(rig) = rigs.get(mv.rig) else { return };
     let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { return };
-    trans.play(&mut player, rig.attack, Duration::from_millis(100));
-    mv.attack_until = time.elapsed_secs() + 0.9;
+    trans.play(&mut player, rig.attack, Duration::from_millis(40));
+    mv.attack_until = time.elapsed_secs() + 0.7;
+}
+
+/// Apply the local player's visual jump arc to their model child (v0.5.0).
+/// A ~0.5s parabola up to ~26 units; resets when it lands.
+fn player_jump(
+    time: Res<Time>,
+    mut jump: ResMut<PlayerJump>,
+    q_root: Query<&Children, With<PlayerTag>>,
+    mut q_tf: Query<&mut Transform>,
+) {
+    let Ok(children) = q_root.get_single() else { return };
+    let Some(&model) = children.iter().next() else { return };
+    let Ok(mut t) = q_tf.get_mut(model) else { return };
+    const DUR: f32 = 0.5;
+    const PEAK: f32 = 26.0;
+    match jump.start {
+        Some(t0) => {
+            let e = time.elapsed_secs() - t0;
+            if e >= DUR {
+                jump.start = None;
+                t.translation.y = 0.0;
+            } else {
+                let p = e / DUR; // 0..1
+                t.translation.y = PEAK * (4.0 * p * (1.0 - p)); // parabola
+            }
+        }
+        None => {
+            if t.translation.y != 0.0 {
+                t.translation.y = 0.0;
+            }
+        }
+    }
 }
 
 /// Animate remote entities from server combat events: swings/casts play the

@@ -24,7 +24,7 @@ const ROAD_HALF_WIDTH: f32 = 55.0;
 const ROAD_BLEND: f32 = 130.0;
 
 /// Distance from (x,z) to the road's center segment.
-fn road_dist(x: f32, z: f32) -> f32 {
+pub fn road_dist(x: f32, z: f32) -> f32 {
     let t = (x / ROAD_END_X).clamp(0.0, 1.0);
     let px = t * ROAD_END_X;
     ((x - px) * (x - px) + z * z).sqrt()

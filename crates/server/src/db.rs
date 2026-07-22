@@ -46,6 +46,8 @@ struct SheetExt {
     #[serde(default)]
     discovered: Vec<String>,
     #[serde(default)]
+    home_act: Option<Act>,
+    #[serde(default)]
     bank: Vec<String>,
     #[serde(default)]
     bank_gold: u32,
@@ -182,6 +184,7 @@ impl Db {
                         wakefulness: ext.wakefulness,
                         last_logout: ext.last_logout,
                         discovered: ext.discovered,
+                        home_act: ext.home_act,
                         bank: ext.bank,
                         bank_gold: ext.bank_gold,
                         stable: ext.stable,
@@ -232,6 +235,7 @@ impl Db {
             wakefulness: c.wakefulness,
             last_logout: c.last_logout,
             discovered: c.discovered.clone(),
+            home_act: c.home_act,
             bank: c.bank.clone(),
             bank_gold: c.bank_gold,
             stable: c.stable.clone(),

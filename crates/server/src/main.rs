@@ -128,7 +128,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
             _ = tick.tick() => {
                 let t0 = std::time::Instant::now();
                 let events = world.step();
-                dispatch_events(&mut world, &conns, events);
+                dispatch_events(&mut world, &mut conns, events);
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
                     broadcast_snapshots(&world, &conns);
@@ -797,6 +797,12 @@ fn handle_client_msg(
             }
             send_stats(world, conns, id);
         }
+        ClientMsg::SetHome => {
+            let Some((act, ent)) = conn_entity(conns, id) else { return };
+            match world.set_home(act, ent) {
+                Ok(t) | Err(t) => notice(conns, id, t),
+            }
+        }
         ClientMsg::BankGold { amount } => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.bank_gold(act, ent, amount) {
@@ -1051,7 +1057,7 @@ fn send_stats(world: &World, conns: &HashMap<u64, Conn>, id: u64) {
 
 /// Push per-tick simulation events (level-ups, deaths, loot) to their owners,
 /// along with a refreshed stat block.
-fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<SimEvent>) {
+fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Vec<SimEvent>) {
     for ev in events {
         // Combat events are cosmetic and zone-wide: fan out to every client in
         // the act (same pattern as zone chat) rather than to one owner.
@@ -1063,9 +1069,48 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
             }
             continue;
         }
+        // Death → home inn (v0.5.0). The player already respawned at the death
+        // act's inn inside the sim; if their home is a different act, migrate
+        // them there (same path as Travel) and re-Welcome under the new id.
+        if let SimEvent::Died { owner, home } = &ev {
+            let owner = *owner;
+            let (cur_act, ent) = match conns.get(&owner) {
+                Some(c) if c.logged_in => (c.act, c.entity),
+                _ => continue,
+            };
+            let Some(ent) = ent else { continue };
+            let home_msg = match home {
+                Some(h) if *h != cur_act => {
+                    if let Some(mut sheet) = world.player_sheet(cur_act, ent) {
+                        world.remove_player(cur_act, ent);
+                        sheet.act = *h;
+                        sheet.x = 0.0;
+                        sheet.y = 0.0;
+                        let new_ent = world.spawn_player(owner, sheet.clone());
+                        if let Some(c) = conns.get_mut(&owner) {
+                            c.act = *h;
+                            c.entity = Some(new_ent);
+                            c.send(ServerMsg::Welcome {
+                                entity_id: new_ent,
+                                character: sheet,
+                                is_dev: c.is_dev,
+                            });
+                        }
+                    }
+                    format!("You were slain. You return home to the {} inn.", h.as_str())
+                }
+                Some(h) => format!("You were slain. You return home to the {} inn.", h.as_str()),
+                None => "You were slain and revived at the shrine. Use /sethome at an inn to set a home.".to_string(),
+            };
+            if let Some(c) = conns.get(&owner) {
+                c.send(ServerMsg::Notice { text: home_msg });
+            }
+            send_stats(world, conns, owner);
+            continue;
+        }
         let owner = match &ev {
             SimEvent::LevelUp { owner, .. } => *owner,
-            SimEvent::Died { owner } => *owner,
+            SimEvent::Died { owner, .. } => *owner,
             SimEvent::Loot { owner, .. } => *owner,
             SimEvent::Info { owner, .. } => *owner,
             SimEvent::Combat { .. } => unreachable!(),
@@ -1075,9 +1120,7 @@ fn dispatch_events(world: &mut World, conns: &HashMap<u64, Conn>, events: Vec<Si
             SimEvent::LevelUp { level, .. } => {
                 c.send(ServerMsg::Notice { text: format!("You reached level {level}!") });
             }
-            SimEvent::Died { .. } => {
-                c.send(ServerMsg::Notice { text: "You were slain and revived at the shrine.".into() });
-            }
+            SimEvent::Died { .. } => {} // handled above (home migration)
             SimEvent::Loot { item, .. } => {
                 c.send(ServerMsg::Notice { text: format!("You collected {item}.") });
             }
