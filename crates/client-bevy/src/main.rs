@@ -20,6 +20,7 @@ mod atmosphere;
 mod audio;
 mod equipment;
 mod grass;
+mod local;
 
 /// Local player's visual jump arc (v0.5.0): height offset over time.
 #[derive(Resource, Default)]
@@ -67,7 +68,14 @@ fn main() {
     // Start the network thread before the app so login is already in flight.
     let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
     let apple_id_for_session = apple_id.clone();
-    let (tx, rx) = start_network(url, apple_id, character_name);
+    let use_local = url == "local" || std::env::var("ANTEDILUVIA_LOCAL").is_ok();
+    let (tx, rx) = if use_local {
+        // Embedded single-player: run the World in-process (browser build path).
+        // A default character is used unless one is created in the builder.
+        local::start_local(display_name.clone(), None)
+    } else {
+        start_network(url, apple_id, character_name)
+    };
 
     // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
     // workspace-level assets/ dir, independent of cwd.

@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 bevy = { version = "0.15", features = ["jpeg", "png"] }
 antediluvia-protocol = { path = "../protocol" }
+antediluvia-sim = { path = "../sim" }
+glam = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
