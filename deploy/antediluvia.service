@@ -1,0 +1,25 @@
+[Unit]
+Description=Antediluvia MMORPG server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=antediluvia
+Group=antediluvia
+WorkingDirectory=/var/lib/antediluvia
+Environment=ANTEDILUVIA_BIND=127.0.0.1:8787
+Environment=ANTEDILUVIA_DB=/var/lib/antediluvia/antediluvia.sqlite
+Environment=RUST_LOG=antediluvia_server=info
+ExecStart=/usr/local/bin/antediluvia-server
+Restart=always
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/antediluvia
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
