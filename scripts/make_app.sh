@@ -28,7 +28,10 @@ cp target/release/antediluvia-server target/release/antediluvia-client-bevy \
 # Sign in with Apple helper (real SIWA when the bundle is provisioned with the
 # applesignin entitlement; stable local UUID fallback otherwise).
 swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swift
-cp -R assets "$APP/Contents/Resources/assets"
+# Bundle assets, but exclude the heavy gathered CC0 sets not yet referenced
+# (photoscan models + HDRIs) so the app stays small. The grass PBR textures
+# (textures/pbr) ARE used by the terrain, so they're kept.
+rsync -a --exclude 'models/polyhaven' --exclude 'hdri' assets/ "$APP/Contents/Resources/assets/"
 
 STAGE=$(mktemp -d)/Antediluvia.app
 ditto --norsrc --noextattr "$APP" "$STAGE"

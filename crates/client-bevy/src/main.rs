@@ -550,9 +550,21 @@ fn spawn_prop(
         .id()
 }
 
-/// Tiling ground detail texture handle (generated once at startup).
-#[derive(Resource)]
-struct GroundDetail(Handle<Image>);
+/// Terrain PBR ground textures (photoscanned grass/rock; loaded at startup).
+#[derive(Resource, Clone)]
+struct GroundDetail { diff: Handle<Image>, nor: Handle<Image>, arm: Handle<Image> }
+
+/// Load a texture tiled (Repeat sampler) — needed for terrain PBR maps.
+fn load_tiled(asset_server: &AssetServer, path: &str) -> Handle<Image> {
+    use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+    asset_server.load_with_settings(path.to_string(), |s: &mut ImageLoaderSettings| {
+        s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            ..default()
+        });
+    })
+}
 
 /// Procedural turf/soil speckle: value noise multiplied over the terrain's
 /// vertex-color palette. sRGB, tileable by construction (hash per texel).
@@ -600,7 +612,7 @@ fn ground_detail_texture() -> Image {
 fn spawn_act_scenery(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    ground_detail: Handle<Image>,
+    ground: GroundDetail,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
     act: Act,
@@ -611,9 +623,14 @@ fn spawn_act_scenery(
     commands.spawn((
         Mesh3d(meshes.add(build_terrain_mesh(act))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(ground_detail),
-            uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(700.0)),
+            // CC0 photoscanned grass/rock (Poly Haven): real diffuse detail,
+            // a normal map for surface relief, and packed AO/rough/metal.
+            base_color: Color::srgb(0.9, 0.95, 0.85),
+            base_color_texture: Some(ground.diff),
+            normal_map_texture: Some(ground.nor),
+            metallic_roughness_texture: Some(ground.arm.clone()),
+            occlusion_texture: Some(ground.arm),
+            uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(320.0)),
             perceptual_roughness: 1.0,
             ..default()
         })),
@@ -897,9 +914,13 @@ fn setup(
     spawn_sky(&mut commands, &mut meshes, &mut materials, &mut images, &initial_mood);
 
     // Terrain + inn + decor (rebuilt on zone travel).
-    let ground_detail = images.add(ground_detail_texture());
-    commands.insert_resource(GroundDetail(ground_detail.clone()));
-    spawn_act_scenery(&mut commands, &mut meshes, ground_detail, &mut materials, &asset_server, Act::Eden);
+    let ground = GroundDetail {
+        diff: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_diff_1k.jpg"),
+        nor: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_nor_gl_1k.jpg"),
+        arm: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_arm_1k.jpg"),
+    };
+    commands.insert_resource(ground.clone());
+    spawn_act_scenery(&mut commands, &mut meshes, ground, &mut materials, &asset_server, Act::Eden);
 
     // Inn ring at the zone entry (the rest / auction-house area). Pulses.
     let ring_mat = materials.add(StandardMaterial {
@@ -1150,7 +1171,7 @@ fn receive_from_server(
         for t in terrain_q.iter() {
             commands.entity(t).despawn_recursive();
         }
-        spawn_act_scenery(commands, meshes, ground.0.clone(), materials, &asset_server, act);
+        spawn_act_scenery(commands, meshes, ground.clone(), materials, &asset_server, act);
     };
     let mut latest: Option<Vec<EntityState>> = None;
     while let Ok(msg) = rx.0.try_recv() {
