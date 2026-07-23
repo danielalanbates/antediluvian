@@ -24,7 +24,7 @@ pub fn act_mood(act: Act) -> Mood {
     match act {
         Act::Eden => Mood {
             fog_color: Color::srgb(0.7, 0.8, 0.6), // soft green-gold
-            fog_density: 0.0003,
+            fog_density: 0.00018,
             ambient_color: Color::srgb(0.9, 0.95, 0.8),
             sun_color: Color::srgb(1.0, 0.95, 0.8),
             sky_horizon: Color::srgb(0.6, 0.75, 0.6),

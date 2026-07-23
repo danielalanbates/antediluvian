@@ -831,10 +831,12 @@ fn setup(
             // Filmic grade: gentle contrast S-curve + a touch more saturation
             // so the stylized palette reads with modern punch, not flat.
             let mut cg = bevy::render::view::ColorGrading::default();
-            cg.global.post_saturation = 1.18;
+            cg.global.exposure = 0.35;          // lift the murk
+            cg.global.post_saturation = 1.32;    // vivid, modern palette
+            cg.shadows.lift = 0.02;              // open up the blacks a touch
             cg.shadows.gamma = 1.05;
-            cg.highlights.gain = 1.04;
-            cg.midtones.contrast = 1.08;
+            cg.highlights.gain = 1.06;
+            cg.midtones.contrast = 1.12;
             cg
         },
         Transform::from_xyz(0.0, 300.0, 420.0).looking_at(Vec3::ZERO, Vec3::Y),

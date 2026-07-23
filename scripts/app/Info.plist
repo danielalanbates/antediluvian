@@ -6,7 +6,7 @@
 	<key>CFBundleDisplayName</key><string>Antediluvia</string>
 	<key>CFBundleIdentifier</key><string>org.batesai.antediluvia</string>
 	<key>CFBundleVersion</key><string>0.1.0</string>
-	<key>CFBundleShortVersionString</key><string>0.5.2</string>
+	<key>CFBundleShortVersionString</key><string>0.5.3</string>
 	<key>CFBundleExecutable</key><string>Antediluvia</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
