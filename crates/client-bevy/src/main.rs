@@ -104,6 +104,8 @@ fn main() {
         // Sky.
         .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
         .insert_resource(AmbientLight { color: Color::WHITE, brightness: 300.0 })
+        // Higher-resolution shadow atlas for crisp, modern-looking shadows.
+        .insert_resource(bevy::pbr::DirectionalLightShadowMap { size: 2048 })
         .insert_resource(tx)
         .insert_non_send_resource(rx)
         .insert_resource(EntityMap::default())
@@ -145,6 +147,8 @@ fn main() {
                 update_ui_panels,
                 update_atmosphere,
                 grass::update_grass,
+                grass::sway_grass,
+                animate_water,
                 player_jump,
                 ambient_system,
                 apply_loadouts,
@@ -328,6 +332,18 @@ impl Default for Session {
 /// Marker on the act's terrain mesh entity (rebuilt on zone travel).
 #[derive(Component)]
 struct Terrain;
+
+/// Water surface — animated with a gentle vertical swell for life.
+#[derive(Component)]
+struct WaterPlane { level: f32 }
+
+/// Bob the water surface so it reads as a living body, not a static pane.
+fn animate_water(time: Res<Time>, mut q: Query<(&WaterPlane, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (w, mut tf) in &mut q {
+        tf.translation.y = w.level + (t * 0.6).sin() * 1.2;
+    }
+}
 
 /// Third-person orbit camera state (WoW-style).
 #[derive(Resource)]
@@ -613,13 +629,15 @@ fn spawn_act_scenery(
                 antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0,
             ))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgba(0.16, 0.34, 0.45, 0.62),
+                base_color: Color::srgba(0.10, 0.30, 0.44, 0.72),
                 alpha_mode: AlphaMode::Blend,
-                perceptual_roughness: 0.15,
-                metallic: 0.1,
+                perceptual_roughness: 0.04,
+                metallic: 0.25,
+                reflectance: 0.5,
                 ..default()
             })),
             Transform::from_xyz(0.0, level, 0.0),
+            WaterPlane { level },
             Terrain,
         ));
     }
@@ -808,9 +826,17 @@ fn setup(
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::core_pipeline::bloom::Bloom::NATURAL,
         bevy::core_pipeline::fxaa::Fxaa::default(),
-        bevy::core_pipeline::prepass::DepthPrepass,
-        bevy::core_pipeline::prepass::NormalPrepass,
-        bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
+        bevy::pbr::ShadowFilteringMethod::Gaussian,
+        {
+            // Filmic grade: gentle contrast S-curve + a touch more saturation
+            // so the stylized palette reads with modern punch, not flat.
+            let mut cg = bevy::render::view::ColorGrading::default();
+            cg.global.post_saturation = 1.18;
+            cg.shadows.gamma = 1.05;
+            cg.highlights.gain = 1.04;
+            cg.midtones.contrast = 1.08;
+            cg
+        },
         Transform::from_xyz(0.0, 300.0, 420.0).looking_at(Vec3::ZERO, Vec3::Y),
         DistanceFog {
             color: initial_mood.fog_color,
@@ -823,12 +849,18 @@ fn setup(
 
     // Sun.
     commands.spawn((
-        DirectionalLight { illuminance: 16_000.0, shadows_enabled: true, ..default() },
-        // CHUNK_10 shadow budget: the sun is the only caster; keep its
-        // cascades tight so a busy zone doesn't pay for kilometer shadows.
+        DirectionalLight {
+            illuminance: 16_000.0,
+            shadows_enabled: true,
+            shadow_depth_bias: 0.02,
+            shadow_normal_bias: 1.8,
+            ..default()
+        },
+        // Crisp near shadows, soft falloff; 4 cascades over ~900 m.
         bevy::pbr::CascadeShadowConfigBuilder {
+            num_cascades: 4,
             maximum_distance: 900.0,
-            first_cascade_far_bound: 220.0,
+            first_cascade_far_bound: 140.0,
             ..default()
         }
         .build(),
