@@ -6,3 +6,8 @@
 .DS_Store
 node_modules
 dist/
+
+# Gathered CC0 assets (reproducible via scripts/gather_assets.py)
+assets/models/polyhaven/
+assets/hdri/
+assets/textures/pbr/
