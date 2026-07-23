@@ -870,6 +870,29 @@ fn setup(
         Sun,
     ));
 
+    // Rim / back light (fidelity): a cool, shadowless key from behind-opposite
+    // the sun carves an edge highlight on every character and prop — the
+    // signature "lit" look of modern stylized games, with no new art.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 5_500.0,
+            color: Color::srgb(0.7, 0.82, 1.0),
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, 0.6 + std::f32::consts::PI, 0.0)),
+    ));
+    // Warm bounce fill from below-front so shadowed undersides don't read black.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 2_600.0,
+            color: Color::srgb(1.0, 0.86, 0.62),
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, 0.5, -0.4, 0.0)),
+    ));
+
     // Sky.
     spawn_sky(&mut commands, &mut meshes, &mut materials, &mut images, &initial_mood);
 
