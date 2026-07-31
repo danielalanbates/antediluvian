@@ -49,11 +49,23 @@ fn preload_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let root = std::path::Path::new("assets");
     let mut handles = Vec::new();
     let mut stack = vec![root.join("models"), root.join("audio")];
+    // Directories that are deliberately NOT preloaded. The Poly Haven set is
+    // multi-gigabyte photoscan glTF: preloading it blew the IO pool's stack
+    // outright on an 8 GB machine. These are referenced explicitly by the
+    // dressing code when needed and stream in on demand instead.
+    const LAZY_DIRS: [&str; 1] = ["polyhaven"];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| LAZY_DIRS.contains(&n))
+                {
+                    continue;
+                }
                 stack.push(path);
             } else if path
                 .extension()

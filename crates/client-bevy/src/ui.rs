@@ -63,6 +63,9 @@ pub struct XpFill;
 pub struct ActionBarSlot;
 #[derive(Component)]
 pub struct ActionBarLabel(pub u8);
+/// Blender-rendered ability icon (assets/sprites/icons/<ability>.png).
+#[derive(Component)]
+pub struct ActionBarIcon(pub u8);
 #[derive(Component)]
 pub struct ActionBarCooldown(pub u8);
 #[derive(Component)]
@@ -316,7 +319,7 @@ fn spawn_action_bar(commands: &mut Commands) {
                 .with_children(|bar| {
                     for slot in 0u8..3 {
                         let key_label = match slot {
-                            0 => "Space",
+                            0 => "Click", // Space is jump now; attack is left-click
                             1 => "1",
                             _ => "2",
                         };
@@ -360,6 +363,20 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
             ActionBarSlot,
         ))
         .with_children(|s| {
+            // Rendered icon fills the slot behind the text layers.
+            s.spawn((
+                ImageNode::default(),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    ..default()
+                },
+                Visibility::Hidden,
+                ActionBarIcon(slot),
+            ));
             // Key hint (top).
             s.spawn((
                 Text::new(key),
@@ -503,8 +520,11 @@ pub fn update_ui_frames(
     mut q_mp_text: Query<&mut Text, (With<MpText>, Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
     mut q_xp_fill: Query<&mut Node, (With<XpFill>, Without<HpFill>, Without<MpFill>, Without<ActionBarCooldown>)>,
     mut q_action_labels: Query<(&ActionBarLabel, &mut Text), (Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<MpText>, Without<ClassSelectText>)>,
-    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility), Without<QuestTrackerRoot>>,
-    mut q_class_select: Query<&mut Visibility, (With<ClassSelectText>, Without<ActionBarCooldown>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
+    asset_server: Res<AssetServer>,
+    mut icon_cache: Local<[String; 3]>,
+    mut q_icons: Query<(&ActionBarIcon, &mut ImageNode, &mut Visibility), (Without<ActionBarCooldown>, Without<QuestTrackerRoot>, Without<ClassSelectText>, Without<ChatInputBar>)>,
+    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility), (Without<QuestTrackerRoot>, Without<ActionBarIcon>)>,
+    mut q_class_select: Query<&mut Visibility, (With<ClassSelectText>, Without<ActionBarCooldown>, Without<ActionBarIcon>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
 ) {
     let now = time.elapsed_secs();
     let sheet = session.sheet.as_ref();
@@ -581,6 +601,24 @@ pub fn update_ui_frames(
         let pretty = prettify_ability(name);
         if **text != pretty {
             **text = pretty;
+        }
+    }
+
+    // Ability icons: load once per ability change (asset server caches paths).
+    for (icon, mut img, mut vis) in q_icons.iter_mut() {
+        let name = match icon.0 {
+            0 => "attack",
+            1 => abilities.map_or("", |a| a[0]),
+            2 => abilities.map_or("", |a| a[1]),
+            _ => "",
+        };
+        let cache = &mut icon_cache[icon.0.min(2) as usize];
+        if name.is_empty() {
+            *vis = Visibility::Hidden;
+        } else if cache != name {
+            *cache = name.to_string();
+            img.image = asset_server.load(format!("sprites/icons/{name}.png"));
+            *vis = Visibility::Inherited;
         }
     }
 

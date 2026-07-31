@@ -14,7 +14,12 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = "0.24"
+# rustls (pure Rust, webpki roots) so the client can dial wss:// against the
+# hosted shard. No feature => connect_async rejects wss:// at runtime.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# rustls 0.23 refuses to pick a crypto backend unless exactly one provider
+# feature is on; enabling `ring` here lets CryptoProvider auto-install.
+rustls = { version = "0.23", features = ["ring"] }
 futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -29,6 +29,15 @@ if ! command -v caddy >/dev/null; then
 fi
 id antediluvia >/dev/null 2>&1 || useradd --system --home /var/lib/antediluvia --create-home antediluvia
 mkdir -p /var/lib/antediluvia && chown antediluvia:antediluvia /var/lib/antediluvia
+# Oracle's Ubuntu images ship a default REJECT in the INPUT chain, so opening
+# the VCN security list alone is not enough — the host firewall drops 80/443
+# too. This is the single most common "deployed fine, can't connect" cause.
+for port in 80 443; do
+  iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT 1 -p tcp --dport $port -j ACCEPT
+done
+apt-get install -y -qq iptables-persistent netfilter-persistent >/dev/null 2>&1 || true
+netfilter-persistent save >/dev/null 2>&1 || true
 REMOTE
 
 echo "==> [2/5] Syncing source (protocol + sim + server crates)"
@@ -39,6 +48,25 @@ rsync -az --delete -e "$RSYNC_E" \
 for c in protocol sim server; do
   rsync -az --delete -e "$RSYNC_E" --exclude target "$HERE/crates/$c" "$HOST:~/antediluvia-src/crates/"
 done
+# crates/sim include_str!s these at COMPILE time (caves/mobs/pois/prices/
+# pvp_zones) — without them the build fails, so they must ship with the source.
+# Only assets/data is needed; models/textures/hdri are client-side.
+$SSH 'mkdir -p ~/antediluvia-src/assets/data'
+rsync -az --delete -e "$RSYNC_E" "$HERE/assets/data/" "$HOST:~/antediluvia-src/assets/data/"
+
+# The workspace manifest lists 5 members but we only ship 3 (client-bevy pulls
+# Bevy; test-client isn't needed on a shard). Cargo hard-errors on a missing
+# member, so trim the member lists in the copy that lives on the VM.
+$SSH 'cd ~/antediluvia-src && python3 - ' <<'REMOTE'
+import re, pathlib
+p = pathlib.Path("Cargo.toml")
+s = p.read_text()
+keep = '["crates/protocol", "crates/sim", "crates/server"]'
+s = re.sub(r"^members = .*$", "members = " + keep, s, flags=re.M)
+s = re.sub(r"^default-members = .*$", "default-members = " + keep, s, flags=re.M)
+p.write_text(s)
+print("trimmed workspace members to protocol/sim/server")
+REMOTE
 
 echo "==> [3/5] Building release on the VM (this can take a few minutes)"
 $SSH 'source ~/.cargo/env 2>/dev/null || true; cd ~/antediluvia-src && cargo build --release -p antediluvia-server'

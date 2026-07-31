@@ -2,18 +2,26 @@
 """Parse docs/locations/points_of_interest/POI_Archive_*.md into
 assets/data/pois.json, capped at 40 POIs per act (deterministic md5 pick).
 
-Doc coordinates span ±8000; the playable world is ±1800 (WORLD_BOUNDS), so
-positions scale by 3600/8000 = 0.45 and clamp to ±3200 to stay in bounds.
+Doc coordinates span ±8000; the playable world is ±3200 (WORLD_BOUNDS*2), so
+positions scale by 3600/8000 = 0.45 and are then soft-compressed toward
+±LIMIT.
+
+A hard clamp used to flatten every doc coordinate past ±7111 onto the exact
+map boundary — 108 of 200 sites ended up pinned to the edge, stacked in the
+corners under the boundary landforms. `tanh` keeps the near-linear layout in
+the middle of the map (where most sites live) but asymptotes instead of
+piling up, so no site ever lands on the world edge.
 """
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCALE = 3600.0 / 8000.0
-CLAMP = 3200.0
+LIMIT = 3000.0
 PER_ACT_CAP = 40
 
 ACT_MAP = [
@@ -44,13 +52,13 @@ for path in sorted(glob.glob(os.path.join(ROOT, "docs/locations/points_of_intere
         act = act_for(region)
         if act is None:
             continue
-        clamp = lambda v: max(-CLAMP, min(CLAMP, float(v) * SCALE))
+        fit = lambda v: LIMIT * math.tanh(float(v) * SCALE / LIMIT)
         pois.append({
             "id": int(pid),
             "name": name.strip(),
             "act": act,
-            "x": round(clamp(x), 1),
-            "y": round(clamp(y), 1),
+            "x": round(fit(x), 1),
+            "y": round(fit(y), 1),
         })
 
 total = len(pois)

@@ -18,6 +18,7 @@
 
 mod atmosphere;
 mod audio;
+mod dressing;
 mod equipment;
 mod grass;
 mod local;
@@ -27,6 +28,7 @@ mod local;
 struct PlayerJump { start: Option<f32> }
 mod net;
 mod perf;
+mod propgen;
 mod terrain;
 mod ui;
 mod variety;
@@ -56,6 +58,33 @@ use std::f32::consts::FRAC_PI_2;
 use std::time::Duration;
 
 fn main() {
+    // Art-review mode: a minimal app that renders nothing but the procedural
+    // prop grid. It deliberately shares none of the gameplay systems — those
+    // expect a live world and network resources this mode never creates.
+    if std::env::var("ANTEDILUVIA_PROPSHEET").is_ok() {
+        App::new()
+            .add_plugins(DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Antediluvia — procedural prop sheet".into(),
+                    resolution: (1600.0, 900.0).into(),
+                    ..default()
+                }),
+                ..default()
+            }))
+            .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
+            .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
+            .add_systems(
+                Startup,
+                |mut c: Commands,
+                 mut m: ResMut<Assets<Mesh>>,
+                 mut mat: ResMut<Assets<StandardMaterial>>| {
+                    propgen::spawn_contact_sheet(&mut c, &mut m, &mut mat);
+                },
+            )
+            .run();
+        return;
+    }
+
     let mut args = std::env::args().skip(1);
     let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
     let url_or_name = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
@@ -107,12 +136,20 @@ fn main() {
         // Higher-resolution shadow atlas for crisp, modern-looking shadows.
         .insert_resource(bevy::pbr::DirectionalLightShadowMap { size: 2048 })
         .insert_resource(tx)
+        .insert_resource(AutoCmd {
+            cmds: std::env::var("ANTEDILUVIA_AUTOCMD")
+                .map(|v| v.split(';').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default(),
+            next_at: 4.0, // let the zone finish building first
+        })
         .insert_non_send_resource(rx)
         .insert_resource(EntityMap::default())
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
         .insert_resource(TintCache::default())
         .insert_resource(PlayerJump::default())
+        .insert_resource(LeftDrag::default())
+        .insert_resource(PropColliders::default())
         .insert_resource(Session {
             name: display_name,
             apple_id: apple_id_for_session,
@@ -127,12 +164,15 @@ fn main() {
                 send_input,
                 chat_input,
                 orbit_camera,
+                mouse_click_attack,
+                sync_prop_colliders,
                 face_billboards,
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
                 builder_screen,
                 dev_console,
+                dev_autocmd,
             ),
         )
         .add_systems(
@@ -331,7 +371,7 @@ impl Default for Session {
 
 /// Marker on the act's terrain mesh entity (rebuilt on zone travel).
 #[derive(Component)]
-struct Terrain;
+pub struct Terrain;
 
 /// Water surface — animated with a gentle vertical swell for life.
 #[derive(Component)]
@@ -367,7 +407,8 @@ struct RenderAssets {
     m_bar_hp: Handle<StandardMaterial>,
     /// C15 crowd LOD: shared capsule impostor for far players.
     lod_capsule: Handle<Mesh>,
-    m_lod: Handle<StandardMaterial>,
+    /// One material per skin tone; distant players index in by entity id.
+    m_lod: Vec<Handle<StandardMaterial>>,
 }
 
 /// Players farther than this from the local player spawn as capsule
@@ -518,6 +559,53 @@ const ROCKS: [&str; 3] = [
     "models/props/nature/rock_single_C.gltf",
 ];
 
+/// Kenney flora/scatter per act (CC0, assets/models/kenney/nature) — adds
+/// biome-specific variety on top of the KayKit tree/rock scatter.
+fn kenney_flora(act: Act) -> [&'static str; 6] {
+    match act {
+        Act::Eden => [
+            "models/kenney/nature/tree_detailed.glb",
+            "models/kenney/nature/tree_default.glb",
+            "models/kenney/nature/flower_purpleA.glb",
+            "models/kenney/nature/flower_yellowB.glb",
+            "models/kenney/nature/mushroom_redGroup.glb",
+            "models/kenney/nature/plant_bushDetailed.glb",
+        ],
+        Act::Hermon => [
+            "models/kenney/nature/tree_pineTallA.glb",
+            "models/kenney/nature/tree_pineDefaultA.glb",
+            "models/kenney/nature/tree_pineSmallB.glb",
+            "models/kenney/nature/tree_pineRoundC.glb",
+            "models/kenney/nature/rock_largeA.glb",
+            "models/kenney/nature/log_large.glb",
+        ],
+        Act::Nephilim => [
+            "models/kenney/nature/tree_blocks_dark.glb",
+            "models/kenney/nature/tree_cone_dark.glb",
+            "models/kenney/nature/cliff_block_rock.glb",
+            "models/kenney/nature/log.glb",
+            "models/kenney/nature/mushroom_tanTall.glb",
+            "models/kenney/nature/cactus_short.glb",
+        ],
+        Act::Enoch => [
+            "models/kenney/fantasy-town/tree-high.glb",
+            "models/kenney/fantasy-town/hedge.glb",
+            "models/kenney/fantasy-town/rock-wide.glb",
+            "models/kenney/fantasy-town/lantern.glb",
+            "models/kenney/graveyard/debris.glb",
+            "models/kenney/fantasy-town/fence-broken.glb",
+        ],
+        Act::Flood => [
+            "models/kenney/pirate/palm-detailed-bend.glb",
+            "models/kenney/pirate/palm-straight.glb",
+            "models/kenney/pirate/rocks-sand-a.glb",
+            "models/kenney/pirate/patch-sand.glb",
+            "models/kenney/pirate/grass-patch.glb",
+            "models/kenney/nature/canoe.glb",
+        ],
+    }
+}
+
 /// KayKit hexagon props are ~1–2 units across; world characters are ~55u.
 const TREE_SCALE: f32 = 34.0;
 const ROCK_SCALE: f32 = 26.0;
@@ -525,6 +613,10 @@ const ROCK_SCALE: f32 = 26.0;
 /// CHUNK_10: scatter decor / formations only render within this band; the
 /// fade end sits deep enough in the fog that the pop is invisible, and the
 /// far field drops ~hundreds of unique-mesh draw calls per frame.
+/// Radius kept clear of procedural formations / scatter around every POI so
+/// its set-dressing reads as a place instead of a rock pile.
+const POI_CLEARANCE: f32 = 260.0;
+
 const DECOR_RANGE: bevy::render::view::VisibilityRange = bevy::render::view::VisibilityRange {
     start_margin: 0.0..0.0,
     end_margin: 2200.0..2600.0,
@@ -532,6 +624,91 @@ const DECOR_RANGE: bevy::render::view::VisibilityRange = bevy::render::view::Vis
 };
 
 /// Spawn one static prop scene (no server entity) and return it.
+/// Crowd-LOD stand-in for a distant player: head + torso + two legs merged
+/// into ONE mesh, so it costs exactly what the old single capsule cost but
+/// actually reads as a person at range. Built from axis-aligned boxes; at
+/// 350 m+ the silhouette is all that survives anyway.
+fn lod_humanoid_mesh() -> Mesh {
+    let mut pos: Vec<[f32; 3]> = Vec::new();
+    let mut nor: Vec<[f32; 3]> = Vec::new();
+    let mut idx: Vec<u32> = Vec::new();
+
+    // Push one axis-aligned box (centre, half-extents) as 6 flat-shaded quads.
+    let mut push_box = |c: [f32; 3], h: [f32; 3]| {
+        const FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+            ([0., 0., 1.], [1., 0., 0.], [0., 1., 0.]), // +Z
+            ([0., 0., -1.], [-1., 0., 0.], [0., 1., 0.]), // -Z
+            ([1., 0., 0.], [0., 0., -1.], [0., 1., 0.]), // +X
+            ([-1., 0., 0.], [0., 0., 1.], [0., 1., 0.]), // -X
+            ([0., 1., 0.], [1., 0., 0.], [0., 0., -1.]), // +Y
+            ([0., -1., 0.], [1., 0., 0.], [0., 0., 1.]), // -Y
+        ];
+        // Scale an axis vector by the half-extent along the axis it points
+        // down. Doing this component-wise matters: using h[0]/h[1]/h[2]
+        // positionally instead distorts every non-Z face into a slab.
+        let ax = |v: [f32; 3]| [v[0] * h[0], v[1] * h[1], v[2] * h[2]];
+        for (n, u, v) in FACES {
+            let (dn, du, dv) = (ax(n), ax(u), ax(v));
+            let base = pos.len() as u32;
+            for (su, sv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                pos.push([
+                    c[0] + dn[0] + du[0] * su + dv[0] * sv,
+                    c[1] + dn[1] + du[1] * su + dv[1] * sv,
+                    c[2] + dn[2] + du[2] * su + dv[2] * sv,
+                ]);
+                nor.push(n);
+            }
+            idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    };
+
+    // Proportions roughly match the real rig so the LOD swap isn't a pop.
+    // Stacked feet-up so the figure stands ON the ground plane, ~46 units
+    // tall to match the capsule it replaces (no pop at the LOD boundary).
+    push_box([0.0, 40.0, 0.0], [6.0, 6.0, 6.0]); // head
+    push_box([0.0, 24.0, 0.0], [9.0, 9.0, 5.0]); // torso (wider than deep)
+    push_box([-4.5, 8.0, 0.0], [3.0, 8.0, 3.0]); // left leg
+    push_box([4.5, 8.0, 0.0], [3.0, 8.0, 3.0]); // right leg
+
+    let mut mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::render::render_asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nor);
+    mesh.insert_indices(bevy::render::mesh::Indices::U32(idx));
+    mesh
+}
+
+/// Solid world decor the player must not walk through.
+///
+/// Every prop (buildings, trees, rocks, fences, carts) is spawned CLIENT-side
+/// by `dressing.rs` / `kenney_flora`; the server's `World` only tracks mobs,
+/// wildlife and resource nodes, so it cannot possibly block movement against
+/// scenery it never hears about. Until props are mirrored server-side this
+/// registry gives the client enough to refuse a movement intent that would
+/// walk into one. Non-authoritative — a modified client could still clip —
+/// but decor collision isn't a security boundary.
+#[derive(Resource, Default)]
+struct PropColliders {
+    /// (centre on the ground plane, radius)
+    items: Vec<(Vec2, f32)>,
+}
+
+impl PropColliders {
+    /// First collider whose disc contains `p`.
+    fn blocking(&self, p: Vec2) -> Option<(Vec2, f32)> {
+        self.items
+            .iter()
+            .copied()
+            .find(|(c, r)| c.distance_squared(p) < r * r)
+    }
+}
+
+/// How far ahead of the player we test for a blocker. Roughly a body radius,
+/// so you stop against a wall rather than sinking into it.
+const PLAYER_RADIUS: f32 = 14.0;
+
 fn spawn_prop(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -540,14 +717,80 @@ fn spawn_prop(
     scale: f32,
     yaw: f32,
 ) -> Entity {
-    commands
-        .spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string()))),
-            Transform::from_translation(pos)
-                .with_scale(Vec3::splat(scale))
-                .with_rotation(Quat::from_rotation_y(yaw)),
-        ))
-        .id()
+    let mut e = commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string()))),
+        Transform::from_translation(pos)
+            .with_scale(Vec3::splat(scale))
+            .with_rotation(Quat::from_rotation_y(yaw)),
+    ));
+    // Structures and trees are solid; ground cover is not — walking into a
+    // flower must not stop you. Kenney/Poly Haven names are descriptive
+    // enough to classify on, and getting this wrong the safe way (missing a
+    // collider) is far better than invisible walls in open grass.
+    let lower = path.to_ascii_lowercase();
+    const SOFT: [&str; 8] = [
+        "flower", "grass", "plant", "mushroom", "fern", "moss", "mound", "mud",
+    ];
+    if !SOFT.iter().any(|s| lower.contains(s)) {
+        e.insert(SolidProp { radius: (scale * 0.5).clamp(8.0, 45.0) });
+    }
+    e.id()
+}
+
+/// Given a desired movement direction, return one that doesn't walk into a
+/// prop. If the straight line is blocked we try sliding along the obstacle
+/// (the component perpendicular to the surface normal) before giving up, so
+/// you scrape past a wall instead of sticking to it.
+fn deflect_around_props(dir: Vec2, from: &Vec2, colliders: &PropColliders) -> Vec2 {
+    if dir == Vec2::ZERO {
+        return dir;
+    }
+    // Already overlapping something (prop spawned on us, teleport, big disc)?
+    // Never trap the player: allow anything heading outward, and if they're
+    // pushing further in, send them straight out instead.
+    if let Some((centre, _)) = colliders.blocking(*from) {
+        let out = (*from - centre).normalize_or_zero();
+        if out == Vec2::ZERO {
+            return dir;
+        }
+        return if dir.dot(out) > 0.0 { dir } else { out };
+    }
+    let step = dir.normalize_or_zero() * PLAYER_RADIUS;
+    let Some((centre, _)) = colliders.blocking(*from + step) else {
+        return dir; // path is clear
+    };
+    // Slide: drop the component pointing into the obstacle.
+    let normal = (*from - centre).normalize_or_zero();
+    if normal == Vec2::ZERO {
+        return Vec2::ZERO;
+    }
+    let slid = dir - normal * dir.dot(normal).min(0.0);
+    if slid.length_squared() < 1e-4 {
+        return Vec2::ZERO;
+    }
+    let slid_step = slid.normalize_or_zero() * PLAYER_RADIUS;
+    if colliders.blocking(*from + slid_step).is_some() {
+        return Vec2::ZERO; // wedged in a corner
+    }
+    slid
+}
+
+/// Marks a prop the player should collide with; `radius` is on the ground plane.
+#[derive(Component, Copy, Clone)]
+struct SolidProp {
+    radius: f32,
+}
+
+/// Fold newly spawned solid props into the collider registry once, when they
+/// appear. Props never move, so there is nothing to maintain afterwards.
+fn sync_prop_colliders(
+    mut colliders: ResMut<PropColliders>,
+    added: Query<(&GlobalTransform, &SolidProp), Added<SolidProp>>,
+) {
+    for (gt, solid) in &added {
+        let t = gt.translation();
+        colliders.items.push((Vec2::new(t.x, t.z), solid.radius));
+    }
 }
 
 /// Terrain PBR ground textures (photoscanned grass/rock; loaded at startup).
@@ -672,6 +915,17 @@ fn spawn_act_scenery(
             ("models/props/village/building_well_red.gltf", Vec3::new(90.0, -6.0, -70.0), 28.0, 0.0),
             ("models/props/city/bush.gltf", Vec3::new(-30.0, 0.0, 140.0), 64.0, 0.8),
             ("models/props/city/bush.gltf", Vec3::new(55.0, 0.0, 135.0), 56.0, 2.4),
+            // Hamlet dressing (Kenney kits): market stall, cart, lanterns,
+            // fence run and a notice-board feel by the tavern door.
+            ("models/kenney/fantasy-town/stall-red.glb", Vec3::new(150.0, 0.0, -140.0), 34.0, 3.5),
+            ("models/kenney/fantasy-town/cart.glb", Vec3::new(190.0, 0.0, -60.0), 30.0, 1.2),
+            ("models/kenney/fantasy-town/lantern.glb", Vec3::new(-60.0, 0.0, -60.0), 30.0, 0.0),
+            ("models/kenney/fantasy-town/lantern.glb", Vec3::new(40.0, 0.0, -160.0), 30.0, 0.0),
+            ("models/kenney/fantasy-town/fence.glb", Vec3::new(-190.0, 0.0, -30.0), 32.0, 1.57),
+            ("models/kenney/fantasy-town/fence.glb", Vec3::new(-190.0, 0.0, 30.0), 32.0, 1.57),
+            ("models/kenney/fantasy-town/fence-gate.glb", Vec3::new(-190.0, 0.0, 90.0), 32.0, 1.57),
+            ("models/kenney/survival/campfire-pit.glb", Vec3::new(120.0, 0.0, 90.0), 30.0, 0.0),
+            ("models/kenney/nature/log_stack.glb", Vec3::new(-170.0, 0.0, -170.0), 30.0, 0.4),
         ]
     };
     for (path, pos, scale, yaw) in inn {
@@ -682,16 +936,26 @@ fn spawn_act_scenery(
     // Non-gameplay decor scatter, deterministic per act.
     let act_idx = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as u64;
     let trees = tree_set(act);
-    for i in 0..300u64 { // C05: 4x map area
+    let flora = kenney_flora(act);
+    let poi_sites: Vec<(f32, f32)> = pois_for_act(act).map(|p| (p.x, p.y)).collect();
+    for i in 0..450u64 { // C05: 4x map area; +150 Kenney biome flora
         let s = act_idx * 100_000 + i;
         let x = (hash01(s * 4 + 1) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
         let z = (hash01(s * 4 + 2) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0;
         if (x * x + z * z).sqrt() < 300.0 {
             continue; // keep the inn clearing open
         }
-        let (path, scale) = match (hash01(s * 4 + 3) * 3.0) as u32 {
+        // Same landmark clearance as the formations below.
+        if poi_sites
+            .iter()
+            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
+        {
+            continue;
+        }
+        let (path, scale) = match (hash01(s * 4 + 3) * 4.0) as u32 {
             0 => ("models/props/city/bush.gltf", 42.0 + hash01(s * 4) * 24.0),
             1 => (ROCKS[(s % 3) as usize], 10.0 + hash01(s * 4) * 12.0),
+            2 => (flora[(s % 6) as usize], 24.0 + hash01(s * 4) * 14.0),
             _ => (trees[(s % 3) as usize], TREE_SCALE * (0.55 + hash01(s * 4) * 0.35)),
         };
         let pos = Vec3::new(x, terrain_height(act, x, z), z);
@@ -703,8 +967,8 @@ fn spawn_act_scenery(
     // Procedural formations (Alpha-2 A1): 1,200 per act across eight
     // families, every one a unique deformed mesh — thousands of distinct
     // terrain models world-wide. A4 finding: every third site clusters near
-    // a POI so the variety is visible where players actually walk.
-    let poi_sites: Vec<(f32, f32)> = pois_for_act(act).map(|p| (p.x, p.y)).collect();
+    // a POI so the variety is visible where players actually walk — but
+    // POI_CLEARANCE below keeps them off the site itself.
     for i in 0..1200u64 {
         let seed = act_idx * 1_000_003 + i * 7919;
         let (x, z) = if i % 3 == 0 && !poi_sites.is_empty() {
@@ -722,6 +986,15 @@ fn spawn_act_scenery(
         if (x * x + z * z).sqrt() < 320.0 {
             continue; // keep the inn clearing open
         }
+        // Landmark clearance: formations ring a POI but never stand on it.
+        // Without this the set-dressing (and hero landmarks especially) end
+        // up buried inside 40-unit rock spires.
+        if poi_sites
+            .iter()
+            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
+        {
+            continue;
+        }
         let size = 14.0 + hash01(seed * 4 + 13) * 46.0;
         let y = terrain_height(act, x, z);
         commands.spawn((
@@ -734,6 +1007,57 @@ fn spawn_act_scenery(
             Transform::from_xyz(x, y, z)
                 .with_scale(Vec3::splat(size))
                 .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
+            Terrain,
+            DECOR_RANGE,
+        ));
+    }
+
+    // Procedural landmark props: 600 per act across 20 families, every one a
+    // unique mesh (propgen). The GLB kits give us good props but a FINITE set
+    // — the same barrel in every act is the loudest asset-pack tell we have.
+    // These cost one draw call each like a GLB and share ONE material, since
+    // all their colour lives in vertex attributes.
+    let prop_mat = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    for i in 0..600u64 {
+        let seed = act_idx * 7_700_017 + i * 6421 + 31;
+        // Two thirds cluster near POIs — the A4 finding was that scattered
+        // variety is invisible because players walk the roads and landmarks.
+        let (x, z) = if i % 3 != 0 && !poi_sites.is_empty() {
+            let (px, pz) = poi_sites[(seed / 7 % poi_sites.len() as u64) as usize];
+            (
+                px + (hash01(seed * 4 + 21) - 0.5) * 1100.0,
+                pz + (hash01(seed * 4 + 22) - 0.5) * 1100.0,
+            )
+        } else {
+            (
+                (hash01(seed * 4 + 21) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
+                (hash01(seed * 4 + 22) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
+            )
+        };
+        if (x * x + z * z).sqrt() < 320.0 {
+            continue; // keep the inn clearing open
+        }
+        if poi_sites
+            .iter()
+            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
+        {
+            continue;
+        }
+        // Props are authored at roughly 10-30 units tall, so the world scale
+        // is a modest multiplier rather than the 14-60x formations use.
+        let size = 1.6 + hash01(seed * 4 + 23) * 2.2;
+        let y = terrain_height(act, x, z);
+        commands.spawn((
+            Mesh3d(meshes.add(propgen::prop_mesh(seed))),
+            MeshMaterial3d(prop_mat.clone()),
+            Transform::from_xyz(x, y, z)
+                .with_scale(Vec3::splat(size))
+                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 24) * 6.283)),
+            SolidProp { radius: (size * 4.0).clamp(8.0, 45.0) },
             Terrain,
             DECOR_RANGE,
         ));
@@ -769,6 +1093,15 @@ fn spawn_act_scenery(
             }
         }
     }
+
+    // POI set-dressing (Kenney kits): themed prop arrangements per site.
+    dressing::dress_pois(
+        commands,
+        asset_server,
+        act,
+        pois_for_act(act).map(|p| (p.name.as_str(), p.x, p.y)),
+        |x, z| terrain_height(act, x, z),
+    );
 
     // POI cairns (C04): a small stone stack marks each discoverable site.
     for (i, poi) in pois_for_act(act).enumerate() {
@@ -948,12 +1281,22 @@ fn setup(
             unlit: true,
             ..default()
         }),
-        lod_capsule: meshes.add(Capsule3d::new(9.0, 30.0)),
-        m_lod: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.5, 0.42),
-            perceptual_roughness: 0.9,
-            ..default()
-        }),
+        lod_capsule: meshes.add(lod_humanoid_mesh()),
+        // One shared tan capsule for the whole distant crowd was the single
+        // ugliest thing on screen at 1000 players — a field of identical
+        // featureless pills. Same draw-call budget, but now a head/torso/legs
+        // silhouette in the SAME 16-tone skin palette the real rigs use, so a
+        // crowd reads as a crowd of people instead of cloned markers.
+        m_lod: (0..variety::SKIN_CHOICES)
+            .map(|i| {
+                let (hue, light) = variety::skin_hue(i);
+                materials.add(StandardMaterial {
+                    base_color: Color::hsl(hue, 0.35, (0.42 * light).clamp(0.12, 0.78)),
+                    perceptual_roughness: 0.9,
+                    ..default()
+                })
+            })
+            .collect(),
     };
     commands.insert_resource(assets);
 
@@ -990,7 +1333,9 @@ fn spawn_visual(
                 m = p
                     .spawn((
                         Mesh3d(assets.lod_capsule.clone()),
-                        MeshMaterial3d(assets.m_lod.clone()),
+                        MeshMaterial3d(
+                            assets.m_lod[e.id as usize % assets.m_lod.len()].clone(),
+                        ),
                         Transform::from_xyz(0.0, 30.0, 0.0).with_rotation(rot),
                     ))
                     .id();
@@ -1390,7 +1735,14 @@ fn send_input(
     mut cooldowns: ResMut<Cooldowns>,
     mut last_dir: Local<(i8, i8)>,
     mut last_yaw: Local<f32>,
+    colliders: Res<PropColliders>,
+    q_me: Query<&Transform, With<PlayerTag>>,
 ) {
+    // Ground-plane position of the local player, for prop collision tests.
+    let me_pos = q_me
+        .get_single()
+        .map(|t| Vec2::new(t.translation.x, t.translation.z))
+        .unwrap_or(Vec2::ZERO);
     // While chat is active, game keys are disabled.
     if session.chat_active {
         // Still send zero movement if we were moving.
@@ -1427,12 +1779,14 @@ fn send_input(
         let fwd = Vec2::new(-orbit.yaw.sin(), -orbit.yaw.cos());
         let right = Vec2::new(-fwd.y, fwd.x);
         let dir = fwd * f as f32 + right * s as f32;
+        let dir = deflect_around_props(dir, &me_pos, &colliders);
         tx.send(ClientMsg::Move { dx: dir.x, dy: dir.y });
     }
+    // Space is JUMP only. It used to also fire Attack and burn the ability
+    // cooldown on the same press, which is what made jumping feel glitchy —
+    // every hop swung your weapon. Attack now lives on left-click.
     if keys.just_pressed(KeyCode::Space) {
-        tx.send(ClientMsg::Attack);
-        cooldowns.trigger(0, now);
-        jump.start.get_or_insert(now); // visual hop (ignored mid-air)
+        jump.start.get_or_insert(now); // ignored while already mid-air
     }
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
@@ -1465,6 +1819,9 @@ fn send_input(
 /// Marker for builder UI root and rotating preview rig (C13).
 #[derive(Component)]
 struct BuilderUi;
+/// Ability-icon slot in the builder (0/1 = the class's two abilities).
+#[derive(Component)]
+struct BuilderAbilityIcon(u8);
 #[derive(Component)]
 struct BuilderPreview {
     look: [u32; 3],
@@ -1484,6 +1841,7 @@ fn builder_screen(
     asset_server: Res<AssetServer>,
     ui_root: Query<Entity, With<BuilderUi>>,
     mut ui_text: Query<&mut Text, With<BuilderUi>>,
+    mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode)>,
     mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
 ) {
     let apple_id = session.apple_id.clone();
@@ -1605,6 +1963,38 @@ fn builder_screen(
             },
             BuilderUi,
         ));
+        // Ability-icon strip (Blender-rendered): the chosen class's two
+        // abilities, refreshed when F1–F4 changes the class.
+        commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(8.0),
+                    top: Val::Percent(58.0),
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(10.0),
+                    ..default()
+                },
+                BuilderUi,
+            ))
+            .with_children(|row| {
+                for slot in 0u8..2 {
+                    row.spawn((
+                        ImageNode::default(),
+                        Node { width: Val::Px(64.0), height: Val::Px(64.0), ..default() },
+                        BuilderAbilityIcon(slot),
+                    ));
+                }
+            });
+    }
+    // Keep the icon strip in sync with the selected class.
+    let [a0, a1] = class_abilities(b.class);
+    for (icon, mut img) in ui_icons.iter_mut() {
+        let name = if icon.0 == 0 { a0 } else { a1 };
+        let handle = asset_server.load(format!("sprites/icons/{name}.png"));
+        if img.image != handle {
+            img.image = handle;
+        }
     }
 
     // ── Rotating preview rig ─────────────────────────────────────────────
@@ -1684,6 +2074,13 @@ fn dev_console(
         return;
     }
     let line = session.dev_input.take().unwrap_or_default();
+    if !dispatch_dev_line(&line, &tx) && !line.trim().is_empty() {
+        push_chat(&mut session, format!("[dev] bad command: {line}"));
+    }
+}
+
+/// Parse one dev-console line and send it. Returns false on a bad command.
+fn dispatch_dev_line(line: &str, tx: &NetTx) -> bool {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let cmd = match parts.as_slice() {
         ["tp", x, y] => x.parse().ok().zip(y.parse().ok()).map(|(x, y)| DevCmd::Teleport { x, y }),
@@ -1704,19 +2101,50 @@ fn dev_console(
                 "flood" => Some(Act::Flood),
                 _ => None,
             };
-            if let Some(act) = act {
-                tx.send(ClientMsg::Travel { act });
+            match act {
+                Some(act) => {
+                    tx.send(ClientMsg::Travel { act });
+                    return true;
+                }
+                None => return false,
             }
-            None
         }
         _ => None,
     };
     match cmd {
-        Some(c) => tx.send(ClientMsg::Dev { cmd: c }),
-        None if !line.trim().is_empty() && !line.starts_with("travel") => {
-            push_chat(&mut session, format!("[dev] bad command: {line}"));
+        Some(c) => {
+            tx.send(ClientMsg::Dev { cmd: c });
+            true
         }
-        None => {}
+        None => false,
+    }
+}
+
+/// Dev autopilot: `ANTEDILUVIA_AUTOCMD="god;time 0.35;travel flood;tp 1 2"`
+/// runs one console command every 3 s — reliable scripted verification
+/// without synthetic keyboard events.
+#[derive(Resource)]
+struct AutoCmd {
+    cmds: std::collections::VecDeque<String>,
+    next_at: f32,
+}
+
+fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>) {
+    let Some(mut ac) = ac else { return };
+    let now = time.elapsed_secs();
+    if now < ac.next_at {
+        return;
+    }
+    if let Some(line) = ac.cmds.pop_front() {
+        info!("[autocmd] {line}");
+        // A leading '/' means "type this into chat"; anything else is a dev
+        // console line. Lets a scripted run drive party/bank/mail/trade too.
+        if line.starts_with('/') {
+            dispatch_chat_line(&line, &tx);
+        } else {
+            dispatch_dev_line(&line, &tx);
+        }
+        ac.next_at = now + 3.0;
     }
 }
 
@@ -1735,6 +2163,57 @@ fn chat_input(
             // Send the message if non-empty, then close chat.
             let text = session.chat_input.trim().to_string();
             if !text.is_empty() {
+                dispatch_chat_line(&text, &tx);
+            }
+            session.chat_input.clear();
+            session.chat_active = false;
+        } else {
+            session.chat_active = true;
+        }
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) && session.chat_active {
+        session.chat_input.clear();
+        session.chat_active = false;
+        return;
+    }
+    if !session.chat_active {
+        // Drain so they don't pile up.
+        kb_events.clear();
+        return;
+    }
+    // Backspace.
+    if keys.just_pressed(KeyCode::Backspace) {
+        session.chat_input.pop();
+    }
+    // Character input via KeyboardInput logical_key.
+    for ev in kb_events.read() {
+        if !ev.state.is_pressed() {
+            continue;
+        }
+        if let bevy::input::keyboard::Key::Character(ref s) = ev.logical_key {
+            for ch in s.chars() {
+                if !ch.is_control() {
+                    session.chat_input.push(ch);
+                }
+            }
+        } else if ev.logical_key == bevy::input::keyboard::Key::Space {
+            session.chat_input.push(' ');
+        }
+    }
+}
+
+/// Parse one chat line and emit the matching `ClientMsg`. Split out of
+/// `chat_input` so the scripted driver (`ANTEDILUVIA_AUTOCMD`) can exercise
+/// every slash command without synthesising keystrokes — GUI keystroke
+/// injection is unsafe here, it lands in whatever window happens to be focused.
+pub fn dispatch_chat_line(text: &str, tx: &NetTx) {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    {
+        {
                 // Slash commands (P1): party management from the chat box.
                 if let Some(name) = text.strip_prefix("/party ") {
                     tx.send(ClientMsg::PartyInvite { player: name.trim().to_string() });
@@ -1780,44 +2259,50 @@ fn chat_input(
                     tx.send(ClientMsg::MailCheck);
                 } else if text == "/sethome" {
                     tx.send(ClientMsg::SetHome);
+                // ── Guild ────────────────────────────────────────────────
+                // These existed in the protocol but had no chat binding, so
+                // no player could reach guilds, the auction house, duels,
+                // lineage choice or the PvP opt-in at all.
+                } else if let Some(n) = text.strip_prefix("/guild ") {
+                    tx.send(ClientMsg::GuildCreate { name: n.trim().to_string() });
+                } else if let Some(p2) = text.strip_prefix("/ginvite ") {
+                    tx.send(ClientMsg::GuildInvite { player: p2.trim().to_string() });
+                } else if text == "/gaccept" {
+                    tx.send(ClientMsg::GuildAccept);
+                } else if text == "/gleave" {
+                    tx.send(ClientMsg::GuildLeave);
+                } else if let Some(m) = text.strip_prefix("/g ") {
+                    tx.send(ClientMsg::GuildChat { text: m.trim().to_string() });
+                // ── Auction house ────────────────────────────────────────
+                } else if text == "/ah" {
+                    tx.send(ClientMsg::AuctionBrowse);
+                } else if let Some(rest) = text.strip_prefix("/ahsell ") {
+                    // /ahsell <item> <price>
+                    let mut parts = rest.trim().rsplitn(2, ' ');
+                    if let (Some(Ok(price)), Some(item)) =
+                        (parts.next().map(|p| p.trim().parse::<u32>()), parts.next())
+                    {
+                        tx.send(ClientMsg::AuctionList {
+                            item: item.trim().to_string(),
+                            price,
+                        });
+                    }
+                } else if let Some(id) = text.strip_prefix("/ahbuy ") {
+                    if let Ok(id) = id.trim().parse::<i64>() {
+                        tx.send(ClientMsg::AuctionBuy { id });
+                    }
+                // ── PvP opt-in, duels, lineage ───────────────────────────
+                } else if text == "/pvp" {
+                    tx.send(ClientMsg::TogglePvp);
+                } else if let Some(p2) = text.strip_prefix("/duel ") {
+                    tx.send(ClientMsg::Duel { player: p2.trim().to_string() });
+                } else if text == "/duelaccept" {
+                    tx.send(ClientMsg::DuelAccept);
+                } else if let Some(f) = text.strip_prefix("/lineage ") {
+                    tx.send(ClientMsg::ChooseFaction { faction: f.trim().to_string() });
                 } else {
                     tx.send(ClientMsg::Chat { text });
                 }
-            }
-            session.chat_input.clear();
-            session.chat_active = false;
-        } else {
-            session.chat_active = true;
-        }
-        return;
-    }
-    if keys.just_pressed(KeyCode::Escape) && session.chat_active {
-        session.chat_input.clear();
-        session.chat_active = false;
-        return;
-    }
-    if !session.chat_active {
-        // Drain so they don't pile up.
-        kb_events.clear();
-        return;
-    }
-    // Backspace.
-    if keys.just_pressed(KeyCode::Backspace) {
-        session.chat_input.pop();
-    }
-    // Character input via KeyboardInput logical_key.
-    for ev in kb_events.read() {
-        if !ev.state.is_pressed() {
-            continue;
-        }
-        if let bevy::input::keyboard::Key::Character(ref s) = ev.logical_key {
-            for ch in s.chars() {
-                if !ch.is_control() {
-                    session.chat_input.push(ch);
-                }
-            }
-        } else if ev.logical_key == bevy::input::keyboard::Key::Space {
-            session.chat_input.push(' ');
         }
     }
 }
@@ -1832,8 +2317,14 @@ fn orbit_camera(
     mut cam: Query<&mut Transform, (With<MainCamera>, Without<PlayerTag>)>,
     player: Query<&Transform, With<PlayerTag>>,
 ) {
-    // Right-button (or two-finger click-hold) drag orbits both axes.
-    if buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle) {
+    // Press-and-drag with ANY button orbits both axes — WoW-style. Left is
+    // included because on a trackpad a plain press-drag is the natural gesture
+    // and right-drag is awkward; a left press that doesn't travel far is
+    // treated as a click (attack) by `mouse_click_attack` instead.
+    if buttons.pressed(MouseButton::Left)
+        || buttons.pressed(MouseButton::Right)
+        || buttons.pressed(MouseButton::Middle)
+    {
         for m in motion.read() {
             orbit.yaw -= m.delta.x * 0.005;
             orbit.pitch = (orbit.pitch + m.delta.y * 0.004).clamp(0.08, 1.35);
@@ -1971,6 +2462,48 @@ fn trigger_attack_anim(
     let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { return };
     trans.play(&mut player, rig.attack, Duration::from_millis(40));
     mv.attack_until = time.elapsed_secs() + 0.7;
+}
+
+/// How far the cursor has travelled since the left button went down. Under
+/// this many pixels on release counts as a click (attack); more than this and
+/// the gesture was a camera drag, so no attack fires.
+#[derive(Resource, Default)]
+struct LeftDrag {
+    travel: f32,
+}
+const CLICK_SLOP: f32 = 6.0;
+
+/// Left-click attacks; left-press-and-drag rotates the camera (handled in
+/// `orbit_camera`). Splitting them this way is what WoW does, and it frees
+/// Space to be a real jump.
+fn mouse_click_attack(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut motion: EventReader<MouseMotion>,
+    mut drag: ResMut<LeftDrag>,
+    mut cooldowns: ResMut<Cooldowns>,
+    time: Res<Time>,
+    session: Res<Session>,
+    tx: Res<NetTx>,
+) {
+    // The character builder and chat own the input while they're up.
+    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active {
+        motion.clear();
+        return;
+    }
+    if buttons.just_pressed(MouseButton::Left) {
+        drag.travel = 0.0;
+    }
+    if buttons.pressed(MouseButton::Left) {
+        for m in motion.read() {
+            drag.travel += m.delta.length();
+        }
+    } else {
+        motion.clear();
+    }
+    if buttons.just_released(MouseButton::Left) && drag.travel < CLICK_SLOP {
+        tx.send(ClientMsg::Attack);
+        cooldowns.trigger(0, time.elapsed_secs());
+    }
 }
 
 /// Apply the local player's visual jump arc to their model child (v0.5.0).
@@ -2136,5 +2669,63 @@ fn face_billboards(orbit: Res<Orbit>, mut plates: Query<&mut Transform, With<Bil
     let want = Quat::from_rotation_y(orbit.yaw);
     for mut t in plates.iter_mut() {
         t.rotation = want;
+    }
+}
+
+#[cfg(test)]
+mod collision_tests {
+    use super::*;
+
+    fn wall_at(x: f32, z: f32, r: f32) -> PropColliders {
+        PropColliders { items: vec![(Vec2::new(x, z), r)] }
+    }
+
+    /// Open ground must not be altered — no invisible walls.
+    #[test]
+    fn clear_path_is_unchanged() {
+        let c = wall_at(1000.0, 1000.0, 40.0);
+        let dir = Vec2::new(0.0, -1.0);
+        assert_eq!(deflect_around_props(dir, &Vec2::ZERO, &c), dir);
+    }
+
+    /// Walking straight into a prop stops you rather than passing through.
+    #[test]
+    fn head_on_into_prop_is_blocked() {
+        // Prop dead ahead: player starts OUTSIDE its disc (25 > 12) but the
+        // probe point one body-radius forward lands inside it (11 < 12).
+        let c = wall_at(0.0, -25.0, 12.0);
+        let out = deflect_around_props(Vec2::new(0.0, -1.0), &Vec2::ZERO, &c);
+        assert_eq!(out, Vec2::ZERO, "must not walk into a solid prop");
+    }
+
+    /// A glancing approach slides along the obstacle instead of sticking.
+    #[test]
+    fn glancing_approach_slides() {
+        // Small prop just ahead; the player starts clear of its disc.
+        let c = wall_at(0.0, -20.0, 8.0);
+        let out = deflect_around_props(Vec2::new(0.45, -1.0).normalize(), &Vec2::ZERO, &c);
+        assert_ne!(out, Vec2::ZERO, "a glancing hit should slide, not stop dead");
+        assert!(out.x > 0.0, "slide must keep the sideways component");
+    }
+
+    /// A player already overlapping a prop must always be able to get out —
+    /// otherwise a prop spawning on top of you is a permanent soft-lock.
+    #[test]
+    fn overlapping_player_can_always_escape() {
+        let c = wall_at(0.0, 0.0, 50.0); // player at the centre, deep inside
+        // Pushing further in is redirected outward, never zeroed.
+        let out = deflect_around_props(Vec2::new(0.0, -1.0), &Vec2::new(0.0, 10.0), &c);
+        assert_ne!(out, Vec2::ZERO, "must never trap the player inside a prop");
+        assert!(out.y > 0.0, "should be pushed away from the prop centre");
+        // Heading outward is passed through untouched.
+        let away = Vec2::new(0.0, 1.0);
+        assert_eq!(deflect_around_props(away, &Vec2::new(0.0, 10.0), &c), away);
+    }
+
+    /// Standing still stays still.
+    #[test]
+    fn zero_input_stays_zero() {
+        let c = wall_at(0.0, 0.0, 50.0);
+        assert_eq!(deflect_around_props(Vec2::ZERO, &Vec2::ZERO, &c), Vec2::ZERO);
     }
 }

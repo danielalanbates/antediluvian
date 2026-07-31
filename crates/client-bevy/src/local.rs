@@ -47,7 +47,7 @@ pub fn start_local(
             };
             let sheet = new_character_with(&name, class, faction, appearance);
             let mut act = sheet.act;
-            let me: EntityId = world.spawn_player(1, sheet.clone());
+            let mut me: EntityId = world.spawn_player(1, sheet.clone());
 
             let send = |m: ServerMsg| { let _ = tx_server.send(m); };
             send(ServerMsg::Welcome { entity_id: me, character: sheet, is_dev: true });
@@ -64,7 +64,7 @@ pub fn start_local(
                 // Drain all pending client messages.
                 let mut dirty = false; // stats changed → push a fresh sheet
                 while let Ok(msg) = rx_client.try_recv() {
-                    if apply(&mut world, &mut act, me, msg, &send) {
+                    if apply(&mut world, &mut act, &mut me, msg, &send) {
                         dirty = true;
                     }
                 }
@@ -129,10 +129,11 @@ pub fn start_local(
 fn apply(
     world: &mut World,
     act: &mut antediluvia_protocol::Act,
-    me: EntityId,
+    me_ref: &mut EntityId,
     msg: ClientMsg,
     send: &impl Fn(ServerMsg),
 ) -> bool {
+    let me = *me_ref;
     let a = *act;
     let notice = |t: String| send(ServerMsg::Notice { text: t });
     match msg {
@@ -172,6 +173,7 @@ fn apply(
                     s.x = 0.0; s.y = 0.0;
                     let new_ent = world.spawn_player(1, s.clone());
                     *act = dest;
+                    *me_ref = new_ent; // dev cmds/actions must track the new entity
                     // Same entity-id convention as the server: re-Welcome.
                     send(ServerMsg::Welcome { entity_id: new_ent, character: s, is_dev: true });
                     notice(format!("You travel to {}.", dest.as_str()));

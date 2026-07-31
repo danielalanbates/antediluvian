@@ -15,3 +15,4 @@ credited anyway). Only the GLB/GLTF files actually used ship in `assets/`.
 | Kenney Interface Sounds | Kenney | kenney.nl/assets/interface-sounds | UI click, level-up chime (`assets/audio/sfx/`) |
 | Kenney RPG Audio | Kenney | kenney.nl/assets/rpg-audio | melee swings (`assets/audio/sfx/attack_*.ogg`) |
 | Synthesized ambient beds | (generated in-repo) | `scripts/gen_ambient.py` | per-act ambient loops (`assets/audio/ambient/`) — CC0 by construction |
+kenney,CC0,https://kenney.nl (nature/fantasy-town/castle/graveyard/survival/pirate kits, 2026-07-25)

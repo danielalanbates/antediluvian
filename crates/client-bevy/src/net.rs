@@ -28,8 +28,17 @@ impl NetTx {
 /// Inbound channel from the server. Stored as a non-send resource.
 pub struct NetRx(pub UnboundedReceiver<ServerMsg>);
 
+/// rustls 0.23 refuses to pick a crypto backend on its own once cargo feature
+/// unification enables more than one provider — it panics inside
+/// `connect_async` on the first `wss://` dial. Pin `ring` before connecting.
+/// Idempotent: a repeat call returns Err, which we ignore.
+fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Spawn the network thread and return the Bevy-side channel ends.
 pub fn start_network(url: String, apple_id: String, character_name: Option<String>) -> (NetTx, NetRx) {
+    install_crypto_provider();
     let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
     let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
 

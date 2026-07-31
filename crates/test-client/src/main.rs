@@ -11,8 +11,17 @@ use antediluvia_protocol::{ClientMsg, EntityKind, ServerMsg, PROTOCOL_VERSION};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
+/// rustls 0.23 will not pick a crypto backend on its own when more than one
+/// provider feature ends up enabled by cargo feature unification — it panics
+/// inside `connect_async` on the first `wss://` dial. Pin `ring` up front.
+/// Idempotent: a second call just returns Err, which we ignore.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_crypto_provider();
     let mut args = std::env::args().skip(1);
     let name = args.next().unwrap_or_else(|| "Adam".into());
     let url = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());

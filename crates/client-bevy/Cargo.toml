@@ -20,6 +20,7 @@ antediluvia-sim = { path = "../sim" }
 glam = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
+rustls = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

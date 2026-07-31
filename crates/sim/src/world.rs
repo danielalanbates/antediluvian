@@ -792,11 +792,15 @@ impl World {
                     // capital force-flags you; leaving starts a linger timer.
                     {
                         let my_faction = e.sheet.as_ref().and_then(|s| s.faction.clone());
-                        let inside = my_faction.as_deref().and_then(|f| {
-                            pvp_zones(act).find(|z| {
-                                z.faction != f
-                                    && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius
-                            })
+                        // Lineage is optional until level 10, so `faction` is
+                        // commonly None. Treating None as "no enemy capital
+                        // exists" made undecided players permanently immune —
+                        // they could walk any capital untouchable, which
+                        // defeats the point of default-flagged zones. An
+                        // unaligned outsider is hostile in EVERY capital.
+                        let inside = pvp_zones(act).find(|z| {
+                            my_faction.as_deref() != Some(z.faction.as_str())
+                                && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius
                         });
                         match (inside, e.forced_pvp) {
                             (Some(z), false) => {
@@ -1135,9 +1139,15 @@ impl World {
                     continue;
                 }
                 let Some(s) = e.sheet.as_mut() else { continue };
-                let Some(f) = s.faction.clone() else { continue };
-                let inside = pvp_zones(act)
-                    .any(|z| z.faction != f && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius);
+                // Mirror the force-flag rule: an unaligned player is hostile in
+                // EVERY capital. Requiring a faction here would leave undecided
+                // players flagged and killable on enemy ground but unable to
+                // earn anything for holding it.
+                let my_faction = s.faction.clone();
+                let inside = pvp_zones(act).any(|z| {
+                    my_faction.as_deref() != Some(z.faction.as_str())
+                        && Vec2::new(z.x, z.y).distance(e.pos) <= z.radius
+                });
                 if inside {
                     let h = s.reputation.entry("honor".to_string()).or_insert(0);
                     *h += 10;
@@ -2167,10 +2177,13 @@ impl World {
 
     pub fn dev_teleport(&mut self, act: Act, id: EntityId, x: f32, y: f32) -> String {
         let b = antediluvia_protocol::WORLD_BOUNDS - 10.0;
-        if let Some(e) = self.entity_mut(act, id) {
-            e.pos = Vec2::new(x.clamp(-b, b), y.clamp(-b, b));
+        match self.entity_mut(act, id) {
+            Some(e) => {
+                e.pos = Vec2::new(x.clamp(-b, b), y.clamp(-b, b));
+                format!("[dev] teleported to ({x:.0},{y:.0})")
+            }
+            None => "[dev] teleport failed: entity not in act".into(),
         }
-        format!("[dev] teleported to ({x:.0},{y:.0})")
     }
 
     pub fn dev_give(&mut self, act: Act, id: EntityId, item: &str, n: u32) -> String {
@@ -3731,6 +3744,39 @@ mod tests {
             w.step();
         }
         assert!(!flagged(&w, pid), "flag drops after linger");
+    }
+
+    /// Lineage is optional until level 10, so most early characters have
+    /// `faction: None`. They must still flag inside a capital — otherwise an
+    /// undecided player roams every enemy city permanently immune.
+    #[test]
+    fn undecided_lineage_still_flags_in_any_capital() {
+        let mut w = World::new(74);
+        let pid = spawn_at(&mut w, 1, "Nomad", 0.0, 0.0);
+        {
+            let z = w.zones.get_mut(&Act::Eden).unwrap();
+            let s = z.entities.get_mut(&pid).unwrap().sheet.as_mut().unwrap();
+            s.faction = None; // never picked a lineage
+        }
+        let flagged = |w: &World, pid| {
+            let e = &w.zones[&Act::Eden].entities[&pid];
+            e.forced_pvp || e.forced_pvp_timer > 0.0
+        };
+        // Neutral ground: no flag.
+        w.step();
+        assert!(!flagged(&w, pid), "neutral ground must not flag");
+        // Both capitals are hostile to an unaligned outsider.
+        for (x, y, what) in [(-2400.0, -2400.0, "sethite"), (2400.0, 2400.0, "cainite")] {
+            w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos =
+                Vec2::new(x, y);
+            w.step();
+            assert!(flagged(&w, pid), "undecided player must flag in the {what} capital");
+            // Clear the flag before testing the next capital.
+            w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&pid).unwrap().pos = Vec2::ZERO;
+            for _ in 0..(TICK_HZ as usize * 21) {
+                w.step();
+            }
+        }
     }
 
     /// C15: players never collide — two players can stand on the same spot
