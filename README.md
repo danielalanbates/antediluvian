@@ -38,7 +38,29 @@ server owns the entire game world; clients send *intents* and receive
 - **Persistence**: characters (position, level, XP, HP/MP, inventory) are stored
   in SQLite on login, every ~10s, and on disconnect.
 
-## Run
+## Public alpha shard
+
+A hosted shard runs the world continuously, so you don't have to run a server to
+play with other people:
+
+```
+ws://159.54.191.177:8787
+```
+
+Point the macOS client at it (the bundled `.app` otherwise spawns its own local
+server):
+
+```sh
+echo 'ws://159.54.191.177:8787' > ~/Library/Application\ Support/Antediluvia/server_url
+# or, per-launch:  ANTEDILUVIA_SERVER=ws://159.54.191.177:8787 open -a Antediluvia
+```
+
+It's a 1-core / 1 GB Oracle Always Free box — sized for a handful of alpha
+players, not the 1,000-player load the server is benchmarked at. Characters
+persist across restarts. Plain `ws://` for now: browser clients need `wss://`,
+which is waiting on a DNS name and a TLS cert.
+
+## Run (locally)
 
 ```sh
 # terminal 1 — server
