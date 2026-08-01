@@ -167,13 +167,18 @@ dependencies = [
  "antediluvia-sim",
  "bevy",
  "futures-util",
+ "getrandom 0.3.4",
  "glam",
+ "js-sys",
  "noise",
  "rustls",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -925,8 +930,6 @@ dependencies = [
 [[package]]
 name = "bevy_pbr"
 version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4d54c840d4352dac51f2a27cf915ac99b2f93db008d8fb1be8d23b09d522acf"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2339,9 +2342,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]

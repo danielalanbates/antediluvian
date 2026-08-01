@@ -18,10 +18,40 @@ bevy = { version = "0.15", features = ["jpeg", "png"] }
 antediluvia-protocol = { path = "../protocol" }
 antediluvia-sim = { path = "../sim" }
 glam = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+noise = "0.9"
+
+# Native transport: a tokio runtime on its own thread owns the socket.
+# tokio's "full" feature set does not build for wasm32, so it is native-only —
+# the browser build gets its WebSocket from the host page instead (see below).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 rustls = { workspace = true }
 futures-util = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-noise = "0.9"
+
+# Browser transport: web-sys drives the browser's own WebSocket. tokio is still
+# used for its mpsc channels — the "sync" feature is runtime-agnostic and does
+# compile to wasm32 — so `NetTx`/`NetRx` keep the exact same types on both
+# targets and the rest of the client is untouched.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1", default-features = false, features = ["sync"] }
+# Pulled in transitively (rand -> bevy); on wasm it must be told to source
+# entropy from the browser. Paired with the cfg in .cargo/config.toml.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "BinaryType",
+    "CloseEvent",
+    "ErrorEvent",
+    "Event",
+    "Location",
+    "MessageEvent",
+    "Storage",
+    "UrlSearchParams",
+    "WebSocket",
+    "Window",
+] }

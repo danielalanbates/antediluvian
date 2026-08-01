@@ -18,9 +18,14 @@
 
 mod atmosphere;
 mod audio;
+mod creaturegen;
 mod dressing;
 mod equipment;
 mod grass;
+// Embedded single-player. Native-only: it owns an OS thread and paces itself
+// with `Instant`/`thread::sleep`, none of which exist in a browser. The wasm
+// build always talks to the hosted server.
+#[cfg(not(target_arch = "wasm32"))]
 mod local;
 
 /// Local player's visual jump arc (v0.5.0): height offset over time.
@@ -57,6 +62,92 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::f32::consts::FRAC_PI_2;
 use std::time::Duration;
 
+/// Where this client connects and who it logs in as, resolved before Bevy
+/// starts. Native takes it from argv; the browser takes it from the host page.
+struct LaunchConfig {
+    apple_id: String,
+    url: String,
+    character_name: Option<String>,
+}
+
+const DEFAULT_URL: &str = "ws://127.0.0.1:8787";
+
+/// Native: `antediluvia-client-bevy [name] [ws-url]`, either order-ish — an
+/// argument that looks like a URL is treated as one, otherwise as a character
+/// name.
+#[cfg(not(target_arch = "wasm32"))]
+fn launch_config() -> LaunchConfig {
+    let mut args = std::env::args().skip(1);
+    let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
+    let url_or_name = args.next().unwrap_or_else(|| DEFAULT_URL.into());
+    let (character_name, url) = if is_ws_url(&url_or_name) {
+        (None, url_or_name)
+    } else {
+        (Some(url_or_name), args.next().unwrap_or_else(|| DEFAULT_URL.into()))
+    };
+    LaunchConfig { apple_id, url, character_name }
+}
+
+/// Browser: there is no argv. The server comes from `window.ANTEDILUVIA_SERVER`
+/// if the host page set one, else a `?server=` query parameter, else the page's
+/// own origin with the `/ws` path — so a page served over https automatically
+/// dials `wss://`, which is the only scheme browsers permit from a secure page.
+#[cfg(target_arch = "wasm32")]
+fn launch_config() -> LaunchConfig {
+    use wasm_bindgen::JsValue;
+
+    let window = web_sys::window();
+    let query = |key: &str| -> Option<String> {
+        let search = window.as_ref()?.location().search().ok()?;
+        let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+        params.get(key).filter(|v| !v.is_empty())
+    };
+
+    // A global on the host page wins: it lets the page pick the shard without
+    // exposing it in a shareable, editable URL.
+    let global = window
+        .as_ref()
+        .and_then(|w| {
+            js_sys::Reflect::get(&JsValue::from(w.clone()), &JsValue::from_str("ANTEDILUVIA_SERVER")).ok()
+        })
+        .and_then(|v| v.as_string())
+        .filter(|v| !v.is_empty());
+
+    let url = global
+        .or_else(|| query("server").filter(|v| is_ws_url(v)))
+        .or_else(|| {
+            let loc = window.as_ref()?.location();
+            let host = loc.host().ok()?;
+            let scheme = if loc.protocol().ok()?.starts_with("https") { "wss" } else { "ws" };
+            Some(format!("{scheme}://{host}/ws"))
+        })
+        .unwrap_or_else(|| DEFAULT_URL.into());
+
+    let character_name = query("name");
+    // Without Sign in with Apple in the browser yet, identity is a per-browser
+    // random id kept in localStorage so a returning player keeps their save.
+    let apple_id = window
+        .as_ref()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|store| {
+            if let Ok(Some(id)) = store.get_item("antediluvia_id") {
+                if !id.is_empty() {
+                    return Some(id);
+                }
+            }
+            let id = format!("web_{:08x}", (js_sys::Math::random() * 4294967295.0) as u32);
+            store.set_item("antediluvia_id", &id).ok()?;
+            Some(id)
+        })
+        .unwrap_or_else(|| "web_guest".into());
+
+    LaunchConfig { apple_id, url, character_name }
+}
+
+fn is_ws_url(s: &str) -> bool {
+    s.starts_with("ws://") || s.starts_with("wss://")
+}
+
 fn main() {
     // Art-review mode: a minimal app that renders nothing but the procedural
     // prop grid. It deliberately shares none of the gameplay systems — those
@@ -85,29 +176,59 @@ fn main() {
         return;
     }
 
-    let mut args = std::env::args().skip(1);
-    let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
-    let url_or_name = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
-    let (character_name, url) = if url_or_name.starts_with("ws://") || url_or_name.starts_with("wss://") {
-        (None, url_or_name)
-    } else {
-        (Some(url_or_name), args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into()))
-    };
+    // Same art-review contract as the prop sheet above, for creature bodies.
+    if std::env::var("ANTEDILUVIA_BEASTSHEET").is_ok() {
+        App::new()
+            .add_plugins(DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Antediluvia — procedural beast sheet".into(),
+                    resolution: (1600.0, 900.0).into(),
+                    ..default()
+                }),
+                ..default()
+            }))
+            .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
+            .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
+            .add_systems(
+                Startup,
+                |mut c: Commands,
+                 mut m: ResMut<Assets<Mesh>>,
+                 mut mat: ResMut<Assets<StandardMaterial>>| {
+                    creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                },
+            )
+            .run();
+        return;
+    }
+
+    let LaunchConfig { apple_id, url, character_name } = launch_config();
 
     // Start the network thread before the app so login is already in flight.
     let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
     let apple_id_for_session = apple_id.clone();
-    let use_local = url == "local" || std::env::var("ANTEDILUVIA_LOCAL").is_ok();
-    let (tx, rx) = if use_local {
-        // Embedded single-player: run the World in-process (browser build path).
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let (tx, rx) = if url == "local" || std::env::var("ANTEDILUVIA_LOCAL").is_ok() {
+        // Embedded single-player: run the World in-process.
         // A default character is used unless one is created in the builder.
         local::start_local(display_name.clone(), None)
     } else {
         start_network(url, apple_id, character_name)
     };
+    // The browser has no in-process server to fall back to.
+    #[cfg(target_arch = "wasm32")]
+    let (tx, rx) = start_network(url, apple_id, character_name);
 
     // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
     // workspace-level assets/ dir, independent of cwd.
+    // In the browser this is a URL path relative to the hosting page, not a
+    // filesystem path — Bevy fetches assets over HTTP. Stated explicitly
+    // because the native branch below relies on `canonicalize`, which has no
+    // meaning in wasm and would only fall back here by accident.
+    #[cfg(target_arch = "wasm32")]
+    let assets_dir = "assets".to_string();
+
+    #[cfg(not(target_arch = "wasm32"))]
     let assets_dir = std::env::var("ANTEDILUVIA_ASSETS")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
@@ -118,12 +239,31 @@ fn main() {
     App::new()
         .add_plugins(
             DefaultPlugins
-                .set(AssetPlugin { file_path: assets_dir, ..default() })
+                .set(AssetPlugin {
+                    file_path: assets_dir,
+                    // Bevy probes for a sidecar "<asset>.meta" before every
+                    // load. Over HTTP that 404s, and a static host answers a
+                    // 404 with an HTML error page — which Bevy then tries to
+                    // parse as meta, failing every single asset load. We ship
+                    // no .meta files, so skip the probe entirely.
+                    meta_check: bevy::asset::AssetMetaCheck::Never,
+                    ..default()
+                })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Antediluvia".into(),
                         resolution: (1600.0, 900.0).into(),
                         resizable: true,
+                        // In the browser the canvas must follow the viewport,
+                        // otherwise the render target stays at the fixed
+                        // resolution above and the page just scales it — a
+                        // blurry image with mouse picking that misses.
+                        #[cfg(target_arch = "wasm32")]
+                        fit_canvas_to_parent: true,
+                        // Browsers reserve Ctrl/Cmd+W, F5 and friends; letting
+                        // the game swallow them traps or surprises the player.
+                        #[cfg(target_arch = "wasm32")]
+                        prevent_default_event_handling: false,
                         ..default()
                     }),
                     ..default()

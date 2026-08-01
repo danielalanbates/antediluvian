@@ -5,10 +5,34 @@ members = ["crates/protocol", "crates/sim", "crates/server", "crates/test-client
 # default `cargo build`/`cargo run` set. Build it explicitly when needed.
 default-members = ["crates/protocol", "crates/sim", "crates/server", "crates/test-client"]
 
+# bevy_pbr 0.15.3 declares the wrong minimum size for the visibility-ranges
+# binding, which makes every PBR pipeline fail validation on WebGL2 — the
+# browser build cannot draw a single frame without this. The vendored copy is
+# stock 0.15.3 plus that one fix; see the LOCAL FIX comment in
+# vendor/bevy_pbr/src/render/mesh_view_bindings.rs. Drop this when upstream
+# ships the fix.
+[patch.crates-io]
+bevy_pbr = { path = "vendor/bevy_pbr" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+
+# Browser builds only. A plain `--release` wasm lands around 53 MB, over
+# Cloudflare Pages' 25 MB per-file ceiling, because the default profile keeps
+# debug/name sections and does not cross-crate inline. Optimizing for size and
+# stripping symbols is what brings it under the limit. Kept separate from
+# `release` so native builds keep their faster compile and speed tuning.
+#     cargo build -p antediluvia-client-bevy \
+#       --target wasm32-unknown-unknown --profile wasm-release
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

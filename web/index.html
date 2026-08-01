@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Antediluvia</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0a0e14;
+        color: #e6edf3;
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      /* Bevy creates its own canvas, appends it to <body>, and with
+         fit_canvas_to_parent sizes it to the parent itself — so do not force
+         dimensions here, or the render target and the displayed box disagree
+         and mouse picking lands in the wrong place. */
+      canvas {
+        display: block;
+        outline: none;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        padding: 24px;
+        text-align: center;
+        background: #0a0e14;
+        z-index: 10;
+        transition: opacity 0.4s ease;
+      }
+      #boot.done { opacity: 0; pointer-events: none; }
+      h1 {
+        margin: 0;
+        font-size: clamp(28px, 6vw, 48px);
+        font-weight: 900;
+        letter-spacing: -0.03em;
+        color: #00d9ff;
+      }
+      #status { color: #8b98a5; min-height: 1.5em; }
+      #bar {
+        width: min(360px, 80vw);
+        height: 4px;
+        border-radius: 999px;
+        background: #1b2430;
+        overflow: hidden;
+      }
+      #bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: #00d9ff;
+        transition: width 0.3s ease;
+      }
+      #hint { color: #55606d; font-size: 13px; max-width: 34em; }
+      a { color: #00d9ff; }
+      .fail { color: #ff6b6b; }
+    </style>
+  </head>
+  <body>
+    <div id="boot">
+      <h1>Antediluvia</h1>
+      <div id="bar"><i></i></div>
+      <div id="status">Loading…</div>
+      <div id="hint">
+        First load pulls the whole game engine, so give it a moment — it is
+        cached afterwards. WASD to move, mouse to look, Enter to chat.
+      </div>
+    </div>
+
+    <script type="module">
+      // Replaced at build time with a hash of the compiled engine; the literal
+      // below is only what a hand-opened, unbuilt copy of this file would use.
+      const BUILD_STAMP = '__BUILD_STAMP__';
+
+      // The shard the client should dial. Left unset, the client derives
+      // wss://<this-host>/ws, which is what we want in production; it is
+      // declared here so a deploy can point at a different shard without a
+      // rebuild.
+      window.ANTEDILUVIA_SERVER = '';
+
+      const statusEl = document.getElementById('status');
+      const barEl = document.querySelector('#bar > i');
+      const bootEl = document.getElementById('boot');
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+      const setProgress = (frac) => {
+        barEl.style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`;
+      };
+
+      async function boot() {
+        setStatus('Downloading game engine…');
+
+        // Stream the wasm so the progress bar reflects reality on the slow
+        // first load, instead of sitting at zero for tens of seconds.
+        // BUILD_STAMP is rewritten by scripts/build_web.sh with a hash of the
+        // engine. It is what makes it safe for the host to cache pkg/ forever:
+        // a new build requests a URL the browser has never seen.
+        const res = await fetch(`./pkg/antediluvia_bg.wasm?v=${BUILD_STAMP}`);
+        if (!res.ok) throw new Error(`engine download failed (${res.status})`);
+
+        const total = Number(res.headers.get('Content-Length')) || 0;
+        let loaded = 0;
+        const chunks = [];
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          loaded += value.length;
+          // Without Content-Length (compressed responses often omit it) fall
+          // back to an asymptotic curve so the bar still moves.
+          setProgress(total ? loaded / total : 1 - Math.exp(-loaded / 2.5e7));
+        }
+        setProgress(1);
+        setStatus('Starting…');
+
+        const bytes = new Blob(chunks);
+        const init = (await import(`./pkg/antediluvia.js?v=${BUILD_STAMP}`)).default;
+
+        // Bevy runs its own loop from here and never returns control, so the
+        // splash has to be dismissed by watching for the canvas rather than by
+        // waiting on init().
+        const reveal = () => {
+          if (document.querySelector('canvas')) {
+            bootEl.classList.add('done');
+          } else {
+            requestAnimationFrame(reveal);
+          }
+        };
+        reveal();
+
+        try {
+          await init({ module_or_path: await bytes.arrayBuffer() });
+        } catch (err) {
+          // winit hands control to the browser event loop by throwing. It says
+          // so in the message, and it is the normal path — not a failure.
+          if (!/Using exceptions for control flow/.test(String(err?.message ?? err))) {
+            throw err;
+          }
+        }
+      }
+
+      boot().catch((err) => {
+        console.error(err);
+        setProgress(0);
+        statusEl.className = 'fail';
+        setStatus(String(err && err.message ? err.message : err));
+        document.getElementById('hint').innerHTML =
+          'The game needs WebGL2 and a recent browser. ' +
+          'If this keeps happening, <a href="/antediluvia">read the status page</a>.';
+      });
+    </script>
+  </body>
+</html>
