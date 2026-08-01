@@ -241,8 +241,10 @@ pub fn prop_family(seed: u64) -> u32 {
     (h01(seed ^ 0xB0B0_u64) * PROP_FAMILIES as f32) as u32 % PROP_FAMILIES
 }
 
-/// Human-readable family name — used by tests, the dev console and the
-/// contact-sheet exporter.
+/// Human-readable family name, used to label the contact sheet. Keep this in
+/// step with `prop_mesh_family`'s match arms — the index is what the
+/// `ANTEDILUVIA_PROPSHEET_FAMILY` env var takes, so a wrong name here sends
+/// you inspecting the wrong family.
 pub fn family_name(f: u32) -> &'static str {
     match f % PROP_FAMILIES {
         0 => "standing_stone",
@@ -667,6 +669,21 @@ pub fn spawn_contact_sheet(
         None => (0..PROP_FAMILIES).collect(),
     };
 
+    // The sheet has no in-world text, so print the legend: rows march along +Z,
+    // meaning row 0 is the FARTHEST from the camera in a screenshot. Without
+    // this you cannot tell which row regressed, only that one did.
+    info!(
+        "propsheet: {} families x {} variants, rows far->near: {}",
+        families.len(),
+        variants,
+        families
+            .iter()
+            .enumerate()
+            .map(|(row, &f)| format!("{row}={}", family_name(f)))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+
     for (row, &f) in families.iter().enumerate() {
         for v in 0..variants {
             let seed = (f as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (v as u64 + 1).wrapping_mul(0x2545_F491);
@@ -740,6 +757,21 @@ mod tests {
                 assert!(seen[i] != seen[j], "props {i} and {j} are identical");
             }
         }
+    }
+
+    /// Bumping PROP_FAMILIES without extending `family_name`'s match silently
+    /// yields "unknown", which mislabels the contact-sheet legend and sends
+    /// you inspecting the wrong family index. Names must also stay distinct.
+    #[test]
+    fn every_family_has_a_distinct_name() {
+        let names: Vec<&str> = (0..PROP_FAMILIES).map(family_name).collect();
+        for (f, n) in names.iter().enumerate() {
+            assert_ne!(*n, "unknown", "family {f} has no name");
+        }
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "duplicate family names: {names:?}");
     }
 
     /// Every family must build, be finite, and stay within a sane world size —
