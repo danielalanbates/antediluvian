@@ -565,6 +565,11 @@ const CHAR_SCALE: f32 = 30.0;
 /// Boss ("alpha") enemies render half again as large.
 const ALPHA_SCALE: f32 = 45.0;
 
+/// How long a corpse stays after death. Long enough for Death_A (~1.2 s) to
+/// finish before the entity is reclaimed; `attack_until` is held past this so
+/// movement never steals the rig back mid-fall.
+const CORPSE_LINGER_SECS: f32 = 1.5;
+
 /// Which glTF file + animation indices + scale a snapshot entity renders with.
 ///
 /// Animation indices are stable per pack (verified against the shipped GLBs):
@@ -1719,6 +1724,17 @@ fn receive_from_server(
                 push_chat(&mut session, format!("{} auction lots", listings.len()));
             }
             ServerMsg::Event { kind, src, dst, .. } => {
+                // Claim the corpse-linger NOW, not in `apply_combat_events`.
+                // The server drops a slain mob from the very next snapshot, and
+                // the despawn sweep at the end of this system runs before any
+                // other system reads this event — so with `dying_until` still
+                // at zero the entity was deleted first and the death animation
+                // never played at all.
+                if kind == EventKind::Die {
+                    if let Some(m) = map.0.get_mut(&src) {
+                        m.dying_until = time.elapsed_secs() + CORPSE_LINGER_SECS;
+                    }
+                }
                 combat.send(CombatEvt { kind, src, dst });
             }
             ServerMsg::Pong => {}
@@ -2756,7 +2772,9 @@ fn apply_combat_events(
         }
         let Some(m) = map.0.get_mut(&ev.src) else { continue };
         if ev.kind == EventKind::Die {
-            m.dying_until = now + 1.5;
+            // Normally already set when the message arrived; this covers an
+            // entity that only became known to us on the same tick it died.
+            m.dying_until = m.dying_until.max(now + CORPSE_LINGER_SECS);
         }
         let Ok(mut mv) = movers.get_mut(m.root) else { continue };
         let Ok(rig) = rigs.get(mv.rig) else { continue };

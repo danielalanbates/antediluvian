@@ -12,6 +12,12 @@ use bevy::prelude::*;
 
 use antediluvia_protocol::Act;
 
+/// Master gain applied to everything the game plays — combat one-shots, UI
+/// clicks and the ambient beds alike. The per-sound values below stay as the
+/// authored mix (their balance relative to each other is what they encode);
+/// this scales the whole thing to how loud the game should actually be.
+pub const MASTER_VOLUME: f32 = 0.10;
+
 #[derive(Resource)]
 pub struct AudioAssets {
     pub attack: Vec<Handle<AudioSource>>,
@@ -80,7 +86,8 @@ pub fn one_shot(
     // Deterministic wobble in 0.9..1.1 (no rand dep) and simple falloff.
     let pitch = 0.9 + 0.2 * ((n.wrapping_mul(2654435761) >> 16) & 0xFF) as f32 / 255.0;
     let vol = (1.0 / (1.0 + dist / 400.0)).clamp(0.05, 1.0)
-        * if pool == Pool::Click { 0.5 } else { 0.9 };
+        * if pool == Pool::Click { 0.5 } else { 0.9 }
+        * MASTER_VOLUME;
     commands.spawn((
         AudioPlayer::new(h),
         PlaybackSettings::DESPAWN
@@ -114,7 +121,7 @@ pub fn ambient_system(
     // Night = sun below the horizon (same 0..1 clock the atmosphere uses).
     let tod = session.time_of_day;
     let night = !(0.25..0.75).contains(&tod);
-    let full = if night { 0.28 } else { 0.4 };
+    let full = (if night { 0.28 } else { 0.4 }) * MASTER_VOLUME;
 
     let mut have_current = false;
     for (ent, mut bed, sink) in &mut beds {
