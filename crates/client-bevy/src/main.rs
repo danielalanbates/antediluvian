@@ -177,6 +177,69 @@ fn main() {
     }
 
     // Same art-review contract as the prop sheet above, for creature bodies.
+    // With ANTEDILUVIA_BEASTSHEET_OUT=<png> it renders off-screen (no window,
+    // no focus change) and writes the image — safe to run while someone is
+    // using the machine.
+    if let Ok(out) = std::env::var("ANTEDILUVIA_BEASTSHEET_OUT") {
+        use bevy::render::camera::RenderTarget;
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+        use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+        use bevy::winit::WinitPlugin;
+        App::new()
+            .add_plugins(
+                DefaultPlugins
+                    .set(WindowPlugin {
+                        primary_window: None,
+                        exit_condition: bevy::window::ExitCondition::DontExit,
+                        close_when_requested: false,
+                    })
+                    .disable::<WinitPlugin>(),
+            )
+            .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_millis(16)))
+            .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
+            .add_systems(
+                Startup,
+                |mut c: Commands,
+                 mut m: ResMut<Assets<Mesh>>,
+                 mut mat: ResMut<Assets<StandardMaterial>>,
+                 mut images: ResMut<Assets<Image>>| {
+                    creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                    let size = Extent3d { width: 1600, height: 900, ..default() };
+                    let mut img = Image::new_fill(
+                        size,
+                        TextureDimension::D2,
+                        &[115, 158, 209, 255],
+                        TextureFormat::Rgba8UnormSrgb,
+                        bevy::render::render_asset::RenderAssetUsages::default(),
+                    );
+                    img.texture_descriptor.usage =
+                        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT;
+                    c.insert_resource(OffscreenTarget(images.add(img)));
+                },
+            )
+            .add_systems(
+                Update,
+                move |mut c: Commands,
+                      target: Res<OffscreenTarget>,
+                      mut cams: Query<&mut Camera, With<Camera3d>>,
+                      mut frame: Local<u32>,
+                      mut exit: EventWriter<AppExit>| {
+                    *frame += 1;
+                    for mut cam in &mut cams {
+                        cam.target = RenderTarget::Image(target.0.clone());
+                        cam.clear_color = ClearColorConfig::Custom(Color::srgb(0.45, 0.62, 0.82));
+                    }
+                    if *frame == 90 {
+                        c.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(out.clone()));
+                    }
+                    if *frame == 180 {
+                        exit.send(AppExit::Success);
+                    }
+                },
+            )
+            .run();
+        return;
+    }
     if std::env::var("ANTEDILUVIA_BEASTSHEET").is_ok() {
         App::new()
             .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -287,6 +350,7 @@ fn main() {
         .insert_resource(Orbit::default())
         .insert_resource(Cooldowns::default())
         .insert_resource(TintCache::default())
+        .insert_resource(creaturegen::ProcBodyCache::default())
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
@@ -334,6 +398,8 @@ fn main() {
                 apply_loadouts,
                 apply_tints,
                 attach_species_parts,
+                creaturegen::build_proc_bodies,
+                creaturegen::animate_proc_gait,
                 attach_hair_style,
                 smooth_motion,
             ),
@@ -556,6 +622,13 @@ struct RenderAssets {
 /// AoI churn re-evaluates naturally as entities come and go.
 const RIG_LOD_RADIUS: f32 = 350.0;
 
+#[derive(Resource)]
+struct OffscreenTarget(Handle<Image>);
+
+/// World scale of a generated creature body (authored ~1 unit tall). Matches
+/// the on-screen size of the ~24x Quaternius animal rigs.
+const PROC_BODY_SCALE: f32 = 34.0;
+
 /// Height of a character's health bar above the ground.
 const BAR_HEIGHT: f32 = 64.0;
 const BAR_WIDTH: f32 = 34.0;
@@ -614,19 +687,18 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
                 "fox" => ("models/wildlife/Fox.gltf", PRED, 20.0),
                 "deer" => ("models/wildlife/Deer.gltf", HERB, 24.0),
                 // Bestiary species (C03): crude keyword → model mapping.
-                t if ["wolf", "hound", "jackal"].iter().any(|k| t.contains(k)) =>
-                    ("models/wildlife/Wolf.gltf", PRED, 22.0),
-                t if ["cat", "smilodon", "panther", "lion"].iter().any(|k| t.contains(k)) =>
-                    ("models/wildlife/Fox.gltf", PRED, 24.0),
-                t if ["bear", "mammoth", "mastodon", "behemoth", "bison", "auroch", "bull"].iter().any(|k| t.contains(k)) =>
-                    ("models/wildlife/Bull.gltf", HERB, 30.0),
-                t if ["goat", "ibex", "alpaca", "camel"].iter().any(|k| t.contains(k)) =>
-                    ("models/wildlife/Alpaca.gltf", HERB, 22.0),
-                _ => ("models/wildlife/Deer.gltf", HERB, 24.0),
+                t => beast_rig(t).unwrap_or(("models/wildlife/Deer.gltf", HERB, 24.0)),
             }
         }
         _ => {
             let tag = e.tag.as_deref().unwrap_or("");
+            // Hostile bestiary beasts used to fall through to the skeleton
+            // minions below — a "Cave Bear Brute" rendered as a skeleton.
+            if is_bestiary(tag) && creaturegen::named_plan(tag).is_none() {
+                if let Some(r) = beast_rig(tag) {
+                    return r;
+                }
+            }
             if tag.ends_with("_alpha") {
                 return (
                     "models/enemies/Skeleton_Warrior.glb",
@@ -643,6 +715,53 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
             };
             (file, [SKEL[0], SKEL[1], attack, SKEL[2]], CHAR_SCALE)
         }
+    }
+}
+
+/// Quaternius animal rig for a species keyword, or `None` when no downloaded
+/// animal fits (those get a generated body instead, see `proc_body_plan`).
+/// Herbivore/predator clip orderings: idle, run, attack, death.
+fn beast_rig(tag: &str) -> Option<(&'static str, [usize; 4], f32)> {
+    const HERB: [usize; 4] = [6, 4, 0, 2];
+    const PRED: [usize; 4] = [5, 3, 0, 1];
+    let has = |ks: &[&str]| ks.iter().any(|k| tag.contains(k));
+    Some(if has(&["wolf", "hound", "jackal", "dog"]) {
+        ("models/wildlife/Wolf.gltf", PRED, 22.0)
+    } else if has(&["cat", "smilodon", "panther", "lion", "fox"]) {
+        ("models/wildlife/Fox.gltf", PRED, 24.0)
+    } else if has(&["bear", "mammoth", "mastodon", "behemoth", "bison", "auroch", "bull", "boar"]) {
+        ("models/wildlife/Bull.gltf", HERB, 30.0)
+    } else if has(&["goat", "ibex", "alpaca", "camel"]) {
+        ("models/wildlife/Alpaca.gltf", HERB, 22.0)
+    } else if has(&["deer", "elk", "stag", "antelope"]) {
+        ("models/wildlife/Deer.gltf", HERB, 24.0)
+    } else {
+        return None;
+    })
+}
+
+/// Whether a tag is a bestiary species. Not `mobs::mob_by_tag`: the sim hides
+/// `_alpha` species from that lookup (they take boss stats), but they are
+/// still that animal and must render as one.
+fn is_bestiary(tag: &str) -> bool {
+    static TAGS: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
+    TAGS.get_or_init(|| antediluvia_sim::mobs::all_mobs().iter().map(|m| m.tag.as_str()).collect())
+        .contains(tag)
+}
+
+/// Generated-body plan for a bestiary beast that has no fitting animal rig.
+fn proc_body_plan(e: &EntityState) -> Option<u32> {
+    if !matches!(e.kind, EntityKind::Enemy | EntityKind::Wildlife) {
+        return None;
+    }
+    let tag = e.tag.as_deref()?;
+    if !is_bestiary(tag) {
+        return None;
+    }
+    match creaturegen::named_plan(tag) {
+        Some(p) => Some(p),
+        None if beast_rig(tag).is_none() => Some(creaturegen::plan_for_species(tag)),
+        None => None,
     }
 }
 
@@ -1484,6 +1603,43 @@ fn spawn_visual(
                         Transform::from_xyz(0.0, 30.0, 0.0).with_rotation(rot),
                     ))
                     .id();
+            });
+            model = Some(m);
+        }
+        EntityKind::Enemy | EntityKind::Wildlife if proc_body_plan(e).is_some() => {
+            let tag = e.tag.as_deref().unwrap_or("");
+            let plan = proc_body_plan(e).unwrap_or(0);
+            let (_, _, k) = species_variation(tag);
+            // Generated bodies are authored ~1 unit tall facing -Z; the
+            // animal rigs they stand beside are ~24x and face +X after the
+            // model node's yaw, hence the opposite quarter-turn.
+            let base = Transform::from_scale(Vec3::splat(PROC_BODY_SCALE * k))
+                .with_rotation(Quat::from_rotation_y(-FRAC_PI_2));
+            let mut m = Entity::PLACEHOLDER;
+            let mut body = Entity::PLACEHOLDER;
+            commands.entity(root).with_children(|p| {
+                m = p
+                    .spawn((Transform::default().with_rotation(rot), Visibility::default()))
+                    .with_children(|yaw| {
+                        body = yaw
+                            .spawn((
+                                base,
+                                creaturegen::ProcBodyPending {
+                                    seed: creaturegen::species_seed(tag),
+                                    plan,
+                                },
+                                creaturegen::ProcGait::new(root, base, pos),
+                            ))
+                            .id();
+                    })
+                    .id();
+            });
+            commands.entity(root).insert(Mover {
+                rig: body,
+                last: pos,
+                moving: false,
+                attack_until: 0.0,
+                was_attacking: false,
             });
             model = Some(m);
         }
@@ -2777,6 +2933,11 @@ fn apply_combat_events(
             m.dying_until = m.dying_until.max(now + CORPSE_LINGER_SECS);
         }
         let Ok(mut mv) = movers.get_mut(m.root) else { continue };
+        if ev.kind == EventKind::Die {
+            // Generated bodies have no death clip; their gait system topples
+            // them. Harmless on rigged entities, which never query it.
+            commands.entity(mv.rig).insert(creaturegen::ProcDied);
+        }
         let Ok(rig) = rigs.get(mv.rig) else { continue };
         let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { continue };
         match ev.kind {
@@ -2833,6 +2994,47 @@ fn face_billboards(orbit: Res<Orbit>, mut plates: Query<&mut Transform, With<Bil
 #[cfg(test)]
 mod collision_tests {
     use super::*;
+
+    fn beast(kind: &str, tag: &str) -> EntityState {
+        serde_json::from_value(serde_json::json!({
+            "id": 1, "kind": kind, "x": 0.0, "y": 0.0, "rot": 0.0,
+            "health": 10, "max_health": 10, "tag": tag
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn bestiary_beasts_get_beast_bodies_not_skeletons() {
+        // Hostile beast with a fitting animal rig: the rig, not a skeleton.
+        let bear = beast("enemy", "rabid_cave_bear_scavenger");
+        assert_eq!(proc_body_plan(&bear), None);
+        assert_eq!(rig_for(&bear).0, "models/wildlife/Bull.gltf");
+        // Named species with no rig: a generated body of the named plan.
+        assert_eq!(proc_body_plan(&beast("enemy", "corrupted_megatherium")), Some(7));
+        // The species name outranks the "behemoth" rig keyword.
+        assert_eq!(proc_body_plan(&beast("wildlife", "gilded_pterosaur_behemoth_rider_mount")), Some(9));
+        assert!(matches!(proc_body_plan(&beast("wildlife", "mutated_deep_crawler_watcher_pet")), Some(4 | 5)));
+        // Non-bestiary enemies keep the skeleton roster.
+        let raider = beast("enemy", "raider");
+        assert_eq!(proc_body_plan(&raider), None);
+        assert!(rig_for(&raider).0.contains("Skeleton"));
+        // Players and NPCs never get generated bodies.
+        assert_eq!(proc_body_plan(&beast("npc", "corrupted_megatherium")), None);
+    }
+
+    #[test]
+    fn no_bestiary_species_renders_as_a_skeleton() {
+        for m in antediluvia_sim::mobs::all_mobs() {
+            let e = beast("enemy", &m.tag);
+            if proc_body_plan(&e).is_none() {
+                assert!(
+                    !rig_for(&e).0.contains("Skeleton"),
+                    "{} still renders as a skeleton",
+                    m.tag
+                );
+            }
+        }
+    }
 
     fn wall_at(x: f32, z: f32, r: f32) -> PropColliders {
         PropColliders { items: vec![(Vec2::new(x, z), r)] }

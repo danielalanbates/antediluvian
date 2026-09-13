@@ -24,7 +24,7 @@ use bevy::render::render_asset::RenderAssetUsages;
 /// the set effectively unbounded; bump this as new families are added.
 pub const PROP_FAMILIES: u32 = 20;
 
-fn h01(seed: u64) -> f32 {
+pub(crate) fn h01(seed: u64) -> f32 {
     let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x ^= x >> 33;
     x = x.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
@@ -43,7 +43,7 @@ fn sidx(side: f32) -> u64 {
 }
 
 /// Seeded value in `lo..hi`.
-fn rng(seed: u64, salt: u64, lo: f32, hi: f32) -> f32 {
+pub(crate) fn rng(seed: u64, salt: u64, lo: f32, hi: f32) -> f32 {
     lo + h01(seed ^ salt.wrapping_mul(0x9E37_79B9)) * (hi - lo)
 }
 
@@ -51,7 +51,7 @@ fn rng(seed: u64, salt: u64, lo: f32, hi: f32) -> f32 {
 // Palettes
 // ---------------------------------------------------------------------------
 
-type Rgba = [f32; 4];
+pub(crate) type Rgba = [f32; 4];
 
 fn stone(seed: u64) -> Rgba {
     let g = rng(seed, 11, 0.34, 0.62);
@@ -107,10 +107,10 @@ fn foliage(seed: u64) -> Rgba {
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-struct Builder {
-    pos: Vec<[f32; 3]>,
-    col: Vec<Rgba>,
-    idx: Vec<u32>,
+pub(crate) struct Builder {
+    pub(crate) pos: Vec<[f32; 3]>,
+    pub(crate) col: Vec<Rgba>,
+    pub(crate) idx: Vec<u32>,
 }
 
 impl Builder {
@@ -118,7 +118,7 @@ impl Builder {
     /// `lean` shifts the top cap sideways (broken columns, leaning posts),
     /// `warp` jitters each side's radius so no two calls match exactly.
     #[allow(clippy::too_many_arguments)]
-    fn prism(
+    pub(crate) fn prism(
         &mut self,
         centre: Vec3,
         sides: u32,
@@ -169,7 +169,7 @@ impl Builder {
 
     /// Axis-aligned-ish box with yaw — a 4-gon prism, offset so flats face out.
     #[allow(clippy::too_many_arguments)]
-    fn boxy(&mut self, centre: Vec3, w: f32, h: f32, d: f32, yaw: f32, seed: u64, c: Rgba) {
+    pub(crate) fn boxy(&mut self, centre: Vec3, w: f32, h: f32, d: f32, yaw: f32, seed: u64, c: Rgba) {
         // A 4-side prism inscribes the box; scale radius by sqrt(2)/2 and turn
         // it 45° so the faces (not the corners) point along w/d.
         let r = (w.max(d)) * 0.7071;
@@ -190,7 +190,7 @@ impl Builder {
     }
 
     /// Low-poly ellipsoid for boulders, skulls, mushroom caps, foliage blobs.
-    fn blob(&mut self, centre: Vec3, r: Vec3, rings: u32, segs: u32, warp: f32, seed: u64, c: Rgba) {
+    pub(crate) fn blob(&mut self, centre: Vec3, r: Vec3, rings: u32, segs: u32, warp: f32, seed: u64, c: Rgba) {
         let base = self.pos.len() as u32;
         for ri in 0..=rings {
             let phi = std::f32::consts::PI * ri as f32 / rings as f32;
@@ -219,7 +219,7 @@ impl Builder {
         }
     }
 
-    fn finish(self) -> Mesh {
+    pub(crate) fn finish(self) -> Mesh {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.col);
