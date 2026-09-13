@@ -327,13 +327,13 @@ mod tests {
     #[test]
     fn keyword_matching_covers_real_names() {
         // "camp" scans before "fortified", so a fortified camp is a camp.
-        assert!(std::ptr::eq(set_for("The Fortified Nomad Camp", Act::Eden).as_ptr(), set_camp().as_ptr()));
-        assert!(std::ptr::eq(set_for("The Smoldering Caravan Wreckage", Act::Eden).as_ptr(), set_wreckage().as_ptr()));
-        assert!(std::ptr::eq(set_for("The Corrupted First-Generation Altar", Act::Nephilim).as_ptr(), set_hero_altar().as_ptr()));
-        assert!(std::ptr::eq(set_for("The Fortified Ziggurat Tier", Act::Enoch).as_ptr(), set_hero_ziggurat().as_ptr()));
-        assert!(std::ptr::eq(set_for("The Abandoned Cherubim Burn-Scar", Act::Eden).as_ptr(), set_hero_boundary().as_ptr()));
-        assert!(std::ptr::eq(set_for("The Pristine Sacred Grove", Act::Eden).as_ptr(), set_altar().as_ptr()));
+        assert_eq!(set_for("The Fortified Nomad Camp", Act::Eden), set_camp());
+        assert_eq!(set_for("The Smoldering Caravan Wreckage", Act::Eden), set_wreckage());
+        assert_eq!(set_for("The Corrupted First-Generation Altar", Act::Nephilim), set_hero_altar());
+        assert_eq!(set_for("The Fortified Ziggurat Tier", Act::Enoch), set_hero_ziggurat());
+        assert_eq!(set_for("The Abandoned Cherubim Burn-Scar", Act::Eden), set_hero_boundary());
+        assert_eq!(set_for("The Pristine Sacred Grove", Act::Eden), set_altar());
         // No keyword → act fallback.
-        assert!(std::ptr::eq(set_for("The Silent Nowhere", Act::Flood).as_ptr(), set_shipwreck().as_ptr()));
+        assert_eq!(set_for("The Silent Nowhere", Act::Flood), set_shipwreck());
     }
 }

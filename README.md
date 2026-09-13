@@ -91,3 +91,9 @@ tests (`cargo test -p antediluvia-server`).
 Deliberately deferred: real password auth (name-only today), binary/delta
 snapshot compression (AoI bounds bandwidth for now), NPC quests, client sprite
 polish (draws colored circles). See `PROJECT.md` for the full breakdown.
+
+## Licence & contact
+
+Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
+Licensed under PolyForm Noncommercial 1.0.0 with a 10% commercial-revenue
+rider — see `LICENSE`. Commercial use: help@batesai.org · https://batesai.org
