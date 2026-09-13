@@ -20,6 +20,7 @@ mod atmosphere;
 mod audio;
 mod creaturegen;
 mod dressing;
+mod shots;
 mod face;
 mod equipment;
 mod grass;
@@ -157,7 +158,7 @@ fn main() {
         App::new()
             .add_plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Antediluvia — procedural prop sheet".into(),
+                    title: "Antediluvia - procedural prop sheet".into(),
                     resolution: (1600.0, 900.0).into(),
                     ..default()
                 }),
@@ -256,7 +257,7 @@ fn main() {
         App::new()
             .add_plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Antediluvia — procedural beast sheet".into(),
+                    title: "Antediluvia - procedural beast sheet".into(),
                     resolution: (1600.0, 900.0).into(),
                     ..default()
                 }),
@@ -311,9 +312,8 @@ fn main() {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "assets".into());
 
-    App::new()
-        .add_plugins(
-            DefaultPlugins
+    #[allow(unused_mut)]
+    let mut plugins = DefaultPlugins
                 .set(AssetPlugin {
                     file_path: assets_dir,
                     // Bevy probes for a sidecar "<asset>.meta" before every
@@ -342,8 +342,21 @@ fn main() {
                         ..default()
                     }),
                     ..default()
-                }),
-        )
+                });
+    #[cfg(not(target_arch = "wasm32"))]
+    if shots::enabled() {
+        plugins = plugins
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: bevy::window::ExitCondition::DontExit,
+                close_when_requested: false,
+            })
+            .disable::<bevy::winit::WinitPlugin>();
+    }
+
+    App::new()
+        .add_plugins(plugins)
+        .add_plugins(shots::ShotsPlugin)
         .add_plugins(perf::PerfPlugin)
         // Sky.
         .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
@@ -364,7 +377,7 @@ fn main() {
         .insert_resource(TintCache::default())
         .insert_resource(creaturegen::ProcBodyCache::default())
         .insert_resource(face::RestyledFaces::default())
-        .add_systems(Update, face::restyle_faces)
+        .add_systems(Update, (face::restyle_faces, update_name_labels))
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
@@ -756,7 +769,16 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
             (file, [ADV[0], ADV[1], attack, ADV[2]], CHAR_SCALE)
         }
         EntityKind::Npc => {
-            ("models/characters/Rogue_Hooded.glb", [ADV[0], ADV[1], 1, ADV[2]], CHAR_SCALE)
+            // Role-cast bodies: every NPC used to be the same hooded rogue,
+            // so the inn read as a row of clones.
+            let (file, attack) = match e.name.as_deref().unwrap_or("") {
+                "Elder" | "Seer" => ("models/characters/Mage.glb", 62),
+                "Innkeeper" | "Jabal" => ("models/characters/Barbarian.glb", 8),
+                "Quartermaster" | "Sentinel" => ("models/characters/Knight.glb", 62),
+                "Wanderer" => ("models/characters/Rogue.glb", 1),
+                _ => ("models/characters/Rogue_Hooded.glb", 1),
+            };
+            (file, [ADV[0], ADV[1], attack, ADV[2]], CHAR_SCALE)
         }
         EntityKind::Wildlife => {
             // Quaternius Animated Animals. Two clip orderings:
@@ -1604,17 +1626,21 @@ fn setup(
     commands.insert_resource(ground.clone());
     spawn_act_scenery(&mut commands, &mut meshes, ground, &mut materials, &asset_server, Act::Eden);
 
-    // Inn ring at the zone entry (the rest / auction-house area). Pulses.
+    // Inn boundary at the zone entry (rest / bank / mail area). Pulses. A thin
+    // band at INN_RADIUS, not a filled disc — the disc painted the whole
+    // hamlet flat yellow and hid the terrain.
     let ring_mat = materials.add(StandardMaterial {
         base_color: Color::srgba(0.95, 0.82, 0.30, 0.35),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
+        double_sided: true,
+        cull_mode: None,
         ..default()
     });
     commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(220.0, 0.6))),
+        Mesh3d(meshes.add(Annulus::new(212.0, 220.0).mesh().resolution(96))),
         MeshMaterial3d(ring_mat.clone()),
-        Transform::from_xyz(0.0, 0.4, 0.0),
+        Transform::from_xyz(0.0, 1.5, 0.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         InnRing(ring_mat),
     ));
 
@@ -1849,10 +1875,64 @@ fn spawn_visual(
         bar_fill = Some(fill);
     }
 
+    // Floating gold name over NPCs, WoW-style, so the Elder, Innkeeper and
+    // Quartermaster can be told apart at a glance.
+    if e.kind == EntityKind::Npc {
+        if let Some(name) = e.name.as_deref() {
+            commands.spawn((
+                Text::new(name),
+                TextFont { font_size: 15.0, ..default() },
+                TextColor(Color::srgb(1.0, 0.84, 0.25)),
+                Node { position_type: PositionType::Absolute, ..default() },
+                Visibility::Hidden,
+                NameLabel { root, chars: name.chars().count() as f32 },
+            ));
+        }
+    }
+
     if is_me {
         commands.entity(root).insert(PlayerTag);
     }
     Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0 }
+}
+
+/// Screen-space name label pinned above a world entity.
+#[derive(Component)]
+struct NameLabel {
+    root: Entity,
+    chars: f32,
+}
+
+/// Height above the root where names float (above the rig's head).
+const NAME_HEIGHT: f32 = 80.0;
+/// Past this camera distance names are hidden, as in WoW.
+const NAME_RANGE: f32 = 900.0;
+
+/// Pin each label over its entity; despawn labels whose entity is gone.
+fn update_name_labels(
+    mut commands: Commands,
+    mut labels: Query<(Entity, &NameLabel, &mut Node, &mut Visibility)>,
+    roots: Query<&GlobalTransform>,
+    cam: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+) {
+    let Ok((camera, cam_xf)) = cam.get_single() else { return };
+    for (ent, label, mut node, mut vis) in &mut labels {
+        let Ok(root) = roots.get(label.root) else {
+            commands.entity(ent).despawn_recursive();
+            continue;
+        };
+        let world = root.translation() + Vec3::Y * NAME_HEIGHT;
+        let near = world.distance(cam_xf.translation()) < NAME_RANGE;
+        match camera.world_to_viewport(cam_xf, world) {
+            Ok(p) if near => {
+                // ~7.5 px per glyph at 15 px: centre the text on the head.
+                node.left = Val::Px(p.x - label.chars * 3.8);
+                node.top = Val::Px(p.y - 10.0);
+                *vis = Visibility::Inherited;
+            }
+            _ => *vis = Visibility::Hidden,
+        }
+    }
 }
 
 /// "chasm_fiend" → "Chasm Fiend" for the target frame.
@@ -2323,14 +2403,15 @@ fn builder_screen(
     // ── Screen text ──────────────────────────────────────────────────────
     let body_names = ["Knight", "Barbarian", "Rogue", "Mage"];
     let text = format!(
-        "CREATE YOUR CHARACTER
-
-         Name: {}_
-         Class [F1-F4]: {}   ({})
-         Lineage [F5]: {}
-         Body [Left/Right]: {}   Skin [Up/Down]: {}   Hair [F6]: {}
-
-         {}
+        "CREATE YOUR CHARACTER\n\n\
+         Name            {}_\n\
+         Class   F1-F4   {}  ({})\n\
+         Lineage F5      {}\n\n\
+         Body    Left/Right  {}  ({}/4)\n\
+         Skin    Up/Down     tone {} of {}\n\
+         Hair    F6          style {} of {}\n\n\
+         {} distinct looks before gear\n\n\
+         {}\n\
          Press ENTER to walk the earth",
         b.name,
         b.class.as_str(),
@@ -2342,8 +2423,12 @@ fn builder_screen(
         },
         b.faction.as_deref().unwrap_or("undecided (choose at level 10)"),
         body_names[b.appearance[0] as usize % 4],
-        b.appearance[1],
-        b.appearance[2],
+        b.appearance[0] % 4 + 1,
+        b.appearance[1] % SKIN_CHOICES + 1,
+        SKIN_CHOICES,
+        b.appearance[2] % HAIR_CHOICES + 1,
+        HAIR_CHOICES,
+        4 * SKIN_CHOICES * HAIR_CHOICES,
         match (&b.error, b.submitted) {
             (Some(e), _) => format!("!! {e}"),
             (None, true) => "Creating...".into(),
@@ -2355,14 +2440,21 @@ fn builder_screen(
     } else if ui_root.is_empty() {
         commands.spawn((
             Text::new(text),
-            TextFont { font_size: 22.0, ..default() },
+            TextFont { font_size: 20.0, ..default() },
             TextColor(Color::srgb(0.95, 0.9, 0.75)),
+            // Framed parchment-dark panel: bare text over the 3D world was
+            // unreadable against grass and props.
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Percent(8.0),
-                top: Val::Percent(18.0),
+                left: Val::Percent(6.0),
+                top: Val::Percent(12.0),
+                padding: UiRect::all(Val::Px(26.0)),
+                border: UiRect::all(Val::Px(2.0)),
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.06, 0.05, 0.04, 0.86)),
+            BorderColor(Color::srgb(0.72, 0.58, 0.30)),
+            BorderRadius::all(Val::Px(8.0)),
             BuilderUi,
         ));
         // Ability-icon strip (Blender-rendered): the chosen class's two
@@ -2371,8 +2463,8 @@ fn builder_screen(
             .spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Percent(8.0),
-                    top: Val::Percent(58.0),
+                    left: Val::Percent(6.0),
+                    top: Val::Percent(74.0),
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(10.0),
                     ..default()
@@ -2448,7 +2540,7 @@ fn dev_console(
         };
         kb_events.clear();
         let msg = if session.dev_input.is_some() {
-            "[dev] console open — tp X Y | give ITEM N | level N | heal | spawn TAG | kill | god | time T | travel ACT"
+            "[dev] console open - tp X Y | give ITEM N | level N | heal | spawn TAG | kill | god | time T | travel ACT"
         } else {
             "[dev] console closed"
         };
