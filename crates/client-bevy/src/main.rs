@@ -20,6 +20,7 @@ mod atmosphere;
 mod audio;
 mod creaturegen;
 mod dressing;
+mod face;
 mod equipment;
 mod grass;
 // Embedded single-player. Native-only: it owns an OS thread and paces itself
@@ -180,7 +181,10 @@ fn main() {
     // With ANTEDILUVIA_BEASTSHEET_OUT=<png> it renders off-screen (no window,
     // no focus change) and writes the image — safe to run while someone is
     // using the machine.
-    if let Ok(out) = std::env::var("ANTEDILUVIA_BEASTSHEET_OUT") {
+    let offscreen = std::env::var("ANTEDILUVIA_BEASTSHEET_OUT")
+        .map(|o| (o, false))
+        .or_else(|_| std::env::var("ANTEDILUVIA_CHARSHEET_OUT").map(|o| (o, true)));
+    if let Ok((out, chars)) = offscreen {
         use bevy::render::camera::RenderTarget;
         use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
         use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -197,13 +201,21 @@ fn main() {
             )
             .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_millis(16)))
             .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
+            .insert_resource(TintCache::default())
+            .insert_resource(face::RestyledFaces::default())
+            .add_systems(Update, (apply_tints, attach_hair_style, face::restyle_faces))
             .add_systems(
                 Startup,
-                |mut c: Commands,
+                move |mut c: Commands,
                  mut m: ResMut<Assets<Mesh>>,
                  mut mat: ResMut<Assets<StandardMaterial>>,
-                 mut images: ResMut<Assets<Image>>| {
-                    creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                 mut images: ResMut<Assets<Image>>,
+                 server: Res<AssetServer>| {
+                    if chars {
+                        spawn_character_sheet(&mut c, &mut m, &mut mat, &server);
+                    } else {
+                        creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                    }
                     let size = Extent3d { width: 1600, height: 900, ..default() };
                     let mut img = Image::new_fill(
                         size,
@@ -229,10 +241,10 @@ fn main() {
                         cam.target = RenderTarget::Image(target.0.clone());
                         cam.clear_color = ClearColorConfig::Custom(Color::srgb(0.45, 0.62, 0.82));
                     }
-                    if *frame == 90 {
+                    if *frame == 240 {
                         c.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(out.clone()));
                     }
-                    if *frame == 180 {
+                    if *frame == 330 {
                         exit.send(AppExit::Success);
                     }
                 },
@@ -351,6 +363,8 @@ fn main() {
         .insert_resource(Cooldowns::default())
         .insert_resource(TintCache::default())
         .insert_resource(creaturegen::ProcBodyCache::default())
+        .insert_resource(face::RestyledFaces::default())
+        .add_systems(Update, face::restyle_faces)
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
@@ -624,6 +638,77 @@ const RIG_LOD_RADIUS: f32 = 350.0;
 
 #[derive(Resource)]
 struct OffscreenTarget(Handle<Image>);
+
+/// Art-review sheet of the player bodies' faces, for `ANTEDILUVIA_CHARSHEET_OUT`.
+/// Uses the same rig files, tint and hairstyle grafts as in-game players.
+fn spawn_character_sheet(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    server: &AssetServer,
+) {
+    const BODIES: [&str; 5] = [
+        "models/characters/Knight.glb",
+        "models/characters/Barbarian.glb",
+        "models/characters/Rogue.glb",
+        "models/characters/Mage.glb",
+        "models/characters/Rogue_Hooded.glb",
+    ];
+    let envf = |k: &str, d: f32| -> f32 {
+        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    };
+    let spacing = envf("ANTEDILUVIA_CHARSHEET_SPACING", 1.6);
+    // Mob review: bull-rig species with their in-game tints, plus a skeleton.
+    if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_ok() {
+        let mobs: [(&str, &str); 4] = [
+            ("models/wildlife/Bull.gltf", "rabid_cave_bear_scavenger"),
+            ("models/wildlife/Bull.gltf", "corrupted_mammoth_goliath"),
+            ("models/wildlife/Bull.gltf", "aurochs_calf"),
+            ("models/enemies/Skeleton_Minion.glb", "raider"),
+        ];
+        for (i, (f, tag)) in mobs.iter().enumerate() {
+            let (hue, light, _) = species_variation(tag);
+            let k = if f.contains("Skeleton") { 1.0 } else { 0.8 };
+            commands.spawn((
+                SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(*f))),
+                Transform::from_xyz((i as f32 - 1.5) * spacing, 0.0, 0.0).with_scale(Vec3::splat(k)),
+                TintRig { hue, light, hair_hue: None },
+            ));
+        }
+    }
+    for (i, f) in BODIES.iter().enumerate() {
+        if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_ok() {
+            break;
+        }
+        let mut ec = commands.spawn((
+            SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(*f))),
+            Transform::from_xyz((i as f32 - 2.0) * spacing, 0.0, 0.0),
+        ));
+        if std::env::var("ANTEDILUVIA_CHARSHEET_RAW").is_err() {
+            let (hue, light) = skin_hue(i as u32 * 3);
+            ec.insert((
+                TintRig { hue, light, hair_hue: Some(hair_hue(i as u32)) },
+                HairStyle { style: i as u32, hue: hair_hue(i as u32) },
+            ));
+        }
+    }
+    let ground = meshes.add(Plane3d::default().mesh().size(40.0, 40.0));
+    let gmat = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.33, 0.26), ..default() });
+    commands.spawn((Mesh3d(ground), MeshMaterial3d(gmat)));
+    commands.spawn((
+        DirectionalLight { illuminance: 14_000.0, shadows_enabled: true, ..default() },
+        Transform::from_xyz(4.0, 8.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    let (h, d, look) = (
+        envf("ANTEDILUVIA_CHARSHEET_CAMH", 2.0),
+        envf("ANTEDILUVIA_CHARSHEET_CAMD", 5.5),
+        envf("ANTEDILUVIA_CHARSHEET_LOOKY", 1.5),
+    );
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, h, d).looking_at(Vec3::new(0.0, look, 0.0), Vec3::Y),
+    ));
+}
 
 /// World scale of a generated creature body (authored ~1 unit tall). Matches
 /// the on-screen size of the ~24x Quaternius animal rigs.
@@ -1656,7 +1741,12 @@ fn spawn_visual(
                     scale *= k;
                     // Species-unique geometry: body-plan stretch + grafted
                     // adornment meshes (silhouette, not just tint).
-                    stretch = species_stretch(tag);
+                    // Skeleton rigs are thin humanoids already; the per-axis
+                    // body-plan stretch made them look spindly. Keep it for
+                    // the animal rigs, uniform for the skeletons.
+                    if !file.contains("Skeleton") {
+                        stretch = species_stretch(tag);
+                    }
                     parts = Some(SpeciesParts { seed: species_parts_seed(tag) });
                     Some(TintRig { hue, light, hair_hue: None })
                 }

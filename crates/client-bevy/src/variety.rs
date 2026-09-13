@@ -251,9 +251,33 @@ pub fn apply_tints(
             } else {
                 let Some(src) = materials.get(mat.0.id()) else { continue };
                 let mut m = src.clone();
-                let hsla: Hsla = Hsla::from(m.base_color);
+                let mut hsla: Hsla = Hsla::from(m.base_color);
+                // Untextured animal rigs (the Quaternius Bull above all) are
+                // authored in pure grey, and a hue shift does nothing to a
+                // colour with no saturation — every bear, mammoth and aurochs
+                // rendered the same flat grey. Those body colours become a
+                // natural earth tone, and the species hue only nudges it
+                // (±18°) — a full-wheel shift made pink and green bears.
+                // Eye whites/blacks sit outside the band and stay put.
+                let earth = tint.hair_hue.is_none()
+                    && hsla.saturation < 0.25
+                    && hsla.lightness > 0.12
+                    && hsla.lightness < 0.9;
+                // Mobs: a small species nudge on every material (hooves and
+                // horns too), never a full-wheel shift. Players keep the
+                // full skin/hair palette.
+                let nudge = (hue.rem_euclid(60.0) - 30.0) * 0.6;
+                let new_hue = if earth {
+                    hsla.saturation = 0.30;
+                    hsla.lightness = hsla.lightness.max(0.24);
+                    (32.0 + nudge).rem_euclid(360.0)
+                } else if tint.hair_hue.is_none() {
+                    (hsla.hue + nudge).rem_euclid(360.0)
+                } else {
+                    (hsla.hue + hue).rem_euclid(360.0)
+                };
                 m.base_color = Color::from(Hsla {
-                    hue: (hsla.hue + hue).rem_euclid(360.0),
+                    hue: new_hue,
                     lightness: (hsla.lightness * tint.light).clamp(0.02, 0.98),
                     ..hsla
                 });
