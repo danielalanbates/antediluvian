@@ -281,7 +281,7 @@ fn spawn_stat_bar(
             ));
             // Centred text (in-flow so it can never escape the bar).
             bar_bg.spawn((
-                Text::new(format!("{label} — / —")),
+                Text::new(format!("{label} - / -")),
                 TextFont { font_size: FONT_LABEL, ..default() },
                 TextColor(TEXT_COLOR),
                 TextLayout::new_with_no_wrap(),
@@ -329,7 +329,7 @@ fn spawn_action_bar(commands: &mut Commands) {
 
             // Class-selection prompt (shown when no class chosen).
             anchor.spawn((
-                Text::new("F1 warrior · F2 hunter · F3 priest · F4 mage"),
+                Text::new("F1 warrior | F2 hunter | F3 priest | F4 mage"),
                 TextFont { font_size: FONT_LABEL, ..default() },
                 TextColor(GOLD_ACCENT),
                 Node {
@@ -386,8 +386,8 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
             // Ability name (centre).
             let default_name = match slot {
                 0 => "Atk/Jump",
-                1 => "—",
-                _ => "—",
+                1 => "-",
+                _ => "-",
             };
             s.spawn((
                 Text::new(default_name),
@@ -545,7 +545,7 @@ pub fn update_ui_frames(
                         9000..=20999 => "honored",
                         _ => "revered",
                     };
-                    format!("Lv {} · {f} ({rank})", cs.level)
+                    format!("Lv {} | {f} ({rank})", cs.level)
                 }
                 None => format!("Lv {}", cs.level),
             };
@@ -593,9 +593,9 @@ pub fn update_ui_frames(
     for (label, mut text) in q_action_labels.iter_mut() {
         let name = match label.0 {
             0 => "Attack",
-            1 => abilities.map_or("—", |a| a[0]),
-            2 => abilities.map_or("—", |a| a[1]),
-            _ => "—",
+            1 => abilities.map_or("-", |a| a[0]),
+            2 => abilities.map_or("-", |a| a[1]),
+            _ => "-",
         };
         // Prettify: replace underscores, title-case first letter.
         let pretty = prettify_ability(name);
@@ -664,7 +664,7 @@ pub fn update_ui_panels(
                 let mut lines = String::new();
                 // Party roster (P1) rides at the top of the tracker panel.
                 if !session.party.is_empty() {
-                    lines.push_str(&format!("⚑ Party: {}\n", session.party.join(", ")));
+                    lines.push_str(&format!("! Party: {}\n", session.party.join(", ")));
                 }
                 for (name, progress) in &cs.quests {
                     if !lines.is_empty() {
@@ -673,7 +673,7 @@ pub fn update_ui_panels(
                     let pretty = prettify_ability(name.strip_prefix("fa_").unwrap_or(name));
                     // Theme-pillar quests (C08) carry their pillar as a prefix.
                     let theme = if name.starts_with("fa_") { "[Forbidden Arts] " } else { "" };
-                    lines.push_str(&format!("• {theme}{} — {}/target", pretty, progress));
+                    lines.push_str(&format!("* {theme}{} - {}/target", pretty, progress));
                 }
                 **t = lines;
             }
@@ -701,7 +701,7 @@ pub fn update_ui_panels(
     }
     if session.chat_active {
         if let Ok(mut t) = q_chat_input_text.get_single_mut() {
-            let display = format!("Say: {}▌", session.chat_input);
+            let display = format!("Say: {}_", session.chat_input);
             if **t != display {
                 **t = display;
             }

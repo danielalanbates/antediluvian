@@ -290,7 +290,7 @@ fn handle_client_msg(
                         }
                         (None, Some(n)) => (n, None, None, [0, 0, 0]),
                         (None, None) => {
-                            return reject(conns, "no character on this account — run the character builder");
+                            return reject(conns, "no character on this account - run the character builder");
                         }
                     };
                     let name = name.trim().to_string();
@@ -336,7 +336,7 @@ fn handle_client_msg(
                 if newborn {
                     // Prologue (Gen 3): every mortal's story starts at the
                     // shut gate, clothed in skins.
-                    c.send(ServerMsg::Notice { text: "The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins — mercy's first gift. A Sentinel waits by the gate; the road runs west.".into() });
+                    c.send(ServerMsg::Notice { text: "The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins - mercy's first gift. A Sentinel waits by the gate; the road runs west.".into() });
                 }
             }
             tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
@@ -465,8 +465,8 @@ fn handle_client_msg(
             };
             match their {
                 Some(their_ent) if world.start_duel(my_act, my_ent, their_ent) => {
-                    notice(conns, id, "Duel started — fight!".into());
-                    notice(conns, cid, "Your duel challenge was accepted — fight!".into());
+                    notice(conns, id, "Duel started - fight!".into());
+                    notice(conns, cid, "Your duel challenge was accepted - fight!".into());
                 }
                 _ => notice(conns, id, "The challenger is no longer available.".into()),
             }
@@ -886,7 +886,7 @@ fn handle_client_msg(
                         if !ok {
                             // Bags full: return to sender's mailbox.
                             let _ = db.mail_send(&me, &from, item.as_deref(), gold);
-                            notice(conns, id, "Bags full — remaining mail kept at the inn.".into());
+                            notice(conns, id, "Bags full - remaining mail kept at the inn.".into());
                             break;
                         }
                         let what = match (&item, gold) {

@@ -809,7 +809,7 @@ impl World {
                                     events.push(SimEvent::Info {
                                         owner: o,
                                         text: format!(
-                                            "You enter the {} — you are flagged for PvP!",
+                                            "You enter the {} - you are flagged for PvP!",
                                             z.name
                                         ),
                                     });
@@ -1433,7 +1433,7 @@ impl World {
                                             *prog += 1;
                                             events.push(SimEvent::Info {
                                                 owner: o,
-                                                text: format!("Quest: {} — {}/{}", qid, prog, count),
+                                                text: format!("Quest: {} - {}/{}", qid, prog, count),
                                             });
                                         }
                                     }
@@ -1446,7 +1446,7 @@ impl World {
                                             s.quests.insert(qid.clone(), have + 1);
                                             events.push(SimEvent::Info {
                                                 owner: o,
-                                                text: format!("Quest: {} — {}/{} {}", qid, have + 1, count, item),
+                                                text: format!("Quest: {} - {}/{} {}", qid, have + 1, count, item),
                                             });
                                         }
                                     }
@@ -1717,7 +1717,7 @@ impl World {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Ok(format!(
-                "Quartermaster: {} standing — {}. Wares: {wares}. Say Buy.",
+                "Quartermaster: {} standing - {}. Wares: {wares}. Say Buy.",
                 rep_rank(rep),
                 rep
             ));
@@ -1781,7 +1781,7 @@ impl World {
         // 3) Progress report on one of this giver's quests in flight.
         if let Some(q) = quests_for(act, &npc).find(|q| s.quests.contains_key(q.id)) {
             let prog = s.quests[q.id];
-            return Ok(format!("{npc}: Not done yet — {}/{}.", prog, q.objective.count()));
+            return Ok(format!("{npc}: Not done yet - {}/{}.", prog, q.objective.count()));
         }
 
         Ok(format!("{npc}: You have done all I asked. Go with peace."))
@@ -1837,7 +1837,7 @@ impl World {
             return Err("You need a taming lasso.".into());
         }
         if thp * 10 > tmax * 3 {
-            return Err("The beast is too strong — weaken it below 30% first.".into());
+            return Err("The beast is too strong - weaken it below 30% first.".into());
         }
         // Consume the lasso.
         {
@@ -1856,7 +1856,7 @@ impl World {
             let s = e.sheet.as_mut().unwrap();
             let item = format!("mount:{ttag}");
             if s.inventory.len() >= inv_cap(s) {
-                return Err("Your bags are full — the beast escapes.".into());
+                return Err("Your bags are full - the beast escapes.".into());
             }
             s.inventory.push(item.clone());
             Ok(format!("The {} submits! {} added to your bags.", def.name, item))
