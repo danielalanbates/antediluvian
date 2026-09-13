@@ -33,10 +33,24 @@ swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swif
 # (textures/pbr) ARE used by the terrain, so they're kept.
 rsync -a --exclude 'models/polyhaven' --exclude 'hdri' assets/ "$APP/Contents/Resources/assets/"
 
+# NO_INSTALL=1 builds + signs dist/Antediluvia.app only (e.g. while the game
+# is running from /Applications). Otherwise the installed copy is archived to
+# ~/Downloads/Antediluvia-archived/ before being replaced.
+if [ "${NO_INSTALL:-}" = "1" ]; then
+  find "$APP" -exec xattr -c {} +  2>/dev/null || true
+  codesign --force --deep -s - "$APP"
+  echo "Built $APP (not installed)"
+  exit 0
+fi
+
 STAGE=$(mktemp -d)/Antediluvia.app
 ditto --norsrc --noextattr "$APP" "$STAGE"
 codesign --force --deep -s - "$STAGE"
-rm -rf /Applications/Antediluvia.app
+if [ -d /Applications/Antediluvia.app ]; then
+  OLD=$(defaults read /Applications/Antediluvia.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo old)
+  mkdir -p "$HOME/Downloads/Antediluvia-archived"
+  mv /Applications/Antediluvia.app "$HOME/Downloads/Antediluvia-archived/Antediluvia-$OLD-$(date +%Y%m%d%H%M).app"
+fi
 ditto "$STAGE" /Applications/Antediluvia.app
 rm -rf "$(dirname "$STAGE")"
 codesign -v /Applications/Antediluvia.app
