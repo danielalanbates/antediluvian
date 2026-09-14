@@ -562,8 +562,23 @@ pub fn formation_family(seed: u64) -> u32 {
 pub fn formation_mesh(seed: u64) -> Mesh {
     let family = formation_family(seed);
     // Base shape: rings x segments dome, warped per family.
-    let rings = 5;
-    let segs = 8;
+    // Realism pass: 18x32 with smooth fractal displacement (was 5x8 with
+    // per-vertex random jitter, which read as a faceted paper model).
+    let rings = 18;
+    let segs = 32;
+    let perlin = noise::Perlin::new((seed ^ (seed >> 32)) as u32);
+    let fbm3 = |p: [f64; 3]| -> f32 {
+        use noise::NoiseFn;
+        let mut amp = 1.0;
+        let mut freq = 1.0;
+        let mut sum = 0.0;
+        for _ in 0..4 {
+            sum += perlin.get([p[0] * freq, p[1] * freq, p[2] * freq]) * amp;
+            amp *= 0.5;
+            freq *= 2.1;
+        }
+        sum as f32
+    };
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let (rx, ry, rz) = match family {
@@ -591,7 +606,9 @@ pub fn formation_mesh(seed: u64) -> Mesh {
         for s in 0..segs {
             let theta = std::f32::consts::TAU * s as f32 / segs as f32 + twist * t;
             // Per-vertex jitter is what makes each mesh unique.
-            let j = 0.75 + h01(seed ^ (r as u64 * 31 + s as u64 + 7)) * 0.5;
+            // Sample on the unit sphere so the pole stays one point.
+            let (ux, uy, uz) = (phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
+            let j = 1.0 + fbm3([ux as f64 * 1.6, uy as f64 * 1.6, uz as f64 * 1.6]) * 0.3;
             let mut x = rx * phi.sin() * theta.cos() * j * prof;
             let y = ry * phi.cos() * j;
             let z = rz * phi.sin() * theta.sin() * j * prof;
