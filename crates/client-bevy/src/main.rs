@@ -377,7 +377,17 @@ fn main() {
         .insert_resource(TintCache::default())
         .insert_resource(creaturegen::ProcBodyCache::default())
         .insert_resource(face::RestyledFaces::default())
-        .add_systems(Update, (face::restyle_faces, update_name_labels))
+        .add_systems(Update, (face::restyle_faces, update_name_labels, grass::update_far_grass))
+        .insert_resource(grass::FarGrass::default())
+        // Systems that graft children onto (or insert into) rig entities found
+        // by query. In Update they could queue work on an entity the snapshot
+        // system despawns in the same frame -> "entity does not exist" panic
+        // (caught by the headless browser gate). PreUpdate's commands flush
+        // before Update runs, so they only ever touch live entities.
+        .add_systems(
+            PreUpdate,
+            (apply_loadouts, apply_tints, attach_species_parts, creaturegen::build_proc_bodies, attach_hair_style),
+        )
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
@@ -422,12 +432,7 @@ fn main() {
                 animate_water,
                 player_jump,
                 ambient_system,
-                apply_loadouts,
-                apply_tints,
-                attach_species_parts,
-                creaturegen::build_proc_bodies,
                 creaturegen::animate_proc_gait,
-                attach_hair_style,
                 smooth_motion,
             ),
         )
@@ -3118,7 +3123,7 @@ fn apply_combat_events(
         if ev.kind == EventKind::Die {
             // Generated bodies have no death clip; their gait system topples
             // them. Harmless on rigged entities, which never query it.
-            commands.entity(mv.rig).insert(creaturegen::ProcDied);
+            commands.entity(mv.rig).try_insert(creaturegen::ProcDied);
         }
         let Ok(rig) = rigs.get(mv.rig) else { continue };
         let Ok((mut player, mut trans)) = players.get_mut(rig.player) else { continue };

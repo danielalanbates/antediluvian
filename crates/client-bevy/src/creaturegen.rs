@@ -695,7 +695,7 @@ pub fn build_proc_bodies(
         commands
             .entity(ent)
             .remove::<ProcBodyPending>()
-            .insert((Mesh3d(mesh), MeshMaterial3d(mat)));
+            .try_insert((Mesh3d(mesh), MeshMaterial3d(mat)));
     }
 }
 
