@@ -120,7 +120,7 @@ pub fn apply_loadouts(
                 } else {
                     Visibility::Hidden
                 };
-                commands.entity(ent).insert(vis);
+                commands.entity(ent).try_insert(vis);
                 touched = true;
             } else if name.as_str().ends_with("_Body") {
                 // Torso tint: the revered lineage mantle (C10) outranks the
@@ -139,7 +139,7 @@ pub fn apply_loadouts(
                     if let Ok(kids) = children_q.get(ent) {
                         for kid in kids.iter() {
                             if meshes.get(*kid).is_ok() {
-                                commands.entity(*kid).insert(MeshMaterial3d(mat.clone()));
+                                commands.entity(*kid).try_insert(MeshMaterial3d(mat.clone()));
                             }
                         }
                     }
@@ -152,7 +152,7 @@ pub fn apply_loadouts(
             match applied {
                 Some(mut a) => a.0 = Some(loadout.clone()),
                 None => {
-                    commands.entity(root).insert(LoadoutApplied(Some(loadout.clone())));
+                    commands.entity(root).try_insert(LoadoutApplied(Some(loadout.clone())));
                 }
             }
         }

@@ -163,3 +163,175 @@ pub fn sway_grass(time: Res<Time>, mut tufts: Query<(&GrassTuft, &mut Transform)
             * Quat::from_rotation_z(sway * 0.6);
     }
 }
+
+// ─── Far grass ───────────────────────────────────────────────────────────────
+//
+// The swaying tuft field above only reaches RADIUS (~3 character heights), so
+// the meadow visibly ended just past the player. Beyond it, grass comes from
+// static merged meshes: one per FAR_CHUNK square, sparser, no per-tuft
+// entities or sway (invisible at range). A chunk's mesh depends only on its
+// coordinates and act, so it is built once and reused as the player moves.
+
+const FAR_CHUNK: f32 = 120.0;
+const FAR_CELL: f32 = 20.0;
+const FAR_RADIUS: f32 = 1000.0;
+
+#[derive(Resource, Default)]
+pub struct FarGrass {
+    centre: Option<(i64, i64, antediluvia_protocol::Act)>,
+    spawned: std::collections::HashMap<(i64, i64), Entity>,
+    cache: std::collections::HashMap<(antediluvia_protocol::Act, i64, i64), Handle<Mesh>>,
+    material: Option<Handle<StandardMaterial>>,
+}
+
+#[derive(Component)]
+pub struct FarGrassChunk;
+
+/// Bake every tuft of one chunk into a single mesh, in chunk-local space.
+/// Placement rules (roads, water, gaps) match `update_grass`.
+pub fn far_chunk_mesh(act: antediluvia_protocol::Act, cx: i64, cz: i64) -> Option<Mesh> {
+    let tuft = tuft_mesh();
+    let tp = tuft.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3()?.to_vec();
+    let tc = match tuft.attribute(Mesh::ATTRIBUTE_COLOR)? {
+        bevy::render::mesh::VertexAttributeValues::Float32x4(v) => v.clone(),
+        _ => return None,
+    };
+    let ti: Vec<u32> = match tuft.indices()? {
+        Indices::U32(v) => v.clone(),
+        Indices::U16(v) => v.iter().map(|&i| i as u32).collect(),
+    };
+    let origin = Vec3::new(cx as f32 * FAR_CHUNK, 0.0, cz as f32 * FAR_CHUNK);
+    let cells = (FAR_CHUNK / FAR_CELL) as i64;
+    let (mut pos, mut col, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    for gz in 0..cells {
+        for gx in 0..cells {
+            let seed = ((cx * cells + gx) as u64)
+                .wrapping_mul(0x9E37_79B9)
+                .wrapping_add(((cz * cells + gz) as u64).wrapping_mul(0x85EB_CA6B))
+                ^ 0xFA12;
+            let x = origin.x + (gx as f32 + h01(seed ^ 1)) * FAR_CELL;
+            let z = origin.z + (gz as f32 + h01(seed ^ 2)) * FAR_CELL;
+            let y = terrain_height(act, x, z);
+            let on_road = road_dist(x, z) <= 34.0;
+            let under_water = water_level(act).map(|w| y < w + 1.0).unwrap_or(false);
+            if on_road || under_water || h01(seed ^ 3) < 0.18 {
+                continue;
+            }
+            // Slightly larger than near tufts so the sparser field still reads.
+            let s = 1.0 + h01(seed ^ 4) * 0.9;
+            let xf = Transform::from_translation(Vec3::new(x, y - 0.2, z) - origin)
+                .with_rotation(Quat::from_rotation_y(h01(seed ^ 5) * std::f32::consts::TAU))
+                .with_scale(Vec3::new(s, s * (0.8 + h01(seed ^ 6) * 0.6), s));
+            let base = pos.len() as u32;
+            pos.extend(tp.iter().map(|p| xf.transform_point(Vec3::from(*p)).to_array()));
+            col.extend(tc.iter().copied());
+            idx.extend(ti.iter().map(|i| base + i));
+        }
+    }
+    if pos.is_empty() {
+        return None;
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; pos.len()];
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    mesh.insert_indices(Indices::U32(idx));
+    Some(mesh)
+}
+
+pub fn update_far_grass(
+    mut commands: Commands,
+    session: Res<crate::Session>,
+    q_player: Query<&Transform, (With<crate::PlayerTag>, Without<GrassTuft>)>,
+    mut far: ResMut<FarGrass>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Ok(pt) = q_player.get_single() else { return };
+    let act = session.act;
+    let pc = ((pt.translation.x / FAR_CHUNK).floor() as i64, (pt.translation.z / FAR_CHUNK).floor() as i64);
+    if far.centre == Some((pc.0, pc.1, act)) {
+        return;
+    }
+    let act_changed = far.centre.map_or(true, |c| c.2 != act);
+    far.centre = Some((pc.0, pc.1, act));
+    let mat = far
+        .material
+        .get_or_insert_with(|| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.42, 0.6, 0.28),
+                emissive: LinearRgba::rgb(0.02, 0.04, 0.01),
+                perceptual_roughness: 0.95,
+                reflectance: 0.04,
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            })
+        })
+        .clone();
+    let reach = (FAR_RADIUS / FAR_CHUNK).ceil() as i64;
+    let mut want = std::collections::HashSet::new();
+    for dz in -reach..=reach {
+        for dx in -reach..=reach {
+            if ((dx * dx + dz * dz) as f32).sqrt() * FAR_CHUNK <= FAR_RADIUS + FAR_CHUNK * 0.5 {
+                want.insert((pc.0 + dx, pc.1 + dz));
+            }
+        }
+    }
+    let stale: Vec<(i64, i64)> = far
+        .spawned
+        .keys()
+        .filter(|k| act_changed || !want.contains(k))
+        .copied()
+        .collect();
+    for k in stale {
+        if let Some(e) = far.spawned.remove(&k) {
+            commands.entity(e).despawn();
+        }
+    }
+    for (cx, cz) in want {
+        if far.spawned.contains_key(&(cx, cz)) {
+            continue;
+        }
+        let handle = match far.cache.get(&(act, cx, cz)) {
+            Some(h) => h.clone(),
+            None => {
+                let Some(m) = far_chunk_mesh(act, cx, cz) else { continue };
+                let h = meshes.add(m);
+                far.cache.insert((act, cx, cz), h.clone());
+                h
+            }
+        };
+        let e = commands
+            .spawn((
+                Mesh3d(handle),
+                MeshMaterial3d(mat.clone()),
+                Transform::from_xyz(cx as f32 * FAR_CHUNK, 0.0, cz as f32 * FAR_CHUNK),
+                FarGrassChunk,
+            ))
+            .id();
+        far.spawned.insert((cx, cz), e);
+    }
+}
+
+#[cfg(test)]
+mod far_tests {
+    use super::*;
+
+    #[test]
+    fn far_chunks_are_deterministic_and_nonempty_on_open_ground() {
+        let act = antediluvia_protocol::Act::Eden;
+        let mut any = 0;
+        for (cx, cz) in [(3, 3), (-4, 2), (5, -6), (8, 8)] {
+            let a = far_chunk_mesh(act, cx, cz);
+            let b = far_chunk_mesh(act, cx, cz);
+            assert_eq!(a.is_some(), b.is_some());
+            if let (Some(a), Some(b)) = (a, b) {
+                assert_eq!(a.count_vertices(), b.count_vertices());
+                any += 1;
+            }
+        }
+        assert!(any > 0, "no grass anywhere in open Eden meadow");
+    }
+}

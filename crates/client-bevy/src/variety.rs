@@ -213,7 +213,7 @@ pub fn attach_hair_style(
                     .with_scale(Vec3::new(0.9, 1.0, 1.2)));
             }
         }
-        commands.entity(root).insert(HairApplied);
+        commands.entity(root).try_insert(HairApplied);
     }
 }
 
@@ -285,11 +285,11 @@ pub fn apply_tints(
                 cache.0.insert(key, h.clone());
                 h
             };
-            commands.entity(ent).insert(MeshMaterial3d(handle));
+            commands.entity(ent).try_insert(MeshMaterial3d(handle));
             touched = true;
         }
         if touched {
-            commands.entity(root).insert(TintApplied);
+            commands.entity(root).try_insert(TintApplied);
         }
     }
 }
@@ -543,7 +543,7 @@ pub fn attach_species_parts(
                 }
             }
         }
-        commands.entity(root).insert(PartsApplied);
+        commands.entity(root).try_insert(PartsApplied);
     }
 }
 
