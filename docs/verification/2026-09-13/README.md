@@ -37,3 +37,8 @@ is NOT in it yet). Previous live bundle archived at
   loop) — `functions/membership.js` shadows the slash path too. Pre-existing.
 - Live shard (Oracle) still runs the older server: "Login rejected" message
   shows a missing-glyph box until the shard is redeployed.
+
+## Update 20:40 — far grass deployed
+Live /play stamp `846472336e88` (PR #4 incl. far grass), gate PASS locally
+(200 s logged in) and on live. Site pages diffed identical to live before
+deploy. Prior bundle archived at `web-play-f5e78c12f942`.
