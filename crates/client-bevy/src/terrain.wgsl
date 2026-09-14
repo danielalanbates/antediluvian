@@ -131,7 +131,10 @@ fn fragment(
     let hd = clamp(w_dirt * 1.6 - 0.3 + (d_arm.r - g_arm.r) * 0.6, 0.0, 1.0);
     let hs = clamp(w_sand * 1.6 - 0.3 + (s_arm.r - g_arm.r) * 0.6, 0.0, 1.0);
 
-    let grass_col = mix(g_near, g_far, far_t * 0.5) * tint(0);
+    // The leafy-grass photo averages to straw at low mips, so distant
+    // meadows read as desert; pull the far field back toward green.
+    let far_green = mix(vec3<f32>(1.0), vec3<f32>(0.78, 1.0, 0.62), far_t);
+    let grass_col = mix(g_near, g_far, far_t * 0.5) * tint(0) * far_green;
     col = mix(grass_col, d_near * tint(1), hd);
     col = mix(col, s_near * tint(3), hs);
     arm = mix(mix(g_arm, d_arm, hd), s_arm, hs);
