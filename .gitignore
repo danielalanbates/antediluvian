@@ -15,3 +15,4 @@ assets/textures/pbr/
 # Browser build output (scripts/build_web.sh)
 web/pkg/
 web/dist/
+assets/textures/terrain_src/

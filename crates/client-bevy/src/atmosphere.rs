@@ -118,6 +118,16 @@ pub fn spawn_sky(
     )).id()
 }
 
+/// Screenshot-tuning knob: `ANTEDILUVIA_FOG=<multiplier>`.
+fn fog_scale() -> f32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(v) = std::env::var("ANTEDILUVIA_FOG").ok().and_then(|v| v.parse().ok()) {
+        return v;
+    }
+    // Realism pass: at the physical exposure the old densities were a wall.
+    0.3
+}
+
 /// System to update the sun, ambient light, fog, and sky position based on `time_of_day`.
 pub fn update_atmosphere(
     session: Res<crate::Session>,
@@ -148,17 +158,24 @@ pub fn update_atmosphere(
     
     // Pitch around X axis.
     if let Ok((mut sun_tf, mut sun_light)) = q_sun.get_single_mut() {
-        sun_tf.rotation = Quat::from_euler(EulerRot::XYZ, -angle, 0.6, 0.0);
+        // Realism pass: the sun used to pass straight overhead, so at noon
+        // every shadow hid under its caster and the world looked overcast.
+        // Real temperate sun peaks ~55° and swings across the south sky.
+        let elev = angle.sin().max(-0.3) * 0.95;
+        let az = 0.6 + (t - 0.5) * 2.4;
+        let dir = Vec3::new(az.sin() * elev.cos(), elev.sin(), az.cos() * elev.cos());
+        *sun_tf = Transform::IDENTITY.looking_to(-dir, Vec3::Y);
         
         // Intensity peaks at noon, zero at night.
         let is_day = t > 0.2 && t < 0.8;
         let day_factor = if is_day { (angle.sin()).max(0.0) } else { 0.0 };
-        sun_light.illuminance = 22_000.0 * day_factor;
+        sun_light.illuminance = crate::lighting::look().2 * day_factor;
         sun_light.color = mood.sun_color;
     }
 
     let day_factor = (angle.sin()).max(0.0);
-    ambient.brightness = 260.0 + 520.0 * day_factor;
+    // Sky IBL (lighting.rs) now provides the fill; this is only a floor.
+    ambient.brightness = 40.0 + 90.0 * day_factor;
     ambient.color = mood.ambient_color;
 
     // Cave interiors (C09): darken ambient + tighten fog inside a pocket.
@@ -183,7 +200,7 @@ pub fn update_atmosphere(
             1.0
         );
         fog.falloff = FogFalloff::Exponential {
-            density: mood.fog_density * if in_cave { 4.0 } else { 1.0 },
+            density: mood.fog_density * if in_cave { 4.0 } else { 1.0 } * fog_scale(),
         };
 
         // Keep sky centered on camera

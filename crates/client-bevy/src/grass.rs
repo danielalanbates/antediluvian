@@ -15,7 +15,7 @@ use bevy::render::render_asset::RenderAssetUsages;
 const CELL: f32 = 16.0;
 /// Grass ring radius around the player.
 const RADIUS: f32 = 210.0;
-const TUFTS_PER_CELL: usize = 2;
+const TUFTS_PER_CELL: usize = 4;
 
 fn h01(seed: u64) -> f32 {
     let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -33,32 +33,70 @@ pub struct GrassState {
     pub act: antediluvia_protocol::Act,
 }
 
-/// Three crossed blades, tapered to a point, with a dark-root→bright-tip
-/// vertex-colour gradient so each clump reads as lit grass, not a flat card.
-fn tuft_mesh() -> Mesh {
+/// A clump of thin, curved, individually tinted blades (realism pass
+/// 2026-09-14). The old tuft was three wide triangles in one saturated green,
+/// which read as a carpet of spikes. Real grass is many narrow blades that
+/// bend under their own weight, dark and dense at the root, varied in hue,
+/// with a few dry straw-coloured tips. `detail` = blades per clump.
+fn clump_mesh(blades: usize, segments: usize) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut colors: Vec<[f32; 4]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let root = [0.55, 0.62, 0.42, 1.0]; // darker base
-    let tip = [1.15, 1.2, 0.85, 1.0]; // brighter, slightly over-bright tip
-    for (i, ang) in [0.0f32, 1.05, 2.1].iter().enumerate() {
+    for bi in 0..blades {
+        let r = |k: u64| h01(bi as u64 * 7919 + k);
+        let ang = r(1) * std::f32::consts::TAU;
         let (c, s) = (ang.cos(), ang.sin());
-        let w = 1.15; // half-width at base
-        let h = 5.2; // blade height
-        let base = (i * 4) as u32;
-        positions.extend_from_slice(&[
-            [-w * c, 0.0, -w * s],
-            [w * c, 0.0, w * s],
-            [w * 0.18 * c, h, w * 0.18 * s], // taper to a near-point
-            [-w * 0.18 * c, h, -w * 0.18 * s],
-        ]);
-        colors.extend_from_slice(&[root, root, tip, tip]);
-        uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        // Root offset inside the clump, lean direction, height and width.
+        let ox = (r(2) - 0.5) * 5.0;
+        let oz = (r(3) - 0.5) * 5.0;
+        let lean_ang = r(4) * std::f32::consts::TAU;
+        let lean = Vec3::new(lean_ang.cos(), 0.0, lean_ang.sin()) * (0.6 + r(5) * 1.8);
+        let h = 6.0 + r(6) * 7.0;
+        let w = 0.35 + r(7) * 0.3;
+        // Per-blade tint: mostly green, some olive, ~12% dry straw.
+        let dry = r(8) < 0.12;
+        let root = [0.16, 0.19, 0.08, 1.0];
+        let tip = if dry {
+            [0.62, 0.55, 0.30, 1.0]
+        } else {
+            let g = 0.50 + r(9) * 0.2;
+            [0.30 + r(10) * 0.14, g, 0.14 + r(11) * 0.06, 1.0]
+        };
+        let side = Vec3::new(c, 0.0, s);
+        let face = Vec3::new(-s, 0.0, c);
+        let base = positions.len() as u32;
+        for k in 0..=segments {
+            let t = k as f32 / segments as f32;
+            // Quadratic bend: tips droop outward along `lean`.
+            let p = Vec3::new(ox, t * h, oz) + lean * 1.8 * t * t;
+            let half = w * (1.0 - t * 0.92);
+            let a = p - side * half;
+            let b = p + side * half;
+            positions.push(a.to_array());
+            positions.push(b.to_array());
+            // Normal: mostly up (grass is lit like the ground it covers) with
+            // a little of the blade face for soft shading variation.
+            let n = (Vec3::Y * 0.8 + face * 0.2 + lean.normalize_or_zero() * 0.15 * t).normalize();
+            normals.push(n.to_array());
+            normals.push(n.to_array());
+            let col = [
+                root[0] + (tip[0] - root[0]) * t.powf(0.6),
+                root[1] + (tip[1] - root[1]) * t.powf(0.6),
+                root[2] + (tip[2] - root[2]) * t.powf(0.6),
+                1.0,
+            ];
+            colors.push(col);
+            colors.push(col);
+            uvs.push([0.0, 1.0 - t]);
+            uvs.push([1.0, 1.0 - t]);
+            if k < segments {
+                let i = base + k as u32 * 2;
+                indices.extend_from_slice(&[i, i + 1, i + 3, i, i + 3, i + 2]);
+            }
+        }
     }
-    let normals: Vec<[f32; 3]> = (0..positions.len()).map(|_| [0.0, 1.0, 0.0]).collect();
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -68,21 +106,38 @@ fn tuft_mesh() -> Mesh {
     mesh
 }
 
+/// Near clump: 14 blades, 3 segments each (visible bend up close).
+fn tuft_mesh() -> Mesh {
+    clump_mesh(18, 3)
+}
+
+/// Far clump: fewer, straighter blades — the silhouette is all that reads.
+fn far_tuft_mesh() -> Mesh {
+    clump_mesh(8, 1)
+}
+
+/// Shared grass material: vertex colours carry the real hue, so the base is
+/// white; slightly glossy blades catch the sky IBL.
+fn grass_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(1.0, 1.0, 1.0),
+        perceptual_roughness: 0.78,
+        reflectance: 0.25,
+        diffuse_transmission: 0.0,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    }
+}
+
+
 pub fn init_grass(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let mesh = meshes.add(tuft_mesh());
-    let mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.42, 0.6, 0.28),
-        emissive: LinearRgba::rgb(0.02, 0.04, 0.01),
-        perceptual_roughness: 0.95,
-        reflectance: 0.04,
-        cull_mode: None,
-        double_sided: true,
-        ..default()
-    });
+    let mat = materials.add(grass_material());
     let per_side = (RADIUS * 2.0 / CELL) as usize + 1;
     let count = per_side * per_side * TUFTS_PER_CELL;
     for i in 0..count {
@@ -190,7 +245,7 @@ pub struct FarGrassChunk;
 /// Bake every tuft of one chunk into a single mesh, in chunk-local space.
 /// Placement rules (roads, water, gaps) match `update_grass`.
 pub fn far_chunk_mesh(act: antediluvia_protocol::Act, cx: i64, cz: i64) -> Option<Mesh> {
-    let tuft = tuft_mesh();
+    let tuft = far_tuft_mesh();
     let tp = tuft.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3()?.to_vec();
     let tc = match tuft.attribute(Mesh::ATTRIBUTE_COLOR)? {
         bevy::render::mesh::VertexAttributeValues::Float32x4(v) => v.clone(),
@@ -259,15 +314,7 @@ pub fn update_far_grass(
     let mat = far
         .material
         .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.42, 0.6, 0.28),
-                emissive: LinearRgba::rgb(0.02, 0.04, 0.01),
-                perceptual_roughness: 0.95,
-                reflectance: 0.04,
-                cull_mode: None,
-                double_sided: true,
-                ..default()
-            })
+            materials.add(grass_material())
         })
         .clone();
     let reach = (FAR_RADIUS / FAR_CHUNK).ceil() as i64;

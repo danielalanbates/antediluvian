@@ -36,7 +36,9 @@ struct PlayerJump { start: Option<f32> }
 mod net;
 mod perf;
 mod propgen;
+mod lighting;
 mod terrain;
+mod terrain_material;
 mod ui;
 mod variety;
 mod vfx;
@@ -358,6 +360,9 @@ fn main() {
         .add_plugins(plugins)
         .add_plugins(shots::ShotsPlugin)
         .add_plugins(perf::PerfPlugin)
+        .add_plugins(terrain_material::TerrainMaterialPlugin)
+        .init_resource::<lighting::EnvMaps>()
+        .add_systems(Update, (lighting::apply_env_map, lighting::drift_ripples))
         // Sky.
         .insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.82)))
         .insert_resource(AmbientLight { color: Color::WHITE, brightness: 300.0 })
@@ -1104,6 +1109,9 @@ fn spawn_prop(
     // enough to classify on, and getting this wrong the safe way (missing a
     // collider) is far better than invisible walls in open grass.
     let lower = path.to_ascii_lowercase();
+    if ["rock", "cliff", "boulder", "stone"].iter().any(|k| lower.contains(k)) {
+        e.insert(terrain_material::RockScene);
+    }
     const SOFT: [&str; 8] = [
         "flower", "grass", "plant", "mushroom", "fern", "moss", "mound", "mud",
     ];
@@ -1171,7 +1179,7 @@ fn sync_prop_colliders(
 
 /// Terrain PBR ground textures (photoscanned grass/rock; loaded at startup).
 #[derive(Resource, Clone)]
-struct GroundDetail { diff: Handle<Image>, nor: Handle<Image>, arm: Handle<Image> }
+struct GroundDetail { diff: Handle<Image>, nor: Handle<Image>, arm: Handle<Image>, ripple: Handle<Image> }
 
 /// Load a texture tiled (Repeat sampler) — needed for terrain PBR maps.
 fn load_tiled(asset_server: &AssetServer, path: &str) -> Handle<Image> {
@@ -1255,25 +1263,30 @@ fn spawn_act_scenery(
         })),
         Transform::default(),
         Terrain,
+        terrain_material::SplatGround(act),
     ));
 
     // Water plane (doc-driven): Eden's rivers, the Abyssal Basins' floodwater.
     if let Some(level) = terrain::water_level(act) {
+        // Deep, dark, rippled and sky-reflective (Fresnel via the IBL) instead
+        // of a flat translucent blue pane.
+        let water_mat = materials.add(StandardMaterial {
+            base_color: Color::srgba(0.03, 0.09, 0.10, 0.92),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.06,
+            reflectance: 0.6,
+            normal_map_texture: Some(ground.ripple.clone()),
+            ..default()
+        });
         commands.spawn((
             Mesh3d(meshes.add(Plane3d::default().mesh().size(
                 antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0,
                 antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0,
             ))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgba(0.10, 0.30, 0.44, 0.72),
-                alpha_mode: AlphaMode::Blend,
-                perceptual_roughness: 0.04,
-                metallic: 0.25,
-                reflectance: 0.5,
-                ..default()
-            })),
+            MeshMaterial3d(water_mat.clone()),
             Transform::from_xyz(0.0, level, 0.0),
             WaterPlane { level },
+            lighting::RippleWater(water_mat),
             Terrain,
         ));
     }
@@ -1380,6 +1393,7 @@ fn spawn_act_scenery(
                 perceptual_roughness: 0.95,
                 ..default()
             })),
+            terrain_material::RockSkin((seed % terrain_material::ROCK_TINTS.len() as u64) as usize),
             Transform::from_xyz(x, y, z)
                 .with_scale(Vec3::splat(size))
                 .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
@@ -1550,30 +1564,46 @@ fn setup(
         Camera3d::default(),
         Camera { hdr: true, ..default() },
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::core_pipeline::bloom::Bloom::NATURAL,
+        bevy::core_pipeline::bloom::Bloom { intensity: 0.06, ..bevy::core_pipeline::bloom::Bloom::NATURAL },
+        bevy::render::camera::Exposure { ev100: lighting::look().0 },
         bevy::core_pipeline::fxaa::Fxaa::default(),
         bevy::pbr::ShadowFilteringMethod::Gaussian,
         {
             // Filmic grade: gentle contrast S-curve + a touch more saturation
             // so the stylized palette reads with modern punch, not flat.
+            // Realism pass (2026-09-14): the old +32% saturation and lifted
+            // blacks made everything read as toy-bright and hazy. Photographic
+            // grade now: neutral saturation, real contrast, IBL does the fill.
             let mut cg = bevy::render::view::ColorGrading::default();
-            cg.global.exposure = 0.35;          // lift the murk
-            cg.global.post_saturation = 1.32;    // vivid, modern palette
-            cg.shadows.lift = 0.02;              // open up the blacks a touch
-            cg.shadows.gamma = 1.05;
-            cg.highlights.gain = 1.06;
-            cg.midtones.contrast = 1.12;
+            cg.global.exposure = 0.0;
+            cg.global.post_saturation = 1.0;
+            cg.midtones.contrast = 1.1;
+            cg.global.post_saturation = 1.15;
             cg
         },
         Transform::from_xyz(0.0, 300.0, 420.0).looking_at(Vec3::ZERO, Vec3::Y),
         DistanceFog {
             color: initial_mood.fog_color,
+            // No sun-glow term: it scales with the (physical, 75 klx) sun and
+            // washed a bright veil over the whole view.
+            directional_light_color: Color::NONE,
+            directional_light_exponent: 24.0,
             falloff: FogFalloff::Exponential { density: initial_mood.fog_density },
-            ..default()
         },
         Msaa::Off,
         MainCamera,
     ));
+    // Contact shadows where objects meet the ground (desktop only — WebGL2
+    // has no compute shaders).
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("ANTEDILUVIA_NO_SSAO").is_err() {
+        commands.queue(|w: &mut World| {
+            let mut q = w.query_filtered::<Entity, With<MainCamera>>();
+            if let Some(e) = q.iter(w).next() {
+                w.entity_mut(e).insert(bevy::pbr::ScreenSpaceAmbientOcclusion::default());
+            }
+        });
+    }
 
     // Sun.
     commands.spawn((
@@ -1596,28 +1626,8 @@ fn setup(
         Sun,
     ));
 
-    // Rim / back light (fidelity): a cool, shadowless key from behind-opposite
-    // the sun carves an edge highlight on every character and prop — the
-    // signature "lit" look of modern stylized games, with no new art.
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 5_500.0,
-            color: Color::srgb(0.7, 0.82, 1.0),
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, 0.6 + std::f32::consts::PI, 0.0)),
-    ));
-    // Warm bounce fill from below-front so shadowed undersides don't read black.
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 2_600.0,
-            color: Color::srgb(1.0, 0.86, 0.62),
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, 0.5, -0.4, 0.0)),
-    ));
+    // Rim/bounce fake lights removed (2026-09-14): sky IBL in lighting.rs
+    // replaces them with physically based fill.
 
     // Sky.
     spawn_sky(&mut commands, &mut meshes, &mut materials, &mut images, &initial_mood);
@@ -1627,6 +1637,7 @@ fn setup(
         diff: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_diff_1k.jpg"),
         nor: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_nor_gl_1k.jpg"),
         arm: load_tiled(&asset_server, "textures/pbr/aerial_grass_rock/aerial_grass_rock_arm_1k.jpg"),
+        ripple: images.add(lighting::ripple_normal_texture()),
     };
     commands.insert_resource(ground.clone());
     spawn_act_scenery(&mut commands, &mut meshes, ground, &mut materials, &asset_server, Act::Eden);

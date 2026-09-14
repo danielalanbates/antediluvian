@@ -14,7 +14,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use std::sync::OnceLock;
 
 /// Grid resolution (quads per side) and world size of the terrain mesh.
-const GRID: usize = 192;
+const GRID: usize = 384;
 /// Mesh extends a margin past the playable half-extent (C05: shared constant).
 const SIZE: f32 = antediluvia_protocol::WORLD_BOUNDS * 2.0 + 600.0;
 
@@ -188,41 +188,40 @@ pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
     h * t * t * r * r
 }
 
-/// Height-banded vertex palette per act: low → mid → high.
-fn act_palette(act: Act) -> ([f32; 3], [f32; 3], [f32; 3]) {
-    match act {
-        Act::Eden => ([0.20, 0.40, 0.16], [0.30, 0.47, 0.20], [0.46, 0.43, 0.30]),
-        Act::Hermon => ([0.27, 0.40, 0.21], [0.44, 0.39, 0.27], [0.58, 0.58, 0.60]),
-        Act::Nephilim => ([0.40, 0.30, 0.18], [0.52, 0.38, 0.20], [0.50, 0.45, 0.40]),
-        Act::Enoch => ([0.30, 0.34, 0.24], [0.44, 0.42, 0.34], [0.54, 0.52, 0.48]),
-        Act::Flood => ([0.22, 0.32, 0.27], [0.34, 0.38, 0.31], [0.44, 0.48, 0.53]),
-    }
-}
-
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-}
-
-fn color_for(act: Act, h: f32) -> [f32; 4] {
-    // River/sea beds shade darker below the water table.
+/// Splat weights for the photoscanned terrain shader (`terrain.wgsl`), packed
+/// into the vertex colour: r = dirt, g = sand, b = wet/darken. Cliff rock is
+/// chosen in the shader from slope, so it needs no channel.
+fn splat_for(act: Act, x: f32, z: f32, h: f32) -> [f32; 4] {
+    let patch = |scale: f32, seed: f64| {
+        (fbm(act).get([(x / scale) as f64 + seed, (z / scale) as f64 - seed]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0)
+    };
+    // Bare-earth patches: broad, soft blotches, heavier in the dry acts.
+    let (dirt_bias, sand_bias) = match act {
+        Act::Eden => (-0.28, -0.45),
+        Act::Hermon => (-0.12, -0.45),
+        Act::Nephilim => (0.25, 0.25),
+        Act::Enoch => (0.0, -0.3),
+        Act::Flood => (-0.1, -0.2),
+    };
+    let mut dirt = ((patch(210.0, 11.3) - 0.5) * 2.2 + dirt_bias).clamp(0.0, 1.0);
+    let mut sand = ((patch(380.0, 47.9) - 0.62) * 2.5 + sand_bias).clamp(0.0, 1.0);
+    let mut wet = 0.0;
+    // Worn trampled earth around the inn and along the road.
+    let d_inn = (x * x + z * z).sqrt();
+    dirt = dirt.max((1.0 - (d_inn - 60.0) / 160.0).clamp(0.0, 0.85));
+    let rd = road_dist(x, z);
+    dirt = dirt.max((1.0 - (rd - ROAD_HALF_WIDTH * 0.7) / 30.0).clamp(0.0, 1.0));
+    // Shorelines: sand band above the water table, wet dark mud below it.
     if let Some(w) = water_level(act) {
-        if h < w {
-            let lin = Color::srgb(0.13, 0.20, 0.16).to_linear();
-            return [lin.red, lin.green, lin.blue, 1.0];
-        }
+        let above = h - w;
+        sand = sand.max((1.0 - above / 7.0).clamp(0.0, 1.0));
+        wet = (1.0 - (above + 2.0) / 6.0).clamp(0.0, 0.8);
     }
-    let (low, mid, high) = act_palette(act);
-    let (amp, _) = act_shape(act);
-    let t1 = (h / (amp * 0.45)).clamp(0.0, 1.0);
-    let t2 = ((h - amp * 0.45) / (amp * 0.55)).clamp(0.0, 1.0);
-    let c = lerp3(lerp3(low, mid, t1), high, t2);
-    // Palette values are sRGB; vertex colors feed the shader linear.
-    let lin = Color::srgb(c[0], c[1], c[2]).to_linear();
-    [lin.red, lin.green, lin.blue, 1.0]
+    [dirt, sand, wet, 1.0]
 }
 
 /// Build the act's terrain mesh: GRID×GRID quads over SIZE×SIZE world units,
-/// vertex-colored by height band, smooth normals.
+/// vertex colours carrying splat weights for `terrain.wgsl`, smooth normals.
 pub fn build_terrain_mesh(act: Act) -> Mesh {
     let n = GRID;
     let step = SIZE / n as f32;
@@ -236,13 +235,7 @@ pub fn build_terrain_mesh(act: Act) -> Mesh {
             let z = -SIZE / 2.0 + iz as f32 * step;
             let h = terrain_height(act, x, z);
             positions.push([x, h, z]);
-            // Road strip renders packed dirt instead of the height palette.
-            if road_dist(x, z) <= ROAD_HALF_WIDTH {
-                let lin = Color::srgb(0.42, 0.33, 0.22).to_linear();
-                colors.push([lin.red, lin.green, lin.blue, 1.0]);
-            } else {
-                colors.push(color_for(act, h));
-            }
+            colors.push(splat_for(act, x, z, h));
             uvs.push([ix as f32 / n as f32, iz as f32 / n as f32]);
         }
     }
