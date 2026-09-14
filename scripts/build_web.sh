@@ -58,7 +58,7 @@ echo "    build stamp: $STAMP"
 # models the game does not reference yet. Shipping the lot would be a 3.3 GB
 # download. Keep this list in step with make_app.sh.
 mkdir -p "$OUT/assets"
-rsync -a --exclude 'models/polyhaven' --exclude 'hdri' --exclude 'art' \
+rsync -a --exclude 'models/polyhaven' --exclude 'hdri' --exclude 'art' --exclude 'textures/terrain_src' \
   "$ROOT/assets/" "$OUT/assets/"
 
 size=$(wc -c < "$OUT/pkg/antediluvia_bg.wasm" | tr -d ' ')

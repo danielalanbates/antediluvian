@@ -31,7 +31,7 @@ swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swif
 # Bundle assets, but exclude the heavy gathered CC0 sets not yet referenced
 # (photoscan models + HDRIs) so the app stays small. The grass PBR textures
 # (textures/pbr) ARE used by the terrain, so they're kept.
-rsync -a --exclude 'models/polyhaven' --exclude 'hdri' assets/ "$APP/Contents/Resources/assets/"
+rsync -a --exclude 'models/polyhaven' --exclude 'hdri' --exclude 'textures/terrain_src' assets/ "$APP/Contents/Resources/assets/"
 
 # NO_INSTALL=1 builds + signs dist/Antediluvia.app only (e.g. while the game
 # is running from /Applications). Otherwise the installed copy is archived to
