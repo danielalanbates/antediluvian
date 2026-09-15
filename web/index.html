@@ -3,6 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Antediluvia — a browser MMORPG. Explore the pre-flood world, fight mobs, and level up, right in your browser." />
+    <meta name="theme-color" content="#0a0e14" />
     <title>Antediluvia</title>
     <style>
       html, body {
@@ -61,6 +63,19 @@
       #hint { color: #55606d; font-size: 13px; max-width: 34em; }
       a { color: #00d9ff; }
       .fail { color: #ff6b6b; }
+      #retry {
+        display: none;
+        margin-top: 4px;
+        padding: 10px 28px;
+        font-size: 15px;
+        font-weight: 700;
+        color: #0a0e14;
+        background: #00d9ff;
+        border: none;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      #retry.show { display: inline-block; }
     </style>
   </head>
   <body>
@@ -72,6 +87,7 @@
         First load pulls the whole game engine, so give it a moment — it is
         cached afterwards. WASD to move, mouse to look, Enter to chat.
       </div>
+      <button id="retry" type="button">Try again</button>
     </div>
 
     <script type="module">
@@ -155,6 +171,11 @@
         document.getElementById('hint').innerHTML =
           'The game needs WebGL2 and a recent browser. ' +
           'If this keeps happening, <a href="/antediluvia">read the status page</a>.';
+        // A failed first load is often a transient network hiccup on the
+        // ~20 MB engine download; offer a retry instead of a dead page.
+        const retry = document.getElementById('retry');
+        retry.classList.add('show');
+        retry.addEventListener('click', () => location.reload(), { once: true });
       });
     </script>
   </body>

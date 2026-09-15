@@ -24,7 +24,32 @@ CRATE=antediluvia-client-bevy
 WASM="$ROOT/target/wasm32-unknown-unknown/wasm-release/${CRATE}.wasm"
 MAX_BYTES=$((25 * 1024 * 1024))
 
-export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$HOME/.cargo/bin:$PATH"
+have_dir() { [ -d "$1" ]; }
+# Toolchain lookup, in order: an explicit RUST_TOOLCHAIN_BIN, the rustup
+# toolchain matching this machine (macOS arm64 keeps Daniel's original path),
+# then whatever cargo/rustc is already on PATH. The old script hardcoded only
+# the macOS path, which silently did nothing on Linux builders.
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64|aarch64) MAC_TOOLCHAIN="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin" ;;
+  x86_64)       MAC_TOOLCHAIN="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin" ;;
+  *)            MAC_TOOLCHAIN="" ;;
+esac
+# Prepend in reverse priority order so the highest-priority dir ends up first
+# on PATH (a plain prepend loop would leave the lowest-priority dir first).
+for d in "$HOME/.cargo/bin" "$MAC_TOOLCHAIN" "${RUST_TOOLCHAIN_BIN:-}"; do
+  if [ -n "$d" ] && have_dir "$d"; then
+    case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac
+  fi
+done
+export PATH
+unset -f have_dir
+
+if ! rustc --print target-list 2>/dev/null | grep -q '^wasm32-unknown-unknown$'; then
+  echo "!! wasm32-unknown-unknown std not installed for $(rustc -vV | grep '^host' || echo '?')" >&2
+  echo "!! install it (needs a working rustup): rustup target add wasm32-unknown-unknown" >&2
+fi
+command -v cargo >/dev/null || { echo "FAIL: cargo not on PATH" >&2; exit 1; }
 
 echo "==> compiling wasm (size-optimized; this is slow)"
 cargo build -p "$CRATE" --target wasm32-unknown-unknown --profile wasm-release
