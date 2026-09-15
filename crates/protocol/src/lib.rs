@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -254,6 +254,11 @@ pub enum DevCmd {
     KillTarget,
     Godmode,
     TimeOfDay { t: f32 },
+    /// Grant raw XP (beta testing: level at a controlled pace).
+    GiveXp { amount: u32 },
+    /// Mark a quest done and pay its xp/gold/item rewards (beta testing:
+    /// skip quest chains to test later acts). Prereqs are not checked.
+    QuestComplete { id: String },
 }
 
 // ─── Client → Server ─────────────────────────────────────────────────────────

@@ -1736,28 +1736,8 @@ impl World {
                     }
                 }
             }
-            s.quests.remove(q.id);
-            s.quests_done.push(q.id.to_string());
-            s.gold += q.gold;
-            // Faction-variant quests pay reputation (C10).
-            if let Some(f) = crate::quests::quest_faction(q.id) {
-                let r = s.reputation.entry(f.to_string()).or_insert(0);
-                *r += 250 * rep_mult();
-            }
-            let mut text = format!("{npc}: It is done! (+{} xp, +{}g", q.xp, q.gold);
-            if let Some(item) = q.item {
-                if s.inventory.len() < 40 {
-                    s.inventory.push(item.to_string());
-                    text.push_str(&format!(", {item}"));
-                }
-            }
-            text.push(')');
-            // Theme chains hop acts (C08): tell the player where to go next.
-            if let Some(hint) = crate::quests::quest_next_hint(q.id) {
-                text.push_str(&format!(" {hint}"));
-            }
-            award_xp(e, q.xp);
-            return Ok(text);
+            let rewards = Self::grant_quest_completion(e, q);
+            return Ok(format!("{npc}: It is done! {rewards}"));
         }
 
         // 2) Accept: first not-yet-started quest whose prerequisite is done.
@@ -1785,6 +1765,63 @@ impl World {
         }
 
         Ok(format!("{npc}: You have done all I asked. Go with peace."))
+    }
+
+    /// Mark quest `q` done on the entity's sheet and pay its xp/gold/item
+    /// rewards (plus faction rep and chain hints). Shared by the NPC turn-in
+    /// path and the `QuestComplete` dev command.
+    fn grant_quest_completion(e: &mut Entity, q: &crate::quests::QuestDef) -> String {
+        let Some(s) = e.sheet.as_mut() else {
+            return "(no character sheet)".into();
+        };
+        s.quests.remove(q.id);
+        if !s.quests_done.iter().any(|d| d == q.id) {
+            s.quests_done.push(q.id.to_string());
+        }
+        s.gold += q.gold;
+        // Faction-variant quests pay reputation (C10).
+        if let Some(f) = crate::quests::quest_faction(q.id) {
+            let r = s.reputation.entry(f.to_string()).or_insert(0);
+            *r += 250 * rep_mult();
+        }
+        let mut text = format!("(+{} xp, +{}g", q.xp, q.gold);
+        if let Some(item) = q.item {
+            if s.inventory.len() < 40 {
+                s.inventory.push(item.to_string());
+                text.push_str(&format!(", {item}"));
+            }
+        }
+        text.push(')');
+        // Theme chains hop acts (C08): tell the player where to go next.
+        if let Some(hint) = crate::quests::quest_next_hint(q.id) {
+            text.push_str(&format!(" {hint}"));
+        }
+        award_xp(e, q.xp);
+        text
+    }
+
+    /// Grant raw XP (beta testing).
+    pub fn dev_give_xp(&mut self, act: Act, id: EntityId, amount: u32) -> String {
+        if let Some(e) = self.entity_mut(act, id) {
+            award_xp(e, amount);
+            format!("[dev] +{amount} xp")
+        } else {
+            "[dev] no player".into()
+        }
+    }
+
+    /// Mark a quest done and pay its rewards (beta testing quest chains).
+    /// Prereqs and progress are not checked — this is a testing shortcut.
+    pub fn dev_quest_complete(&mut self, act: Act, id: EntityId, quest_id: &str) -> String {
+        let Some(q) = crate::quests::quest(quest_id) else {
+            return format!("[dev] unknown quest '{quest_id}'");
+        };
+        if let Some(e) = self.entity_mut(act, id) {
+            let rewards = Self::grant_quest_completion(e, q);
+            format!("[dev] quest '{quest_id}' completed {rewards}")
+        } else {
+            "[dev] no player".into()
+        }
     }
 
     /// Toggle riding the Dire-Wolf (C06). Requires the horn item; refused
@@ -2857,15 +2894,15 @@ mod tests {
     #[test]
     fn party_shares_xp_and_quest_credit() {
         let mut w = World::new(42);
-        // Find an enemy in Eden.
-        let (foe_id, foe_pos, foe_xp) = {
+        // Find an enemy in Eden to anchor the fight.
+        let foe_pos = {
             let z = &w.zones[&Act::Eden];
             let e = z
                 .entities
                 .values()
                 .find(|e| e.kind == EntityKind::Enemy)
                 .expect("eden has enemies");
-            (e.id, e.pos, e.xp_value)
+            e.pos
         };
         let mut a = new_character("Slayer");
         a.x = foe_pos.x - 12.0;
@@ -2882,23 +2919,25 @@ mod tests {
         w.set_party(1, Some(99));
         w.set_party(2, Some(99));
 
-        // Hammer attacks until the enemy dies (bounded).
-        for _ in 0..200 {
-            if !w.zones[&Act::Eden].entities.contains_key(&foe_id) {
-                break;
-            }
+        // Hammer attacks until the first kill lands (bounded). The attacker
+        // targets the nearest hostile, which is not necessarily the sampled
+        // foe (HashMap order varies per run), so the assertions below are
+        // relative to XP actually awarded — asserting against the sampled
+        // foe's xp_value made this test flaky.
+        let xa0 = w.player_sheet(Act::Eden, pa).unwrap().xp;
+        let xb0 = w.player_sheet(Act::Eden, pb).unwrap().xp;
+        for _ in 0..400 {
             w.queue_attack(Act::Eden, pa);
             w.step();
+            if w.player_sheet(Act::Eden, pa).unwrap().xp > xa0 {
+                break;
+            }
         }
-        assert!(
-            !w.zones[&Act::Eden].entities.contains_key(&foe_id),
-            "enemy should die"
-        );
         let sa = w.player_sheet(Act::Eden, pa).unwrap();
         let sb = w.player_sheet(Act::Eden, pb).unwrap();
-        let share = (foe_xp / 2).max(1);
-        assert!(sa.xp >= share, "killer xp {} < share {share}", sa.xp);
-        assert!(sb.xp >= share, "buddy xp {} < share {share}", sb.xp);
+        assert!(sa.xp > xa0, "killer gained xp");
+        assert!(sb.xp > xb0, "buddy gained xp");
+        assert_eq!(sa.xp - xa0, sb.xp - xb0, "party split the kill XP evenly");
         // (No strict sum check — rested bonus can top up either share.)
         // Loot went only to the killer: buddy keeps just the starter kit.
         assert!(
@@ -3260,6 +3299,31 @@ mod tests {
         let s = w.player_sheet(Act::Eden, pid).unwrap();
         assert!(!s.inventory.iter().any(|i| i == "bronze_ingot"), "ingots consumed");
         assert!(s.inventory.iter().any(|i| i == "bronze_bracers"), "reward granted");
+    }
+
+    #[test]
+    fn dev_give_xp_levels_up() {
+        let mut w = World::new(77);
+        let pid = spawn_at(&mut w, 7, "Dev", 0.0, 0.0);
+        let before = w.player_sheet(Act::Eden, pid).unwrap().level;
+        let text = w.dev_give_xp(Act::Eden, pid, 5000);
+        assert!(text.contains("+5000 xp"), "{text}");
+        let after = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(after.level > before, "xp grant leveled the player");
+    }
+
+    #[test]
+    fn dev_quest_complete_pays_rewards_and_marks_done() {
+        let mut w = World::new(78);
+        let pid = spawn_at(&mut w, 8, "Dev", 0.0, 0.0);
+        let text = w.dev_quest_complete(Act::Eden, pid, "serpents_in_the_garden");
+        assert!(text.contains("completed"), "{text}");
+        let s = w.player_sheet(Act::Eden, pid).unwrap();
+        assert!(s.quests_done.iter().any(|q| q == "serpents_in_the_garden"));
+        assert!(s.inventory.iter().any(|i| i == "bronze_sword"), "quest item reward");
+        // Unknown quest ids are rejected cleanly, not panics.
+        let bad = w.dev_quest_complete(Act::Eden, pid, "no_such_quest");
+        assert!(bad.contains("unknown quest"), "{bad}");
     }
 
     #[test]
