@@ -143,8 +143,19 @@
         // Bevy runs its own loop from here and never returns control, so the
         // splash has to be dismissed by watching for the canvas rather than by
         // waiting on init().
+        //
+        // The try/catch below cannot see a hang: if init() never settles and
+        // never creates a canvas, the page would sit on "Starting…" forever.
+        // The watchdog turns that silent hang into a visible, retryable
+        // failure instead.
+        const watchdog = setTimeout(() => {
+          if (!document.querySelector('canvas')) {
+            fail('The game is taking too long to start.');
+          }
+        }, 90_000);
         const reveal = () => {
           if (document.querySelector('canvas')) {
+            clearTimeout(watchdog);
             bootEl.classList.add('done');
           } else {
             requestAnimationFrame(reveal);
@@ -163,11 +174,11 @@
         }
       }
 
-      boot().catch((err) => {
-        console.error(err);
+      const fail = (message) => {
+        console.error(message);
         setProgress(0);
         statusEl.className = 'fail';
-        setStatus(String(err && err.message ? err.message : err));
+        setStatus(message);
         document.getElementById('hint').innerHTML =
           'The game needs WebGL2 and a recent browser. ' +
           'If this keeps happening, <a href="/antediluvia">read the status page</a>.';
@@ -176,6 +187,10 @@
         const retry = document.getElementById('retry');
         retry.classList.add('show');
         retry.addEventListener('click', () => location.reload(), { once: true });
+      };
+
+      boot().catch((err) => {
+        fail(String(err && err.message ? err.message : err));
       });
     </script>
   </body>
