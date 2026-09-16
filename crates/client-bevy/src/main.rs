@@ -18,6 +18,7 @@
 
 mod atmosphere;
 mod audio;
+mod ambient;
 mod creaturegen;
 mod dressing;
 mod shots;
@@ -402,7 +403,7 @@ fn main() {
             ..default()
         })
         .add_event::<CombatEvt>()
-        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass))
+        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
         .add_systems(
             Update,
             (
@@ -434,6 +435,10 @@ fn main() {
                 update_atmosphere,
                 grass::update_grass,
                 grass::sway_grass,
+                ambient::update_ambient_critters,
+                ambient::animate_ambient_critters,
+                ambient::update_ambient_particles,
+                ambient::animate_ambient_particles,
                 animate_water,
                 player_jump,
                 ambient_system,
@@ -451,8 +456,10 @@ fn main() {
 struct ServerEnt(u64);
 
 /// The local player's entity (the one whose server id matches our own).
+/// `pub(crate)` so the ambient life pipeline (`ambient.rs`) can find the
+/// player without going through the snapshot system.
 #[derive(Component)]
-struct PlayerTag;
+pub(crate) struct PlayerTag;
 
 #[derive(Component)]
 struct MainCamera;

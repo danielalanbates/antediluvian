@@ -15,7 +15,10 @@ use bevy::render::render_asset::RenderAssetUsages;
 const CELL: f32 = 16.0;
 /// Grass ring radius around the player.
 const RADIUS: f32 = 210.0;
-const TUFTS_PER_CELL: usize = 4;
+/// Life pipeline (M1): 4 → 6 tufts per cell. Same one-batch-per-tuft cost as
+/// before, ~50% more cover — the near field is the cheapest place to buy
+/// visible density.
+const TUFTS_PER_CELL: usize = 6;
 
 fn h01(seed: u64) -> f32 {
     let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -228,7 +231,10 @@ pub fn sway_grass(time: Res<Time>, mut tufts: Query<(&GrassTuft, &mut Transform)
 // coordinates and act, so it is built once and reused as the player moves.
 
 const FAR_CHUNK: f32 = 120.0;
-const FAR_CELL: f32 = 20.0;
+/// Life pipeline (M1): 20 → 14 — ~2x the far tufts per chunk. One draw call
+/// per chunk either way; the sparser field is what made the meadow visibly
+/// end past the near ring.
+const FAR_CELL: f32 = 14.0;
 const FAR_RADIUS: f32 = 1000.0;
 
 #[derive(Resource, Default)]
