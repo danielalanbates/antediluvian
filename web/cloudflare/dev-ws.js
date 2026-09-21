@@ -2,7 +2,7 @@
  * Dev WebSocket proxy: wss://batesai.org/dev/ws -> the DEV shard on the Oracle VM.
  *
  * DRAFT — NOT APPLIED. Part of the private dev site (docs/beta/DEV_SITE.md):
- * pre-release builds are tested at batesai.org/dev/play before /play gets them.
+ * pre-release builds are tested at batesai.org/dev/play before /antediluvia gets them.
  *
  * To use: copy to the site repo as `functions/dev/ws.js`, alongside the
  * cookie-gate middleware (`functions/dev/_middleware.js`, see DEV_SITE.md),

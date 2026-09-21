@@ -18,8 +18,10 @@ go-ahead.
 ## Already live (reference — do not duplicate here)
 
 - `functions/ws.js` (sslip.io origin, working) — the thing `ws.js` here proposes to replace.
-- `public/_headers` cache rules for `/play/` (pkg immutable 1y, assets 1d, loader no-cache).
-- `/play/` itself — currently served from the site repo's `public/play/` (copy of `web/dist`).
+- Site repo `public/_headers` cache rules — the bundle's cache rules must cover
+  `/antediluvia/` (pkg immutable 1y, assets 1d, loader no-cache), not `/play/`.
+- The browser bundle's target is the site repo's `public/antediluvia/`
+  (copy of `web/dist`), served at `/antediluvia/`.
 
 ## Applying the production proxy change (needs Daniel)
 
@@ -27,7 +29,7 @@ go-ahead.
 2. Verify: `dig shard.batesai.org` answers `159.54.191.177`.
 3. Copy `ws.js` → site repo `functions/ws.js`.
 4. `npx wrangler pages deploy dist --project-name=website --branch=main` from the site checkout.
-5. Verify: `wss://batesai.org/ws` handshake reaches the shard (browser client loads and logs in at `/play/`).
+5. Verify: `wss://batesai.org/ws` handshake reaches the shard (browser client loads and logs in at `/antediluvia/`).
 6. Rollback: Pages dashboard → previous deployment; or restore the old `SHARD_ORIGIN` line (kept as a comment in `ws.js`) and redeploy.
 
 ## Applying the dev proxy (needs Daniel; bigger)
