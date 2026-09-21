@@ -1,7 +1,7 @@
 # Staging verification checklist — web play on batesai.org
 
-Run this gate **before every** `public/play/` update and **after every** site
-deploy that touches `/play/` or `/ws`. It caught a real crash on 2026-09-13;
+Run this gate **before every** `public/antediluvia/` update and **after every** site
+deploy that touches `/antediluvia/` or `/ws`. It caught a real crash on 2026-09-13;
 do not skip steps. Production shard (`:8787`) is never the test target.
 
 ## A. Build
@@ -28,15 +28,15 @@ do not skip steps. Production shard (`:8787`) is never the test target.
 
 ## C. Site deploy (Daniel's checkout + credentials)
 
-- [ ] Copy `web/dist/` → site checkout `public/play/`.
+- [ ] Copy `web/dist/` → site checkout `public/antediluvia/`.
 - [ ] Build the site; diff every page vs live with tags stripped —
-      **must be identical except `/play/`**.
+      **must be identical except `/antediluvia/`**.
 - [ ] `npx wrangler pages deploy dist --project-name=website --branch=main --commit-dirty=true`.
 - [ ] Archive the previous bundle (`web-play-<old-stamp>`).
 
 ## D. Live verification
 
-- [ ] Load `https://batesai.org/play/` fresh (cache-busted); loader reaches
+- [ ] Load `https://batesai.org/antediluvia/` fresh (cache-busted); loader reaches
       100%, canvas appears, no console errors.
 - [ ] Log in and play ≥60 s: movement, one combat event, chat send/receive.
 - [ ] Confirm `wss://batesai.org/ws` is the socket in devtools (same-origin,
@@ -46,7 +46,7 @@ do not skip steps. Production shard (`:8787`) is never the test target.
 ## E. Rollback (if anything above fails live)
 
 - [ ] Cloudflare Pages dashboard → roll back to the previous deployment
-      (restores both `/play/` and `/ws` in seconds).
+      (restores both `/antediluvia/` and `/ws` in seconds).
 - [ ] If the shard was restarted: restore `antediluvia-server.bak`,
       `sudo systemctl restart antediluvia`, confirm `systemctl is-active`.
 

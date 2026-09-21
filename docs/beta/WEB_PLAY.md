@@ -6,7 +6,7 @@ verification + edge-config drafts done; **no live changes made**.
 ## The architecture (already working — keep it)
 
 - **Client:** Bevy WASM, `scripts/build_web.sh` → `web/dist/`, copied into the
-  site repo as `public/play/` → served at `https://batesai.org/play/`.
+  site repo as `public/antediluvia/` → served at `https://batesai.org/antediluvia/`.
 - **TLS:** browsers open `wss://batesai.org/ws` (same-origin; `web/index.html`
   derives it from the page URL). Cloudflare terminates TLS and a Pages
   Function proxies the upgrade to the shard over plain HTTP — **the shard
@@ -20,11 +20,11 @@ verification + edge-config drafts done; **no live changes made**.
 
 ## What "playable" means (the gate)
 
-Every `/play/` update passes the web gate before the site deploys — see
+Every `/antediluvia/` update passes the web gate before the site deploys — see
 `docs/verification/web-play-staging-checklist.md`. The gate caught a real
 crash on 2026-09-13; it is the thing standing between a broken build and the
 live site. Daniel's standing rule: pre-release builds are tested **only** on
-the private dev site (`batesai.org/dev/play`, docs/beta/DEV_SITE.md); `/play`
+the private dev site (`batesai.org/dev/play`, docs/beta/DEV_SITE.md); `/antediluvia`
 gets a build only after it passes there.
 
 ## Step 1 — replace sslip.io with a real DNS record (the one change that matters)
@@ -38,12 +38,12 @@ Nothing else on the critical path is fragile; this is the whole of Step 1.
    `functions/ws.js`.
 4. `npx wrangler pages deploy dist --project-name=website --branch=main`
    from the site checkout (his credentials).
-5. Re-run the gate against live `/play/`.
+5. Re-run the gate against live `/antediluvia/`.
 
 Rollback: Pages deployment history → previous deployment (seconds). The old
 `SHARD_ORIGIN` is kept as a comment in the draft.
 
-## Step 2 — routine /play updates (no approvals beyond the deploy itself)
+## Step 2 — routine /antediluvia updates (no approvals beyond the deploy itself)
 
 1. Work on a feature branch; green test suite before merge.
 2. `scripts/build_web.sh` (≈30–40 min; wasm must stay under 25 MB — the
@@ -51,8 +51,8 @@ Rollback: Pages deployment history → previous deployment (seconds). The old
 3. Web gate on the checklist (fresh test server on `:8797` — **never the live
    shard**, test characters would land in production — + `python3 -m http.server`
    on `web/dist`; headless Chromium ≥180 s logged in; fail on wasm panic).
-4. Copy `web/dist` → site checkout `public/play/`, build site, diff every
-   page vs live (must be identical except `/play/`), deploy, re-run gate live.
+4. Copy `web/dist` → site checkout `public/antediluvia/`, build site, diff every
+   page vs live (must be identical except `/antediluvia/`), deploy, re-run gate live.
 5. Archive the previous bundle (`web-play-<stamp>` convention).
 
 ## Step 3 — shard updates (his VM, his go-ahead, every time)
@@ -64,7 +64,7 @@ Rollback: Pages deployment history → previous deployment (seconds). The old
 - Health check: `systemctl is-active`, journal shows `listening on ws://`,
   then a real handshake through `wss://batesai.org/ws`.
 - **Protocol version:** bump `PROTOCOL_VERSION` only on wire-incompatible
-  changes, and never restart the shard with a protocol the live `/play`
+  changes, and never restart the shard with a protocol the live `/antediluvia`
   client can't speak (deploy the client first or keep backward compat).
 - Rollback: keep the previous release binary as `antediluvia-server.bak`
   before install; `systemctl restart` reverts in seconds.
@@ -91,7 +91,7 @@ Rollback: Pages deployment history → previous deployment (seconds). The old
   opening the VCN security list alone is not enough. Needed: 22 (deploy),
   80 (WS proxy target). 443 is not needed (no cert on the VM).
 - **sslip.io on the critical path** until Step 1 lands.
-- **Pages deploy blast radius:** every site deploy re-ships `/play` — the
+- **Pages deploy blast radius:** every site deploy re-ships `/antediluvia` — the
   page-diff gate keeps marketing deploys from breaking the game.
 - **DNS/registrar unverifiable from this sandbox** (stubbed resolver) —
   confirm Cloudflare DNS ownership in the dashboard before Step 1.
