@@ -9,6 +9,8 @@ use antediluvia_protocol::{Act, CharacterSheet, Class, EntityId, EntityKind, Ent
 use glam::Vec2;
 use std::collections::HashMap;
 
+use crate::aoi::{self, AoiGrid};
+
 pub const TICK_HZ: u64 = 20;
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 pub use antediluvia_protocol::WORLD_BOUNDS;
@@ -373,6 +375,10 @@ pub struct Entity {
     pub owner: Option<u64>,
     /// For a player, its persistent sheet (kept in sync so we can save it).
     pub sheet: Option<CharacterSheet>,
+    /// AoI grid cell this entity is currently filed in (see `crate::aoi`).
+    /// The sim keeps it in sync on spawn, despawn, and cell-boundary
+    /// crossings; it is never read for gameplay, only for visibility queries.
+    pub cell: u32,
 }
 
 impl Entity {
@@ -423,6 +429,72 @@ pub struct Zone {
     pub tick: u64,
     /// Where players arriving in this zone spawn.
     pub entry: Vec2,
+    /// Spatial AoI grid: every live entity is filed in exactly one cell.
+    /// Maintained incrementally — spawns/despawns file through
+    /// `insert_entity`/`remove_entity`, and cell-boundary crossings are
+    /// refiled by the pass at the end of `step_zone`.
+    pub grid: AoiGrid,
+}
+
+impl Zone {
+    /// Insert an entity, filing it in the AoI grid.
+    fn insert_entity(&mut self, id: EntityId, mut e: Entity) {
+        e.cell = aoi::cell_of(e.pos.x, e.pos.y) as u32;
+        self.grid.insert(id, e.cell as usize);
+        self.entities.insert(id, e);
+    }
+
+    /// Remove an entity, unfiling it from the AoI grid.
+    fn remove_entity(&mut self, id: &EntityId) -> Option<Entity> {
+        let e = self.entities.remove(id)?;
+        self.grid.remove(*id, e.cell as usize);
+        Some(e)
+    }
+
+    /// Refile one entity after its position changed outside the sim tick
+    /// (dev teleport, test setup). Ordinary sim movement is covered by the
+    /// refile pass at the end of `step_zone`.
+    fn refile_entity(&mut self, id: EntityId) {
+        let (pos, old) = match self.entities.get(&id) {
+            Some(e) => (e.pos, e.cell as usize),
+            None => return,
+        };
+        let new = aoi::cell_of(pos.x, pos.y);
+        if new != old {
+            self.grid.move_entity(id, old, new);
+            if let Some(e) = self.entities.get_mut(&id) {
+                e.cell = new as u32;
+            }
+        }
+    }
+
+    /// Rebuild the whole grid from current entity positions (zone boot).
+    fn rebuild_grid(&mut self) {
+        self.grid = AoiGrid::new();
+        for (id, e) in self.entities.iter_mut() {
+            e.cell = aoi::cell_of(e.pos.x, e.pos.y) as u32;
+            self.grid.insert(*id, e.cell as usize);
+        }
+    }
+
+    /// Debug invariant: every entity filed exactly once, in the cell its
+    /// position maps to.
+    #[cfg(test)]
+    fn check_grid(&self) {
+        let mut filed = 0usize;
+        for c in 0..aoi::GRID_CELLS {
+            filed += self.grid.cell_entities(c).len();
+        }
+        assert_eq!(filed, self.entities.len(), "grid/entity count mismatch");
+        for (id, e) in &self.entities {
+            let c = e.cell as usize;
+            assert_eq!(aoi::cell_of(e.pos.x, e.pos.y), c, "entity {id} cell stale");
+            assert!(
+                self.grid.cell_entities(c).contains(id),
+                "entity {id} missing from its cell"
+            );
+        }
+    }
 }
 
 pub struct World {
@@ -468,6 +540,7 @@ impl World {
                 entities: HashMap::new(),
                 tick: 0,
                 entry: Vec2::ZERO,
+                grid: AoiGrid::new(),
             };
             w.populate_zone(&mut zone);
             w.zones.insert(act, zone);
@@ -624,6 +697,8 @@ impl World {
         boss.xp_value *= 5;
         boss.aggro_range = 300.0;
         zone.entities.insert(id, boss);
+        // File every boot entity in the AoI grid now that the zone is populated.
+        zone.rebuild_grid();
     }
 
     /// Spawn a player entity into its zone from a character sheet. Returns the
@@ -636,6 +711,7 @@ impl World {
             id,
             kind: EntityKind::Player,
             pos,
+            cell: aoi::cell_of(pos.x, pos.y) as u32,
             rot: 0.0,
             health: sheet.health,
             max_health: sheet.max_health,
@@ -671,14 +747,14 @@ impl World {
             owner: Some(owner),
             sheet: Some(sheet),
         };
-        self.zones.get_mut(&act).unwrap().entities.insert(id, ent);
+        self.zones.get_mut(&act).unwrap().insert_entity(id, ent);
         id
     }
 
     pub fn remove_player(&mut self, act: Act, id: EntityId) -> Option<CharacterSheet> {
         self.zones
             .get_mut(&act)
-            .and_then(|z| z.entities.remove(&id))
+            .and_then(|z| z.remove_entity(&id))
             .and_then(|e| e.sheet)
     }
 
@@ -1255,7 +1331,7 @@ impl World {
                 }
                 _ => continue,
             };
-            zone.entities.remove(&target_id);
+            zone.remove_entity(&target_id);
 
             // Respawn a replacement elsewhere so the zone stays populated
             // (enemies never respawn inside the inn's safe ring).
@@ -1272,7 +1348,7 @@ impl World {
                     // Bestiary species (incl. names that happen to end in
                     // "_alpha") respawn as themselves and drop bestiary loot.
                     if let Some(def) = crate::mobs::mob_by_tag(tag) {
-                        zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+                        zone.insert_entity(nid, make_enemy(nid, pos, tag, act));
                         let reward = if def.drops.is_empty() {
                             format!("{tag}_trophy")
                         } else {
@@ -1286,7 +1362,7 @@ impl World {
                         let home = origin.unwrap_or(pos);
                         let mut boss = make_enemy(nid, home + rng.point(60.0), tag, act);
                         boss.tag = Some(tag.to_string());
-                        zone.entities.insert(nid, boss);
+                        zone.insert_entity(nid, boss);
                         (res.to_string(), xp_value)
                     } else if let Some(base) = tag.strip_suffix("_alpha") {
                         // The act boss respawns as a boss and drops a rare.
@@ -1296,10 +1372,10 @@ impl World {
                         boss.health = boss.max_health;
                         boss.damage *= 2;
                         boss.xp_value *= 5;
-                        zone.entities.insert(nid, boss);
+                        zone.insert_entity(nid, boss);
                         ("thick_hide".to_string(), xp_value)
                     } else {
-                        zone.entities.insert(nid, make_enemy(nid, pos, tag, act));
+                        zone.insert_entity(nid, make_enemy(nid, pos, tag, act));
                         (format!("{tag}_trophy"), xp_value)
                     }
                 }
@@ -1308,10 +1384,10 @@ impl World {
                     if let Some(res) = tag.strip_prefix("ore_") {
                         // Cave ore (C09): respawns inside its cave pocket.
                         let home = origin.unwrap_or(pos);
-                        zone.entities.insert(nid, make_resource(nid, home + rng.point(120.0), tag));
+                        zone.insert_entity(nid, make_resource(nid, home + rng.point(120.0), tag));
                         (res.to_string(), 0)
                     } else {
-                        zone.entities.insert(nid, make_resource(nid, pos, tag));
+                        zone.insert_entity(nid, make_resource(nid, pos, tag));
                         let material = if tag == "rock" { "stone" } else { "wood" };
                         (material.to_string(), 0)
                     }
@@ -1470,6 +1546,21 @@ impl World {
             }
         }
 
+        // AoI grid maintenance: refile entities that crossed a cell boundary
+        // this tick. This is a linear scan, but each entity costs only a
+        // cell-index computation plus a branch when it stayed put — real work
+        // happens solely for entities that actually moved cells, i.e.
+        // O(moved entities), never O(players × entities). (Spawns/despawns
+        // file through insert_entity/remove_entity; direct position sets
+        // outside the tick refile via refile_entity.)
+        for e in zone.entities.values_mut() {
+            let c = aoi::cell_of(e.pos.x, e.pos.y);
+            if c != e.cell as usize {
+                zone.grid.move_entity(e.id, e.cell as usize, c);
+                e.cell = c as u32;
+            }
+        }
+
         // Restore rng + counter into self.
         self.rng = std::mem::replace(rng, Rng::new(1));
         self.next_id = next_id;
@@ -1587,56 +1678,73 @@ impl World {
 
     /// Use a consumable from the inventory.
     pub fn use_item(&mut self, act: Act, id: EntityId, item: &str) -> Result<String, String> {
-        let e = self.entity_mut(act, id).ok_or("no such player")?;
-        let s = e.sheet.as_mut().ok_or("no sheet")?;
-        let idx = s.inventory.iter().position(|i| i == item).ok_or("You don't have that.")?;
-        match item {
-            "bread" => {
-                s.inventory.remove(idx);
-                e.health = (e.health + 40).min(e.max_health);
-                s.health = e.health;
-                Ok("You eat the bread and recover 40 health.".into())
-            }
-            // Hearthstone (C16 WoW parity): return to the zone inn, 30 min cd.
-            "hearthstone" => {
-                let cd = e.cooldowns.get("hearthstone").copied().unwrap_or(0.0);
-                if cd > 0.0 {
-                    return Err(format!("Hearthstone is on cooldown ({:.0}s).", cd));
+        // `moved` tracks cross-map teleports (hearthstone) so the AoI grid
+        // can refile the entity immediately after the borrow ends.
+        let (result, moved) = {
+            let e = self.entity_mut(act, id).ok_or("no such player")?;
+            let s = e.sheet.as_mut().ok_or("no sheet")?;
+            let idx = s
+                .inventory
+                .iter()
+                .position(|i| i == item)
+                .ok_or("You don't have that.")?;
+            let mut moved = false;
+            let result = match item {
+                "bread" => {
+                    s.inventory.remove(idx);
+                    e.health = (e.health + 40).min(e.max_health);
+                    s.health = e.health;
+                    Ok("You eat the bread and recover 40 health.".into())
                 }
-                e.cooldowns.insert("hearthstone".into(), 1800.0);
-                let entry = Vec2::ZERO; // every act's inn sits at the entry
-                e.pos = entry;
-                Ok("You focus on the inn's hearth and are carried home.".into())
+                // Hearthstone (C16 WoW parity): return to the zone inn, 30 min cd.
+                "hearthstone" => {
+                    let cd = e.cooldowns.get("hearthstone").copied().unwrap_or(0.0);
+                    if cd > 0.0 {
+                        return Err(format!("Hearthstone is on cooldown ({:.0}s).", cd));
+                    }
+                    e.cooldowns.insert("hearthstone".into(), 1800.0);
+                    let entry = Vec2::ZERO; // every act's inn sits at the entry
+                    e.pos = entry;
+                    moved = true;
+                    Ok("You focus on the inn's hearth and are carried home.".into())
+                }
+                "fruit" => {
+                    s.inventory.remove(idx);
+                    s.wakefulness = (s.wakefulness + 10.0).min(100.0);
+                    Ok("You eat the fruit and feel slightly more awake.".into())
+                }
+                "golden_apple" => {
+                    s.inventory.remove(idx);
+                    s.wakefulness = 100.0;
+                    Ok("You consume the Golden Apple. Your exhaustion completely vanishes!".into())
+                }
+                "energy_drink" => {
+                    s.inventory.remove(idx);
+                    s.wakefulness = (s.wakefulness + 50.0).min(100.0);
+                    Ok("You chug the premium energy drink and feel a massive surge of stamina.".into())
+                }
+                "bitter_bread" => {
+                    s.inventory.remove(idx);
+                    e.health = (e.health + 25).min(e.max_health);
+                    s.health = e.health;
+                    Ok("You choke down the bitter bread and recover 25 health.".into())
+                }
+                "healing_potion" => {
+                    s.inventory.remove(idx);
+                    e.health = (e.health + 60).min(e.max_health);
+                    s.health = e.health;
+                    Ok("You drink the healing potion and recover 60 health.".into())
+                }
+                _ => Err("You can't use that.".into()),
+            };
+            (result, moved)
+        };
+        if moved {
+            if let Some(z) = self.zones.get_mut(&act) {
+                z.refile_entity(id);
             }
-            "fruit" => {
-                s.inventory.remove(idx);
-                s.wakefulness = (s.wakefulness + 10.0).min(100.0);
-                Ok("You eat the fruit and feel slightly more awake.".into())
-            }
-            "golden_apple" => {
-                s.inventory.remove(idx);
-                s.wakefulness = 100.0;
-                Ok("You consume the Golden Apple. Your exhaustion completely vanishes!".into())
-            }
-            "energy_drink" => {
-                s.inventory.remove(idx);
-                s.wakefulness = (s.wakefulness + 50.0).min(100.0);
-                Ok("You chug the premium energy drink and feel a massive surge of stamina.".into())
-            }
-            "bitter_bread" => {
-                s.inventory.remove(idx);
-                e.health = (e.health + 25).min(e.max_health);
-                s.health = e.health;
-                Ok("You choke down the bitter bread and recover 25 health.".into())
-            }
-            "healing_potion" => {
-                s.inventory.remove(idx);
-                e.health = (e.health + 60).min(e.max_health);
-                s.health = e.health;
-                Ok("You drink the healing potion and recover 60 health.".into())
-            }
-            _ => Err("You can't use that.".into()),
         }
+        result
     }
 
     /// Equip gear from the inventory into its slot, swapping out the old piece.
@@ -1851,7 +1959,7 @@ impl World {
         let chance = (0.4 + 0.1 * (my_tier - mob_tier).max(0) as f32).min(0.95);
         if self.rng.range(0.0, 1.0) <= chance {
             let z = self.zones.get_mut(&act).unwrap();
-            z.entities.remove(&target);
+            z.remove_entity(&target);
             let e = z.entities.get_mut(&id).unwrap();
             let s = e.sheet.as_mut().unwrap();
             let item = format!("mount:{ttag}");
@@ -2177,12 +2285,22 @@ impl World {
 
     pub fn dev_teleport(&mut self, act: Act, id: EntityId, x: f32, y: f32) -> String {
         let b = antediluvia_protocol::WORLD_BOUNDS - 10.0;
-        match self.entity_mut(act, id) {
+        let found = match self.entity_mut(act, id) {
             Some(e) => {
                 e.pos = Vec2::new(x.clamp(-b, b), y.clamp(-b, b));
-                format!("[dev] teleported to ({x:.0},{y:.0})")
+                true
             }
-            None => "[dev] teleport failed: entity not in act".into(),
+            None => false,
+        };
+        if found {
+            // A teleport can jump many cells at once — refile immediately so
+            // the AoI grid never lags the entity's real position.
+            if let Some(z) = self.zones.get_mut(&act) {
+                z.refile_entity(id);
+            }
+            format!("[dev] teleported to ({x:.0},{y:.0})")
+        } else {
+            "[dev] teleport failed: entity not in act".into()
         }
     }
 
@@ -2226,7 +2344,7 @@ impl World {
         let Some(pos) = self.player_pos(act, id) else { return "[dev] no player".into() };
         let mid = self.alloc_id();
         if let Some(z) = self.zones.get_mut(&act) {
-            z.entities.insert(mid, make_enemy(mid, pos + Vec2::new(80.0, 0.0), tag, act));
+            z.insert_entity(mid, make_enemy(mid, pos + Vec2::new(80.0, 0.0), tag, act));
         }
         format!("[dev] spawned {tag}")
     }
@@ -2394,6 +2512,41 @@ impl World {
             .collect();
         (z.tick, ents)
     }
+
+    /// Per-client visibility set: ids of every entity within `radius` of
+    /// `player` in `act`. This is the grid-accelerated replacement for the
+    /// old per-client scan of all zone entities — only the cells intersecting
+    /// the AoI circle are visited, then an exact distance test is applied.
+    /// The player's own entity is always included (it sits at the circle's
+    /// center). Unknown player → empty.
+    ///
+    /// The server will call this once per client per snapshot; the wire
+    /// protocol and snapshot format are unchanged in this milestone.
+    pub fn visible_entities(&self, act: Act, player: EntityId, radius: f32) -> Vec<EntityId> {
+        let Some(z) = self.zones.get(&act) else {
+            return Vec::new();
+        };
+        let Some(pe) = z.entities.get(&player) else {
+            return Vec::new();
+        };
+        let center = pe.pos;
+        let radius = radius.max(0.0);
+        let r2 = radius * radius;
+        let mut out = Vec::new();
+        for c in aoi::cells_in_radius(center, radius) {
+            for id in z.grid.cell_entities(c) {
+                // Filed ids are always live, but look the entity up anyway:
+                // the cell only guarantees the rectangle intersects the
+                // circle, so the exact distance test still applies.
+                if let Some(e) = z.entities.get(id) {
+                    if e.pos.distance_squared(center) <= r2 {
+                        out.push(*id);
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Bump and return the next entity id given a direct borrow of the counter
@@ -2528,6 +2681,7 @@ fn make_enemy_raw(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         id,
         kind: EntityKind::Enemy,
         pos,
+        cell: aoi::cell_of(pos.x, pos.y) as u32,
         rot: 0.0,
         health: max_health,
         max_health,
@@ -2569,6 +2723,7 @@ fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
         id,
         kind: EntityKind::Npc,
         pos,
+        cell: aoi::cell_of(pos.x, pos.y) as u32,
         rot: 0.0,
         health: 1000,
         max_health: 1000,
@@ -2610,6 +2765,7 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         id,
         kind: EntityKind::Wildlife,
         pos,
+        cell: aoi::cell_of(pos.x, pos.y) as u32,
         rot: 0.0,
         health: 20,
         max_health: 20,
@@ -2651,6 +2807,7 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         id,
         kind: EntityKind::Resource,
         pos,
+        cell: aoi::cell_of(pos.x, pos.y) as u32,
         rot: 0.0,
         health: 1,
         max_health: 1,
@@ -2996,6 +3153,280 @@ mod tests {
         sheet.x = x;
         sheet.y = y;
         w.spawn_player(owner, sheet)
+    }
+
+    // ─── AoI grid (1k-player architecture, milestone 1) ─────────────────────
+
+    /// Scatter `n` extra enemies uniformly over the map so perf tests have a
+    /// crowded zone. Deterministic (LCG) — no extra dev-dependencies.
+    fn crowd_zone(w: &mut World, act: Act, n: usize) {
+        let mut s: u64 = 0x9E3779B97F4A7C15;
+        let mut rnd = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 32) as f32) / (u32::MAX as f32) // [0, 1): high 32 bits
+        };
+        // Allocate ids before borrowing the zone mutably.
+        let ids: Vec<EntityId> = (0..n).map(|_| w.alloc_id()).collect();
+        let z = w.zones.get_mut(&act).unwrap();
+        for id in ids {
+            let pos = Vec2::new(
+                (rnd() * 2.0 - 1.0) * (WORLD_BOUNDS - 20.0),
+                (rnd() * 2.0 - 1.0) * (WORLD_BOUNDS - 20.0),
+            );
+            z.insert_entity(id, make_enemy(id, pos, "serpent", act));
+        }
+    }
+
+    /// Park `n` stationary resource nodes in the far corner of the map
+    /// (around (-3000, -3000)), far outside a 1400 AoI centered at the
+    /// origin. Used to show query cost follows local density, not the zone
+    /// total. Deterministic (LCG).
+    fn crowd_far_corner(w: &mut World, act: Act, n: usize) {
+        let mut s: u64 = 0x123456789ABCDEF;
+        let mut rnd = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 32) as f32) / (u32::MAX as f32) // [0, 1)
+        };
+        let ids: Vec<EntityId> = (0..n).map(|_| w.alloc_id()).collect();
+        let z = w.zones.get_mut(&act).unwrap();
+        for id in ids {
+            let pos = Vec2::new(-3000.0 + rnd() * 600.0, -3000.0 + rnd() * 600.0);
+            z.insert_entity(id, make_resource(id, pos, "ore_copper"));
+        }
+    }
+
+    /// Time one client's visibility query two ways: the AoI grid
+    /// (`visible_entities`) and a fair brute-force baseline (scan every
+    /// entity, exact distance test, collect ids — no serialization, which
+    /// would only flatter the grid). Returns (grid_us, scan_us) per query.
+    fn time_queries(w: &World, act: Act, p: EntityId, radius: f32) -> (f64, f64) {
+        let center = w.zones[&act].entities[&p].pos;
+        let r2 = radius * radius;
+        let iters = 200;
+        let t0 = std::time::Instant::now();
+        for _ in 0..iters {
+            let _ = w.visible_entities(act, p, radius);
+        }
+        let grid_us = t0.elapsed().as_micros() as f64 / iters as f64;
+        let t0 = std::time::Instant::now();
+        for _ in 0..iters {
+            let z = &w.zones[&act];
+            let mut ids = Vec::new();
+            for e in z.entities.values() {
+                if e.pos.distance_squared(center) <= r2 {
+                    ids.push(e.id);
+                }
+            }
+            let _ = ids;
+        }
+        let scan_us = t0.elapsed().as_micros() as f64 / iters as f64;
+        (grid_us, scan_us)
+    }
+
+    #[test]
+    fn aoi_boot_grid_is_consistent() {
+        let w = World::new(42);
+        for act in Act::ALL {
+            w.zones[&act].check_grid();
+        }
+    }
+
+    #[test]
+    fn aoi_visibility_neighbor_cells() {
+        let mut w = World::new(42);
+        // Player at the center of cell (7,7).
+        let p1 = spawn_at(&mut w, 1, "Watcher", 240.0, 240.0);
+        // Neighbor cell (8,7), 400 units east — inside a 600 AoI.
+        let p2 = spawn_at(&mut w, 2, "Neighbor", 640.0, 240.0);
+        // Two cells east (cell 9), 1200 units away — outside the 600 AoI.
+        let p3 = spawn_at(&mut w, 3, "FarAway", 1440.0, 240.0);
+        // Three cells east (cell 10), 1536 units away — far outside.
+        let p4 = spawn_at(&mut w, 4, "FarFarAway", 1776.0, 240.0);
+        w.step(); // settle the grid
+        w.zones[&Act::Eden].check_grid();
+
+        let vis = w.visible_entities(Act::Eden, p1, 600.0);
+        assert!(vis.contains(&p1), "player should always see itself");
+        assert!(
+            vis.contains(&p2),
+            "neighbor-cell entity within radius must be visible"
+        );
+        assert!(
+            !vis.contains(&p3),
+            "entity 2 cells away must not be visible"
+        );
+        assert!(
+            !vis.contains(&p4),
+            "entity 3 cells away must not be visible"
+        );
+
+        // The grid query must agree exactly with the old brute-force scan.
+        let center = w.zones[&Act::Eden].entities[&p1].pos;
+        let (tick, brute) = w.zone_snapshot_around(Act::Eden, center, 600.0);
+        let mut a: Vec<EntityId> = brute.iter().map(|e| e.id).collect();
+        let mut b = vis.clone();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(
+            a, b,
+            "grid visibility disagrees with brute force (tick {tick})"
+        );
+
+        // A 1400 AoI (the default client radius) sees the far entity too.
+        let vis = w.visible_entities(Act::Eden, p1, 1400.0);
+        assert!(vis.contains(&p3), "1400 AoI should reach 2 cells away");
+        // And a 1600 AoI reaches the 3-cells-away entity: the grid does not
+        // lose distant entities, it just culls them by radius.
+        let vis = w.visible_entities(Act::Eden, p1, 1600.0);
+        assert!(vis.contains(&p4), "1600 AoI should reach 3 cells away");
+    }
+
+    #[test]
+    fn aoi_moving_entity_updates_cells() {
+        let mut w = World::new(42);
+        let p = spawn_at(&mut w, 1, "Walker", -60.0, 0.0);
+        w.step();
+        let before = w.zones[&Act::Eden].entities[&p].cell;
+        assert_eq!(before as usize, crate::aoi::cell_of(-60.0, 0.0));
+
+        // Drive the entity with a real move intent for 3 seconds; whatever
+        // the sim does with it, the filed cell must match its live position.
+        for _ in 0..(TICK_HZ * 3) {
+            w.set_intent(Act::Eden, p, Vec2::X);
+            w.step();
+        }
+        w.set_intent(Act::Eden, p, Vec2::ZERO);
+        w.zones[&Act::Eden].check_grid();
+        {
+            let e = &w.zones[&Act::Eden].entities[&p];
+            assert_eq!(
+                e.cell as usize,
+                crate::aoi::cell_of(e.pos.x, e.pos.y),
+                "filed cell must match position after intent-driven movement"
+            );
+        }
+
+        // A direct position write across the map (what dev tools and tests
+        // do) is picked up by the next tick's refile pass.
+        w.zones
+            .get_mut(&Act::Eden)
+            .unwrap()
+            .entities
+            .get_mut(&p)
+            .unwrap()
+            .pos = Vec2::new(-3000.0, 2000.0);
+        w.step();
+        let after = w.zones[&Act::Eden].entities[&p].cell;
+        assert_ne!(before, after, "cross-map move must change the filed cell");
+        assert_eq!(after as usize, crate::aoi::cell_of(-3000.0, 2000.0));
+        w.zones[&Act::Eden].check_grid();
+    }
+
+    #[test]
+    fn aoi_teleport_refiles_immediately() {
+        let mut w = World::new(42);
+        let p = spawn_at(&mut w, 1, "Hopper", -3000.0, -3000.0);
+        w.step();
+        let from = w.zones[&Act::Eden].entities[&p].cell;
+        w.dev_teleport(Act::Eden, p, 3000.0, 3000.0);
+        let to = w.zones[&Act::Eden].entities[&p].cell;
+        assert_ne!(from, to, "teleport across the map must refile the cell");
+        w.zones[&Act::Eden].check_grid();
+        // No step() ran since the teleport: the grid is already correct.
+        let vis = w.visible_entities(Act::Eden, p, 100.0);
+        assert!(vis.contains(&p));
+    }
+
+    #[test]
+    fn aoi_matches_brute_force_after_chaos() {
+        let mut w = World::new(7);
+        crowd_zone(&mut w, Act::Eden, 300);
+        let p1 = spawn_at(&mut w, 1, "ChaosA", 0.0, 0.0);
+        let p2 = spawn_at(&mut w, 2, "ChaosB", -2000.0, 1500.0);
+        // Random walk + combat for 5 seconds; kills respawn replacements.
+        let mut s: u64 = 12345;
+        let mut rnd = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 32) as f32) / (u32::MAX as f32)
+        };
+        for _ in 0..(TICK_HZ * 5) {
+            for (p, seed) in [(p1, 0.0), (p2, 2.1)] {
+                let a = rnd() * std::f32::consts::TAU + seed;
+                w.set_intent(Act::Eden, p, Vec2::new(a.cos(), a.sin()));
+            }
+            w.step();
+        }
+        w.zones[&Act::Eden].check_grid();
+        for (p, radius) in [(p1, 1400.0), (p2, 700.0)] {
+            let center = w.zones[&Act::Eden].entities[&p].pos;
+            let mut a: Vec<EntityId> = w
+                .zone_snapshot_around(Act::Eden, center, radius)
+                .1
+                .iter()
+                .map(|e| e.id)
+                .collect();
+            let mut b = w.visible_entities(Act::Eden, p, radius);
+            a.sort_unstable();
+            b.sort_unstable();
+            assert_eq!(
+                a, b,
+                "grid/brute-force mismatch for player {p} at radius {radius}"
+            );
+        }
+        // Unknown player / unknown act → empty, no panic.
+        assert!(w.visible_entities(Act::Eden, 999_999, 1400.0).is_empty());
+    }
+
+    #[test]
+    fn aoi_perf_sanity() {
+        // Part 1: the 20 Hz tick with ~1k AI-driven entities must stay well
+        // under the 50 ms budget.
+        let mut w = World::new(42);
+        crowd_zone(&mut w, Act::Eden, 1000);
+        let n = w.zones[&Act::Eden].entities.len();
+        assert!(n >= 1000, "expected ~1k entities, got {n}");
+        let _bench = spawn_at(&mut w, 1, "Bench", 0.0, 0.0);
+        for _ in 0..10 {
+            w.step();
+        }
+        let t0 = std::time::Instant::now();
+        let ticks = 60;
+        for _ in 0..ticks {
+            w.step();
+        }
+        let tick_us = t0.elapsed().as_micros() as f64 / ticks as f64;
+        eprintln!("aoi perf: {n} entities | tick {tick_us:.0}µs (20 Hz budget 50_000µs)");
+        assert!(tick_us < 50_000.0, "tick budget blown: {tick_us:.0}µs");
+
+        // Part 2: a visibility query's cost follows local density, not the
+        // zone total. Fresh world (uniform scatter, no AI clustering yet).
+        let mut w = World::new(7);
+        crowd_zone(&mut w, Act::Eden, 1000);
+        let p = spawn_at(&mut w, 2, "Bench", 0.0, 0.0);
+        let (grid_1k, scan_1k) = time_queries(&w, Act::Eden, p, 1400.0);
+        // Park 9000 more entities in the far corner: the player's local
+        // density is unchanged, but the zone total grows ~10x.
+        crowd_far_corner(&mut w, Act::Eden, 9000);
+        let n2 = w.zones[&Act::Eden].entities.len();
+        let (grid_10k, scan_10k) = time_queries(&w, Act::Eden, p, 1400.0);
+        eprintln!(
+            "aoi perf: query scaling | {n} entities: grid {grid_1k:.1}µs scan {scan_1k:.1}µs | \
+             {n2} entities: grid {grid_10k:.1}µs scan {scan_10k:.1}µs"
+        );
+        assert!(
+            grid_10k <= grid_1k * 2.0,
+            "grid query should not follow the zone total ({grid_1k:.1}µs -> {grid_10k:.1}µs)"
+        );
+        assert!(
+            scan_10k >= scan_1k * 3.0,
+            "brute-force scan should follow the zone total ({scan_1k:.1}µs -> {scan_10k:.1}µs)"
+        );
     }
 
     #[test]
@@ -3450,7 +3881,7 @@ mod tests {
         e.state = AiState::Static; // hold still for the test
         e.aggro_range = 0.0;
         e.speed = 0.0;
-        z.entities.insert(id, e);
+        z.insert_entity(id, e);
         (id, Box::leak(def.tag.clone().into_boxed_str()))
     }
 
