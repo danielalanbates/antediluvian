@@ -120,6 +120,9 @@ fn to_srgb8(c: Vec3) -> [u8; 4] {
 }
 
 fn cube_image(size: u32, levels: u32, f: impl Fn(Vec3, f32) -> Vec3) -> Image {
+    // Layer-major tile order (face 0: mips 0..n, then face 1, …): the layout
+    // `wgpu::util::TextureDataOrder::LayerMajor` — Bevy's upload default —
+    // reads back.
     let mut data = Vec::new();
     for face in 0..6 {
         for level in 0..levels {
@@ -134,14 +137,22 @@ fn cube_image(size: u32, levels: u32, f: impl Fn(Vec3, f32) -> Vec3) -> Image {
             }
         }
     }
-    let mut img = Image::new(
-        Extent3d { width: size, height: size, depth_or_array_layers: 6 },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    let expect: usize = (0..levels)
+        .map(|l| (size >> l).max(1) as usize * (size >> l).max(1) as usize * 4)
+        .sum::<usize>()
+        * 6;
+    debug_assert_eq!(data.len(), expect, "cubemap mip chain mis-sized");
+    // `Image::new` validates the buffer against a SINGLE mip level (its
+    // descriptor starts at `mip_level_count: 1`), so passing the full chain
+    // panicked in debug/test builds even though the descriptor was then set
+    // to `levels` — the env maps declared 8 mip levels but could only ever
+    // carry 1 through the constructor. Build the struct directly instead.
+    let mut img = Image { data, ..Default::default() };
+    img.texture_descriptor.dimension = TextureDimension::D2;
+    img.texture_descriptor.size = Extent3d { width: size, height: size, depth_or_array_layers: 6 };
+    img.texture_descriptor.format = TextureFormat::Rgba8UnormSrgb;
     img.texture_descriptor.mip_level_count = levels;
+    img.asset_usage = RenderAssetUsages::RENDER_WORLD;
     img.texture_view_descriptor = Some(TextureViewDescriptor {
         dimension: Some(TextureViewDimension::Cube),
         ..default()
