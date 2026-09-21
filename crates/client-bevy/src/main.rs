@@ -37,6 +37,7 @@ mod net;
 mod perf;
 mod propgen;
 mod lighting;
+mod menu;
 mod terrain;
 mod terrain_material;
 mod ui;
@@ -401,6 +402,7 @@ fn main() {
             apple_id: apple_id_for_session,
             ..default()
         })
+        .insert_resource(menu::MenuOpen::default())
         .add_event::<CombatEvt>()
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass))
         .add_systems(
@@ -419,6 +421,9 @@ fn main() {
                 builder_screen,
                 dev_console,
                 dev_autocmd,
+                menu::menu_toggle,
+                menu::menu_buttons,
+                menu::menu_hover,
             ),
         )
         .add_systems(
@@ -2539,7 +2544,7 @@ fn builder_screen(
 
 /// Dev console (C14): backquote toggles a one-line command input on dev
 /// accounts. Commands: tp X Y | give ITEM [N] | level N | heal | spawn TAG |
-/// kill | god | time T | travel ACT. Server re-checks authorization.
+/// kill | god | xp N | questdone ID | time T | travel ACT. Server re-checks authorization.
 fn dev_console(
     mut kb_events: EventReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -2556,7 +2561,7 @@ fn dev_console(
         };
         kb_events.clear();
         let msg = if session.dev_input.is_some() {
-            "[dev] console open - tp X Y | give ITEM N | level N | heal | spawn TAG | kill | god | time T | travel ACT"
+            "[dev] console open - tp X Y | give ITEM N | level N | heal | spawn TAG | kill | god | xp N | questdone ID | time T | travel ACT"
         } else {
             "[dev] console closed"
         };
@@ -2601,6 +2606,8 @@ fn dispatch_dev_line(line: &str, tx: &NetTx) -> bool {
         ["spawn", tag] => Some(DevCmd::SpawnMob { tag: tag.to_string() }),
         ["kill"] => Some(DevCmd::KillTarget),
         ["god"] => Some(DevCmd::Godmode),
+        ["xp", n] => n.parse().ok().map(|amount| DevCmd::GiveXp { amount }),
+        ["questdone", id] => Some(DevCmd::QuestComplete { id: id.to_string() }),
         ["time", t] => t.parse().ok().map(|t| DevCmd::TimeOfDay { t }),
         ["travel", a] => {
             let act = match *a {
@@ -2993,10 +3000,11 @@ fn mouse_click_attack(
     mut cooldowns: ResMut<Cooldowns>,
     time: Res<Time>,
     session: Res<Session>,
+    menu_open: Res<menu::MenuOpen>,
     tx: Res<NetTx>,
 ) {
-    // The character builder and chat own the input while they're up.
-    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active {
+    // The character builder, menu, and chat own the input while they're up.
+    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active || menu_open.0 {
         motion.clear();
         return;
     }

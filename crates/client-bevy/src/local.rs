@@ -190,6 +190,8 @@ fn apply(
                 DevCmd::SpawnMob { tag } => world.dev_spawn_mob(a, me, &tag),
                 DevCmd::KillTarget => world.dev_kill_target(a, me),
                 DevCmd::Godmode => world.dev_godmode(a, me),
+                DevCmd::GiveXp { amount } => world.dev_give_xp(a, me, amount),
+                DevCmd::QuestComplete { id } => world.dev_quest_complete(a, me, &id),
                 DevCmd::TimeOfDay { t } => {
                     world.time_override = Some(t.rem_euclid(1.0));
                     format!("[dev] time set to {:.2}", t.rem_euclid(1.0))
