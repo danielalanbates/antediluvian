@@ -55,7 +55,12 @@ pub(crate) type Rgba = [f32; 4];
 
 fn stone(seed: u64) -> Rgba {
     let g = rng(seed, 11, 0.34, 0.62);
-    [g, g * rng(seed, 12, 0.94, 1.02), g * rng(seed, 13, 0.9, 1.0), 1.0]
+    [
+        g,
+        g * rng(seed, 12, 0.94, 1.02),
+        g * rng(seed, 13, 0.9, 1.0),
+        1.0,
+    ]
 }
 
 fn wood(seed: u64) -> Rgba {
@@ -73,10 +78,10 @@ fn crystal(seed: u64) -> Rgba {
     // Bright enough for bloom to catch a facet, but kept under 1.0 — values
     // above that blew out to flat candy colour under the scene's tonemap.
     match (h01(seed ^ 0x5C) * 4.0) as u32 {
-        0 => [0.38, 0.66, 0.88, 1.0],  // ice
-        1 => [0.66, 0.42, 0.82, 1.0],  // amethyst
-        2 => [0.40, 0.78, 0.52, 1.0],  // jade
-        _ => [0.85, 0.62, 0.30, 1.0],  // amber
+        0 => [0.38, 0.66, 0.88, 1.0], // ice
+        1 => [0.66, 0.42, 0.82, 1.0], // amethyst
+        2 => [0.40, 0.78, 0.52, 1.0], // jade
+        _ => [0.85, 0.62, 0.30, 1.0], // amber
     }
 }
 
@@ -134,7 +139,11 @@ impl Builder {
         let base = self.pos.len() as u32;
         let n = sides.max(3);
         for ring in 0..2 {
-            let (r, off) = if ring == 0 { (r0, Vec3::ZERO) } else { (r1, lean) };
+            let (r, off) = if ring == 0 {
+                (r0, Vec3::ZERO)
+            } else {
+                (r1, lean)
+            };
             let y = if ring == 0 { 0.0 } else { h };
             for s in 0..n {
                 let th = std::f32::consts::TAU * s as f32 / n as f32 + yaw;
@@ -169,20 +178,44 @@ impl Builder {
 
     /// Axis-aligned-ish box with yaw — a 4-gon prism, offset so flats face out.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn boxy(&mut self, centre: Vec3, w: f32, h: f32, d: f32, yaw: f32, seed: u64, c: Rgba) {
+    pub(crate) fn boxy(
+        &mut self,
+        centre: Vec3,
+        w: f32,
+        h: f32,
+        d: f32,
+        yaw: f32,
+        seed: u64,
+        c: Rgba,
+    ) {
         // A 4-side prism inscribes the box; scale radius by sqrt(2)/2 and turn
         // it 45° so the faces (not the corners) point along w/d.
         let r = (w.max(d)) * 0.7071;
         let squash = if w > d { d / w } else { w / d };
         let before = self.pos.len();
-        self.prism(centre, 4, r, r, h, yaw + std::f32::consts::FRAC_PI_4, Vec3::ZERO, 0.0, seed, c);
+        self.prism(
+            centre,
+            4,
+            r,
+            r,
+            h,
+            yaw + std::f32::consts::FRAC_PI_4,
+            Vec3::ZERO,
+            0.0,
+            seed,
+            c,
+        );
         // Squash the minor axis in local space around the centre.
         if squash < 0.999 {
             let (sy, cy) = (yaw.sin(), yaw.cos());
             for p in &mut self.pos[before..] {
                 let (dx, dz) = (p[0] - centre.x, p[2] - centre.z);
                 let (lx, lz) = (dx * cy + dz * sy, -dx * sy + dz * cy);
-                let (lx, lz) = if w > d { (lx, lz * squash) } else { (lx * squash, lz) };
+                let (lx, lz) = if w > d {
+                    (lx, lz * squash)
+                } else {
+                    (lx * squash, lz)
+                };
                 p[0] = centre.x + lx * cy - lz * sy;
                 p[2] = centre.z + lx * sy + lz * cy;
             }
@@ -190,7 +223,16 @@ impl Builder {
     }
 
     /// Low-poly ellipsoid for boulders, skulls, mushroom caps, foliage blobs.
-    pub(crate) fn blob(&mut self, centre: Vec3, r: Vec3, rings: u32, segs: u32, warp: f32, seed: u64, c: Rgba) {
+    pub(crate) fn blob(
+        &mut self,
+        centre: Vec3,
+        r: Vec3,
+        rings: u32,
+        segs: u32,
+        warp: f32,
+        seed: u64,
+        c: Rgba,
+    ) {
         let base = self.pos.len() as u32;
         for ri in 0..=rings {
             let phi = std::f32::consts::PI * ri as f32 / rings as f32;
@@ -220,7 +262,10 @@ impl Builder {
     }
 
     pub(crate) fn finish(self) -> Mesh {
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.col);
         mesh.insert_indices(Indices::U32(self.idx));
@@ -304,7 +349,18 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let h = rng(seed, 1, 10.0, 26.0);
             let r = rng(seed, 2, 2.2, 4.0);
             b.boxy(Vec3::ZERO, r * 3.0, 1.6, r * 3.0, 0.0, seed, s);
-            b.prism(Vec3::Y * 1.6, 10, r, r * 0.86, h, 0.0, Vec3::ZERO, 0.05, seed, s);
+            b.prism(
+                Vec3::Y * 1.6,
+                10,
+                r,
+                r * 0.86,
+                h,
+                0.0,
+                Vec3::ZERO,
+                0.05,
+                seed,
+                s,
+            );
             // Snapped-off cap sitting at an angle beside it, half the time.
             if h01(seed ^ 0xB0) > 0.5 {
                 b.prism(
@@ -346,7 +402,15 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                 let t = i as f32 / (segs - 1) as f32;
                 let x = -span + 2.0 * span * t;
                 let y = h + (1.0 - (t * 2.0 - 1.0).powi(2)) * rng(seed, 4, 1.0, 4.0);
-                b.boxy(Vec3::new(x, y, 0.0), 2.0 * span / segs as f32 + 0.6, r * 1.4, r * 2.0, 0.0, seed ^ i as u64, s);
+                b.boxy(
+                    Vec3::new(x, y, 0.0),
+                    2.0 * span / segs as f32 + 0.6,
+                    r * 1.4,
+                    r * 2.0,
+                    0.0,
+                    seed ^ i as u64,
+                    s,
+                );
             }
         }
         // Stepped altar with an offering slab.
@@ -365,7 +429,15 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                     s,
                 );
             }
-            b.boxy(Vec3::Y * (steps as f32 * 1.8 + 0.8), wdt * 0.7, 1.6, wdt * 0.5, rng(seed, 4, -0.2, 0.2), seed, s);
+            b.boxy(
+                Vec3::Y * (steps as f32 * 1.8 + 0.8),
+                wdt * 0.7,
+                1.6,
+                wdt * 0.5,
+                rng(seed, 4, -0.2, 0.2),
+                seed,
+                s,
+            );
         }
         // Weathered statue: plinth, legs, torso, arms, head.
         4 => {
@@ -373,9 +445,31 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             b.boxy(Vec3::ZERO, 7.0 * sc, 3.0 * sc, 6.0 * sc, 0.0, seed, s);
             let y = 3.0 * sc;
             for side in [-1.0f32, 1.0] {
-                b.prism(Vec3::new(1.5 * sc * side, y, 0.0), 5, 1.1 * sc, 0.9 * sc, 6.0 * sc, 0.0, Vec3::ZERO, 0.05, seed ^ (sidx(side) + 1), s);
+                b.prism(
+                    Vec3::new(1.5 * sc * side, y, 0.0),
+                    5,
+                    1.1 * sc,
+                    0.9 * sc,
+                    6.0 * sc,
+                    0.0,
+                    Vec3::ZERO,
+                    0.05,
+                    seed ^ (sidx(side) + 1),
+                    s,
+                );
             }
-            b.prism(Vec3::new(0.0, y + 6.0 * sc, 0.0), 6, 3.0 * sc, 2.4 * sc, 7.0 * sc, 0.0, Vec3::ZERO, 0.07, seed ^ 3, s);
+            b.prism(
+                Vec3::new(0.0, y + 6.0 * sc, 0.0),
+                6,
+                3.0 * sc,
+                2.4 * sc,
+                7.0 * sc,
+                0.0,
+                Vec3::ZERO,
+                0.07,
+                seed ^ 3,
+                s,
+            );
             // Arms — one is broken off on roughly half of them.
             let broken = h01(seed ^ 0xA1) > 0.5;
             for (i, side) in [-1.0f32, 1.0].iter().enumerate() {
@@ -396,7 +490,15 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                 );
             }
             if h01(seed ^ 0xA2) > 0.25 {
-                b.blob(Vec3::new(0.0, y + 14.5 * sc, 0.0), Vec3::splat(2.2 * sc), 4, 6, 0.12, seed, s);
+                b.blob(
+                    Vec3::new(0.0, y + 14.5 * sc, 0.0),
+                    Vec3::splat(2.2 * sc),
+                    4,
+                    6,
+                    0.12,
+                    seed,
+                    s,
+                );
             }
         }
         // Crystal cluster: shards of one hue fanning from a common root.
@@ -426,12 +528,35 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
         6 => {
             let caps = rng(seed, 1, 1.0, 3.0) as u32;
             for i in 0..caps {
-                let off = if i == 0 { Vec3::ZERO } else { Vec3::new(rng(seed, 2, 4.0, 9.0), 0.0, rng(seed, 3, -6.0, 6.0)) };
+                let off = if i == 0 {
+                    Vec3::ZERO
+                } else {
+                    Vec3::new(rng(seed, 2, 4.0, 9.0), 0.0, rng(seed, 3, -6.0, 6.0))
+                };
                 let h = rng(seed, 10 + i as u64, 6.0, 16.0) * if i == 0 { 1.0 } else { 0.65 };
                 let r = rng(seed, 20 + i as u64, 1.0, 2.2);
-                b.prism(off, 7, r * 1.3, r * 0.8, h, 0.0, Vec3::new(rng(seed, 30 + i as u64, -1.5, 1.5), 0.0, 0.0), 0.06, seed ^ i as u64, [0.86, 0.82, 0.72, 1.0]);
+                b.prism(
+                    off,
+                    7,
+                    r * 1.3,
+                    r * 0.8,
+                    h,
+                    0.0,
+                    Vec3::new(rng(seed, 30 + i as u64, -1.5, 1.5), 0.0, 0.0),
+                    0.06,
+                    seed ^ i as u64,
+                    [0.86, 0.82, 0.72, 1.0],
+                );
                 let cr = r * rng(seed, 40 + i as u64, 2.6, 4.4);
-                b.blob(off + Vec3::Y * h, Vec3::new(cr, cr * rng(seed, 5, 0.4, 0.8), cr), 3, 8, 0.1, seed ^ (i as u64 + 3), crystal(seed ^ 0x77));
+                b.blob(
+                    off + Vec3::Y * h,
+                    Vec3::new(cr, cr * rng(seed, 5, 0.4, 0.8), cr),
+                    3,
+                    8,
+                    0.1,
+                    seed ^ (i as u64 + 3),
+                    crystal(seed ^ 0x77),
+                );
             }
         }
         // Totem: stacked carved blocks, alternating wood and paint.
@@ -441,14 +566,37 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             for i in 0..n {
                 let hh = rng(seed, 10 + i as u64, 2.0, 4.5);
                 let r = rng(seed, 20 + i as u64, 2.0, 3.6);
-                let c = if i % 2 == 0 { w } else { cloth(seed ^ i as u64) };
-                b.prism(Vec3::Y * y, rng(seed, 30 + i as u64, 4.0, 8.0) as u32, r, r * rng(seed, 40 + i as u64, 0.75, 1.05), hh, rng(seed, 50 + i as u64, 0.0, 6.28), Vec3::ZERO, 0.06, seed ^ i as u64, c);
+                let c = if i % 2 == 0 {
+                    w
+                } else {
+                    cloth(seed ^ i as u64)
+                };
+                b.prism(
+                    Vec3::Y * y,
+                    rng(seed, 30 + i as u64, 4.0, 8.0) as u32,
+                    r,
+                    r * rng(seed, 40 + i as u64, 0.75, 1.05),
+                    hh,
+                    rng(seed, 50 + i as u64, 0.0, 6.28),
+                    Vec3::ZERO,
+                    0.06,
+                    seed ^ i as u64,
+                    c,
+                );
                 y += hh;
             }
             // Outstretched wings on the top block.
             if h01(seed ^ 0x7A) > 0.4 {
                 for side in [-1.0f32, 1.0] {
-                    b.boxy(Vec3::new(3.5 * side, y - 2.0, 0.0), 5.0, 0.8, 1.6, 0.0, seed ^ sidx(side), w);
+                    b.boxy(
+                        Vec3::new(3.5 * side, y - 2.0, 0.0),
+                        5.0,
+                        0.8,
+                        1.6,
+                        0.0,
+                        seed ^ sidx(side),
+                        w,
+                    );
                 }
             }
         }
@@ -458,13 +606,43 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let r = rng(seed, 2, 2.6, 4.4);
             for i in 0..n {
                 let th = std::f32::consts::TAU * i as f32 / n as f32;
-                b.prism(Vec3::new(th.cos() * r, 0.3, th.sin() * r), 5, 0.5, 0.42, rng(seed, 10 + i as u64, 3.5, 6.0), th, Vec3::new(-th.cos() * r * 0.7, 0.0, -th.sin() * r * 0.7), 0.05, seed ^ i as u64, w);
+                b.prism(
+                    Vec3::new(th.cos() * r, 0.3, th.sin() * r),
+                    5,
+                    0.5,
+                    0.42,
+                    rng(seed, 10 + i as u64, 3.5, 6.0),
+                    th,
+                    Vec3::new(-th.cos() * r * 0.7, 0.0, -th.sin() * r * 0.7),
+                    0.05,
+                    seed ^ i as u64,
+                    w,
+                );
             }
-            b.prism(Vec3::ZERO, 6, r * 0.6, 0.05, rng(seed, 3, 2.5, 5.0), 0.0, Vec3::ZERO, 0.2, seed, [1.4, 0.62, 0.18, 1.0]);
+            b.prism(
+                Vec3::ZERO,
+                6,
+                r * 0.6,
+                0.05,
+                rng(seed, 3, 2.5, 5.0),
+                0.0,
+                Vec3::ZERO,
+                0.2,
+                seed,
+                [1.4, 0.62, 0.18, 1.0],
+            );
             // Stone ring.
             for i in 0..n + 2 {
                 let th = std::f32::consts::TAU * i as f32 / (n + 2) as f32 + 0.3;
-                b.blob(Vec3::new(th.cos() * r * 1.5, 0.0, th.sin() * r * 1.5), Vec3::splat(rng(seed, 60 + i as u64, 0.6, 1.2)), 2, 5, 0.25, seed ^ i as u64, s);
+                b.blob(
+                    Vec3::new(th.cos() * r * 1.5, 0.0, th.sin() * r * 1.5),
+                    Vec3::splat(rng(seed, 60 + i as u64, 0.6, 1.2)),
+                    2,
+                    5,
+                    0.25,
+                    seed ^ i as u64,
+                    s,
+                );
             }
         }
         // Tent: ridge pole with sloped cloth sides.
@@ -476,7 +654,15 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             // Two sloped slabs meeting at the ridge.
             for side in [-1.0f32, 1.0] {
                 let before = b.pos.len();
-                b.boxy(Vec3::new(0.0, 0.0, wd * 0.5 * side), len, h, 0.5, 0.0, seed ^ sidx(side), c);
+                b.boxy(
+                    Vec3::new(0.0, 0.0, wd * 0.5 * side),
+                    len,
+                    h,
+                    0.5,
+                    0.0,
+                    seed ^ sidx(side),
+                    c,
+                );
                 // Shear the top toward the centre to make the slope.
                 for p in &mut b.pos[before..] {
                     if p[1] > h * 0.5 {
@@ -484,8 +670,30 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                     }
                 }
             }
-            b.prism(Vec3::new(-len * 0.5, 0.0, 0.0), 5, 0.35, 0.3, h + 1.5, 0.0, Vec3::ZERO, 0.02, seed, w);
-            b.prism(Vec3::new(len * 0.5, 0.0, 0.0), 5, 0.35, 0.3, h + 1.5, 0.0, Vec3::ZERO, 0.02, seed ^ 2, w);
+            b.prism(
+                Vec3::new(-len * 0.5, 0.0, 0.0),
+                5,
+                0.35,
+                0.3,
+                h + 1.5,
+                0.0,
+                Vec3::ZERO,
+                0.02,
+                seed,
+                w,
+            );
+            b.prism(
+                Vec3::new(len * 0.5, 0.0, 0.0),
+                5,
+                0.35,
+                0.3,
+                h + 1.5,
+                0.0,
+                Vec3::ZERO,
+                0.02,
+                seed ^ 2,
+                w,
+            );
         }
         // Hand cart: bed, two wheels, shafts.
         10 => {
@@ -493,9 +701,28 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let wd = rng(seed, 2, 4.5, 7.0);
             b.boxy(Vec3::Y * 3.0, len, 1.2, wd, 0.0, seed, w);
             for side in [-1.0f32, 1.0] {
-                b.boxy(Vec3::new(0.0, 4.0, wd * 0.5 * side), len, 2.2, 0.5, 0.0, seed ^ sidx(side), w);
+                b.boxy(
+                    Vec3::new(0.0, 4.0, wd * 0.5 * side),
+                    len,
+                    2.2,
+                    0.5,
+                    0.0,
+                    seed ^ sidx(side),
+                    w,
+                );
                 let before = b.pos.len();
-                b.prism(Vec3::new(-len * 0.15, 3.0, wd * 0.55 * side), 9, 3.0, 3.0, 0.6, 0.0, Vec3::ZERO, 0.02, seed ^ 5, wood(seed ^ 9));
+                b.prism(
+                    Vec3::new(-len * 0.15, 3.0, wd * 0.55 * side),
+                    9,
+                    3.0,
+                    3.0,
+                    0.6,
+                    0.0,
+                    Vec3::ZERO,
+                    0.02,
+                    seed ^ 5,
+                    wood(seed ^ 9),
+                );
                 // Stand the wheel upright (prisms build along +Y).
                 for p in &mut b.pos[before..] {
                     let (y, z) = (p[1] - 3.0, p[2] - wd * 0.55 * side);
@@ -504,18 +731,59 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                 }
             }
             for side in [-1.0f32, 1.0] {
-                b.boxy(Vec3::new(len * 0.62, 3.4, wd * 0.3 * side), len * 0.5, 0.5, 0.5, 0.0, seed ^ (sidx(side) + 3), w);
+                b.boxy(
+                    Vec3::new(len * 0.62, 3.4, wd * 0.3 * side),
+                    len * 0.5,
+                    0.5,
+                    0.5,
+                    0.0,
+                    seed ^ (sidx(side) + 3),
+                    w,
+                );
             }
         }
         // Well: stone drum, posts, roof.
         11 => {
             let r = rng(seed, 1, 3.4, 5.2);
-            b.prism(Vec3::ZERO, 12, r, r * 0.96, rng(seed, 2, 3.0, 5.0), 0.0, Vec3::ZERO, 0.05, seed, s);
+            b.prism(
+                Vec3::ZERO,
+                12,
+                r,
+                r * 0.96,
+                rng(seed, 2, 3.0, 5.0),
+                0.0,
+                Vec3::ZERO,
+                0.05,
+                seed,
+                s,
+            );
             let ph = rng(seed, 3, 8.0, 12.0);
             for side in [-1.0f32, 1.0] {
-                b.prism(Vec3::new(r * 0.8 * side, 3.0, 0.0), 4, 0.5, 0.45, ph, 0.0, Vec3::ZERO, 0.03, seed ^ sidx(side), w);
+                b.prism(
+                    Vec3::new(r * 0.8 * side, 3.0, 0.0),
+                    4,
+                    0.5,
+                    0.45,
+                    ph,
+                    0.0,
+                    Vec3::ZERO,
+                    0.03,
+                    seed ^ sidx(side),
+                    w,
+                );
             }
-            b.prism(Vec3::new(0.0, 3.0 + ph, 0.0), 4, r * 1.5, 0.2, rng(seed, 4, 2.5, 4.5), std::f32::consts::FRAC_PI_4, Vec3::ZERO, 0.04, seed ^ 4, w);
+            b.prism(
+                Vec3::new(0.0, 3.0 + ph, 0.0),
+                4,
+                r * 1.5,
+                0.2,
+                rng(seed, 4, 2.5, 4.5),
+                std::f32::consts::FRAC_PI_4,
+                Vec3::ZERO,
+                0.04,
+                seed ^ 4,
+                w,
+            );
         }
         // Fence run: posts plus two rails, some posts snapped.
         12 => {
@@ -523,11 +791,34 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let gap = rng(seed, 2, 5.0, 8.0);
             for i in 0..n {
                 let x = i as f32 * gap;
-                let hh = if h01(seed ^ (i as u64 + 0x1F)) > 0.15 { rng(seed, 10 + i as u64, 5.0, 7.5) } else { rng(seed, 10 + i as u64, 1.5, 3.0) };
-                b.prism(Vec3::new(x, 0.0, 0.0), 4, 0.5, 0.42, hh, rng(seed, 20 + i as u64, -0.15, 0.15), Vec3::new(rng(seed, 30 + i as u64, -0.5, 0.5), 0.0, 0.0), 0.05, seed ^ i as u64, w);
+                let hh = if h01(seed ^ (i as u64 + 0x1F)) > 0.15 {
+                    rng(seed, 10 + i as u64, 5.0, 7.5)
+                } else {
+                    rng(seed, 10 + i as u64, 1.5, 3.0)
+                };
+                b.prism(
+                    Vec3::new(x, 0.0, 0.0),
+                    4,
+                    0.5,
+                    0.42,
+                    hh,
+                    rng(seed, 20 + i as u64, -0.15, 0.15),
+                    Vec3::new(rng(seed, 30 + i as u64, -0.5, 0.5), 0.0, 0.0),
+                    0.05,
+                    seed ^ i as u64,
+                    w,
+                );
                 if i + 1 < n {
                     for (k, ry) in [(0u64, 2.2f32), (1, 4.6)] {
-                        b.boxy(Vec3::new(x + gap * 0.5, ry, 0.0), gap, 0.45, 0.35, 0.0, seed ^ (i as u64 * 3 + k), w);
+                        b.boxy(
+                            Vec3::new(x + gap * 0.5, ry, 0.0),
+                            gap,
+                            0.45,
+                            0.35,
+                            0.0,
+                            seed ^ (i as u64 * 3 + k),
+                            w,
+                        );
                     }
                 }
             }
@@ -540,18 +831,67 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                 let t = i as f32 / ribs as f32;
                 let x = -6.0 + 12.0 * t;
                 let hh = rng(seed, 10 + i as u64, 4.0, 9.0);
-                b.prism(Vec3::new(x, 0.0, 0.0), 4, 0.45, 0.3, hh, 0.0, Vec3::new(rng(seed, 20 + i as u64, -3.0, 3.0), 0.0, rng(seed, 30 + i as u64, -2.0, 2.0)), 0.08, seed ^ i as u64, c);
+                b.prism(
+                    Vec3::new(x, 0.0, 0.0),
+                    4,
+                    0.45,
+                    0.3,
+                    hh,
+                    0.0,
+                    Vec3::new(
+                        rng(seed, 20 + i as u64, -3.0, 3.0),
+                        0.0,
+                        rng(seed, 30 + i as u64, -2.0, 2.0),
+                    ),
+                    0.08,
+                    seed ^ i as u64,
+                    c,
+                );
             }
-            b.blob(Vec3::new(rng(seed, 2, -7.0, -4.0), 1.4, 0.0), Vec3::new(2.4, 1.9, 2.0), 3, 6, 0.14, seed, c);
+            b.blob(
+                Vec3::new(rng(seed, 2, -7.0, -4.0), 1.4, 0.0),
+                Vec3::new(2.4, 1.9, 2.0),
+                3,
+                6,
+                0.14,
+                seed,
+                c,
+            );
             for i in 0..4 {
-                b.prism(Vec3::new(rng(seed, 40 + i, -6.0, 6.0), 0.2, rng(seed, 50 + i, -4.0, 4.0)), 4, 0.35, 0.3, rng(seed, 60 + i, 2.0, 5.0), rng(seed, 70 + i, 0.0, 6.28), Vec3::new(rng(seed, 80 + i, -2.0, 2.0), 0.0, 0.0), 0.06, seed ^ (i + 20), c);
+                b.prism(
+                    Vec3::new(
+                        rng(seed, 40 + i, -6.0, 6.0),
+                        0.2,
+                        rng(seed, 50 + i, -4.0, 4.0),
+                    ),
+                    4,
+                    0.35,
+                    0.3,
+                    rng(seed, 60 + i, 2.0, 5.0),
+                    rng(seed, 70 + i, 0.0, 6.28),
+                    Vec3::new(rng(seed, 80 + i, -2.0, 2.0), 0.0, 0.0),
+                    0.06,
+                    seed ^ (i + 20),
+                    c,
+                );
             }
         }
         // Watchtower ruin: tapered drum, collapsed on one side.
         14 => {
             let r = rng(seed, 1, 5.0, 8.0);
             let h = rng(seed, 2, 18.0, 34.0);
-            b.prism(Vec3::ZERO, 10, r * 1.2, r * 0.9, h, 0.0, Vec3::ZERO, 0.07, seed, s);
+            b.prism(
+                Vec3::ZERO,
+                10,
+                r * 1.2,
+                r * 0.9,
+                h,
+                0.0,
+                Vec3::ZERO,
+                0.07,
+                seed,
+                s,
+            );
             // Crenellations, with gaps where the wall has fallen.
             let n = 10;
             for i in 0..n {
@@ -559,11 +899,31 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                     continue;
                 }
                 let th = std::f32::consts::TAU * i as f32 / n as f32;
-                b.boxy(Vec3::new(th.cos() * r * 0.85, h, th.sin() * r * 0.85), 1.8, rng(seed, 10 + i as u64, 1.5, 3.5), 1.8, th, seed ^ i as u64, s);
+                b.boxy(
+                    Vec3::new(th.cos() * r * 0.85, h, th.sin() * r * 0.85),
+                    1.8,
+                    rng(seed, 10 + i as u64, 1.5, 3.5),
+                    1.8,
+                    th,
+                    seed ^ i as u64,
+                    s,
+                );
             }
             // Rubble at the foot.
             for i in 0..5 {
-                b.blob(Vec3::new(rng(seed, 20 + i, -r * 2.0, r * 2.0), 0.4, rng(seed, 30 + i, -r * 2.0, r * 2.0)), Vec3::splat(rng(seed, 40 + i, 0.8, 2.2)), 2, 5, 0.3, seed ^ (i + 5), s);
+                b.blob(
+                    Vec3::new(
+                        rng(seed, 20 + i, -r * 2.0, r * 2.0),
+                        0.4,
+                        rng(seed, 30 + i, -r * 2.0, r * 2.0),
+                    ),
+                    Vec3::splat(rng(seed, 40 + i, 0.8, 2.2)),
+                    2,
+                    5,
+                    0.3,
+                    seed ^ (i + 5),
+                    s,
+                );
             }
         }
         // Cairn: stacked flat stones, narrowing upward.
@@ -574,7 +934,19 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
                 let t = i as f32 / n as f32;
                 let r = rng(seed, 10 + i as u64, 1.4, 3.4) * (1.0 - t * 0.55);
                 let hh = rng(seed, 20 + i as u64, 0.7, 1.8);
-                b.blob(Vec3::new(rng(seed, 30 + i as u64, -0.6, 0.6), y + hh * 0.5, rng(seed, 40 + i as u64, -0.6, 0.6)), Vec3::new(r, hh, r * rng(seed, 50 + i as u64, 0.7, 1.1)), 2, 6, 0.2, seed ^ i as u64, s);
+                b.blob(
+                    Vec3::new(
+                        rng(seed, 30 + i as u64, -0.6, 0.6),
+                        y + hh * 0.5,
+                        rng(seed, 40 + i as u64, -0.6, 0.6),
+                    ),
+                    Vec3::new(r, hh, r * rng(seed, 50 + i as u64, 0.7, 1.1)),
+                    2,
+                    6,
+                    0.2,
+                    seed ^ i as u64,
+                    s,
+                );
                 y += hh * 1.7;
             }
         }
@@ -582,13 +954,35 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
         16 => {
             let c = cloth(seed);
             let h = rng(seed, 1, 12.0, 22.0);
-            b.prism(Vec3::ZERO, 6, 0.45, 0.35, h, 0.0, Vec3::new(rng(seed, 2, -0.8, 0.8), 0.0, 0.0), 0.03, seed, w);
+            b.prism(
+                Vec3::ZERO,
+                6,
+                0.45,
+                0.35,
+                h,
+                0.0,
+                Vec3::new(rng(seed, 2, -0.8, 0.8), 0.0, 0.0),
+                0.03,
+                seed,
+                w,
+            );
             let bw = rng(seed, 3, 3.0, 6.0);
             b.boxy(Vec3::Y * (h - 1.0), bw * 2.0, 0.4, 0.4, 0.0, seed ^ 1, w);
             let before = b.pos.len();
-            b.boxy(Vec3::new(0.0, h - rng(seed, 4, 7.0, 12.0), 0.0), bw * 1.8, rng(seed, 5, 6.0, 11.0), 0.25, 0.0, seed ^ 2, c);
+            b.boxy(
+                Vec3::new(0.0, h - rng(seed, 4, 7.0, 12.0), 0.0),
+                bw * 1.8,
+                rng(seed, 5, 6.0, 11.0),
+                0.25,
+                0.0,
+                seed ^ 2,
+                c,
+            );
             // Ragged lower hem.
-            let lo = b.pos[before..].iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+            let lo = b.pos[before..]
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::MAX, f32::min);
             for (i, p) in b.pos[before..].iter_mut().enumerate() {
                 if (p[1] - lo).abs() < 0.01 {
                     p[1] -= rng(seed, 60 + i as u64, 0.0, 2.5);
@@ -601,9 +995,25 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let wd = rng(seed, 2, 4.0, 6.0);
             b.boxy(Vec3::ZERO, len, rng(seed, 3, 3.0, 4.5), wd, 0.0, seed, s);
             let hh = rng(seed, 3, 3.0, 4.5);
-            b.boxy(Vec3::new(rng(seed, 4, -1.5, 1.5), hh, rng(seed, 5, -0.8, 0.8)), len * 0.95, 1.4, wd * 0.95, rng(seed, 6, -0.25, 0.25), seed ^ 1, s);
+            b.boxy(
+                Vec3::new(rng(seed, 4, -1.5, 1.5), hh, rng(seed, 5, -0.8, 0.8)),
+                len * 0.95,
+                1.4,
+                wd * 0.95,
+                rng(seed, 6, -0.25, 0.25),
+                seed ^ 1,
+                s,
+            );
             if h01(seed ^ 0x5A) > 0.5 {
-                b.blob(Vec3::new(0.0, hh + 1.9, 0.0), Vec3::new(1.6, 1.2, 1.4), 3, 6, 0.12, seed, s);
+                b.blob(
+                    Vec3::new(0.0, hh + 1.9, 0.0),
+                    Vec3::new(1.6, 1.2, 1.4),
+                    3,
+                    6,
+                    0.12,
+                    seed,
+                    s,
+                );
             }
         }
         // Brazier: tripod legs, bowl, flame.
@@ -612,24 +1022,87 @@ pub fn prop_mesh_family(seed: u64, family: u32) -> Mesh {
             let hh = rng(seed, 2, 4.0, 7.0);
             for i in 0..3 {
                 let th = std::f32::consts::TAU * i as f32 / 3.0;
-                b.prism(Vec3::new(th.cos() * r * 0.8, 0.0, th.sin() * r * 0.8), 4, 0.4, 0.3, hh, th, Vec3::new(-th.cos() * r * 0.5, 0.0, -th.sin() * r * 0.5), 0.04, seed ^ i, [0.22, 0.2, 0.19, 1.0]);
+                b.prism(
+                    Vec3::new(th.cos() * r * 0.8, 0.0, th.sin() * r * 0.8),
+                    4,
+                    0.4,
+                    0.3,
+                    hh,
+                    th,
+                    Vec3::new(-th.cos() * r * 0.5, 0.0, -th.sin() * r * 0.5),
+                    0.04,
+                    seed ^ i,
+                    [0.22, 0.2, 0.19, 1.0],
+                );
             }
-            b.prism(Vec3::Y * hh, 9, r * 0.7, r, 1.8, 0.0, Vec3::ZERO, 0.05, seed, [0.26, 0.23, 0.2, 1.0]);
-            b.prism(Vec3::Y * (hh + 1.6), 6, r * 0.7, 0.08, rng(seed, 3, 2.0, 4.5), 0.0, Vec3::ZERO, 0.25, seed ^ 3, [1.45, 0.6, 0.16, 1.0]);
+            b.prism(
+                Vec3::Y * hh,
+                9,
+                r * 0.7,
+                r,
+                1.8,
+                0.0,
+                Vec3::ZERO,
+                0.05,
+                seed,
+                [0.26, 0.23, 0.2, 1.0],
+            );
+            b.prism(
+                Vec3::Y * (hh + 1.6),
+                6,
+                r * 0.7,
+                0.08,
+                rng(seed, 3, 2.0, 4.5),
+                0.0,
+                Vec3::ZERO,
+                0.25,
+                seed ^ 3,
+                [1.45, 0.6, 0.16, 1.0],
+            );
         }
         // Dead stump with splayed roots.
         _ => {
             let r = rng(seed, 1, 2.4, 4.5);
             let hh = rng(seed, 2, 4.0, 11.0);
-            b.prism(Vec3::ZERO, 8, r * 1.3, r * 0.7, hh, 0.0, Vec3::new(rng(seed, 3, -1.2, 1.2), 0.0, 0.0), 0.12, seed, w);
+            b.prism(
+                Vec3::ZERO,
+                8,
+                r * 1.3,
+                r * 0.7,
+                hh,
+                0.0,
+                Vec3::new(rng(seed, 3, -1.2, 1.2), 0.0, 0.0),
+                0.12,
+                seed,
+                w,
+            );
             let n = rng(seed, 4, 3.0, 7.0) as u32;
             for i in 0..n {
                 let th = std::f32::consts::TAU * i as f32 / n as f32 + rng(seed, 5, 0.0, 1.0);
-                b.prism(Vec3::new(th.cos() * r, 0.6, th.sin() * r), 4, 0.7, 0.25, rng(seed, 10 + i as u64, 2.0, 5.0), th, Vec3::new(th.cos() * r * 2.2, -1.2, th.sin() * r * 2.2), 0.1, seed ^ i as u64, w);
+                b.prism(
+                    Vec3::new(th.cos() * r, 0.6, th.sin() * r),
+                    4,
+                    0.7,
+                    0.25,
+                    rng(seed, 10 + i as u64, 2.0, 5.0),
+                    th,
+                    Vec3::new(th.cos() * r * 2.2, -1.2, th.sin() * r * 2.2),
+                    0.1,
+                    seed ^ i as u64,
+                    w,
+                );
             }
             // Occasional shelf fungus.
             if h01(seed ^ 0xF3) > 0.5 {
-                b.blob(Vec3::new(r * 0.8, hh * 0.6, 0.0), Vec3::new(1.6, 0.4, 1.6), 2, 6, 0.2, seed, foliage(seed));
+                b.blob(
+                    Vec3::new(r * 0.8, hh * 0.6, 0.0),
+                    Vec3::new(1.6, 0.4, 1.6),
+                    2,
+                    6,
+                    0.2,
+                    seed,
+                    foliage(seed),
+                );
             }
         }
     }
@@ -686,7 +1159,8 @@ pub fn spawn_contact_sheet(
 
     for (row, &f) in families.iter().enumerate() {
         for v in 0..variants {
-            let seed = (f as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (v as u64 + 1).wrapping_mul(0x2545_F491);
+            let seed = (f as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (v as u64 + 1).wrapping_mul(0x2545_F491);
             let mesh = meshes.add(prop_mesh_family(seed, f));
             commands.spawn((
                 Mesh3d(mesh),
@@ -707,21 +1181,38 @@ pub fn spawn_contact_sheet(
         perceptual_roughness: 1.0,
         ..default()
     });
-    commands.spawn((Mesh3d(ground), MeshMaterial3d(gmat), Transform::from_xyz(0.0, -0.05, 0.0)));
+    commands.spawn((
+        Mesh3d(ground),
+        MeshMaterial3d(gmat),
+        Transform::from_xyz(0.0, -0.05, 0.0),
+    ));
 
     commands.spawn((
-        DirectionalLight { illuminance: 14_000.0, shadows_enabled: true, ..default() },
+        DirectionalLight {
+            illuminance: 14_000.0,
+            shadows_enabled: true,
+            ..default()
+        },
         Transform::from_xyz(300.0, 600.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // Camera framing is env-tunable: the full sheet needs a high wide shot,
     // a single-family review needs a low near one that shows silhouettes.
     let envf = |k: &str, d: f32| -> f32 {
-        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
     };
     let (cam_h, cam_d) = if only.is_some() {
-        (envf("ANTEDILUVIA_PROPSHEET_CAMH", 26.0), envf("ANTEDILUVIA_PROPSHEET_CAMD", 120.0))
+        (
+            envf("ANTEDILUVIA_PROPSHEET_CAMH", 26.0),
+            envf("ANTEDILUVIA_PROPSHEET_CAMD", 120.0),
+        )
     } else {
-        (envf("ANTEDILUVIA_PROPSHEET_CAMH", 620.0), envf("ANTEDILUVIA_PROPSHEET_CAMD", 780.0))
+        (
+            envf("ANTEDILUVIA_PROPSHEET_CAMH", 620.0),
+            envf("ANTEDILUVIA_PROPSHEET_CAMD", 780.0),
+        )
     };
     commands.spawn((
         Camera3d::default(),
@@ -748,7 +1239,11 @@ mod tests {
         for seed in 0..400u64 {
             let m = prop_mesh(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xBEEF);
             let p = positions(&m);
-            assert!(p.len() >= 24, "seed {seed}: degenerate mesh ({} verts)", p.len());
+            assert!(
+                p.len() >= 24,
+                "seed {seed}: degenerate mesh ({} verts)",
+                p.len()
+            );
             seen.push(p);
         }
         // Compare every pair — 400 props must be 400 distinct geometries.
@@ -771,7 +1266,11 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), names.len(), "duplicate family names: {names:?}");
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "duplicate family names: {names:?}"
+        );
     }
 
     /// Every family must build, be finite, and stay within a sane world size —
@@ -786,7 +1285,11 @@ mod tests {
                 for v in &p {
                     for c in v {
                         assert!(c.is_finite(), "{}: non-finite vertex", family_name(f));
-                        assert!(c.abs() < 200.0, "{}: vertex {c} out of bounds", family_name(f));
+                        assert!(
+                            c.abs() < 200.0,
+                            "{}: vertex {c} out of bounds",
+                            family_name(f)
+                        );
                     }
                 }
                 let top = p.iter().map(|v| v[1]).fold(f32::MIN, f32::max);
@@ -803,12 +1306,22 @@ mod tests {
             VertexAttributeValues::Float32x3(v) => v.clone(),
             _ => panic!("normals"),
         };
-        assert_eq!(n.len(), positions(&m).len(), "normal/position count mismatch");
+        assert_eq!(
+            n.len(),
+            positions(&m).len(),
+            "normal/position count mismatch"
+        );
         for v in &n {
             let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            assert!((len - 1.0).abs() < 0.05 || len < 1e-6, "non-unit normal {len}");
+            assert!(
+                (len - 1.0).abs() < 0.05 || len < 1e-6,
+                "non-unit normal {len}"
+            );
         }
-        assert!(m.attribute(Mesh::ATTRIBUTE_COLOR).is_some(), "vertex colours missing");
+        assert!(
+            m.attribute(Mesh::ATTRIBUTE_COLOR).is_some(),
+            "vertex colours missing"
+        );
     }
 
     /// Determinism: the same seed must rebuild byte-identically, or props will

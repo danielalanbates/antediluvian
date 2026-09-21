@@ -130,7 +130,10 @@ pub fn apply_loadouts(
                         Some("cainite") => Some(equip.mantle_cainite.clone()),
                         _ => Some(equip.mantle_sethite.clone()),
                     }
-                } else if matches!(loadout.chest.as_deref(), Some("hide_vest") | Some("animal_skins")) {
+                } else if matches!(
+                    loadout.chest.as_deref(),
+                    Some("hide_vest") | Some("animal_skins")
+                ) {
                     Some(equip.vest.clone())
                 } else {
                     None
@@ -139,7 +142,9 @@ pub fn apply_loadouts(
                     if let Ok(kids) = children_q.get(ent) {
                         for kid in kids.iter() {
                             if meshes.get(*kid).is_ok() {
-                                commands.entity(*kid).try_insert(MeshMaterial3d(mat.clone()));
+                                commands
+                                    .entity(*kid)
+                                    .try_insert(MeshMaterial3d(mat.clone()));
                             }
                         }
                     }
@@ -152,7 +157,9 @@ pub fn apply_loadouts(
             match applied {
                 Some(mut a) => a.0 = Some(loadout.clone()),
                 None => {
-                    commands.entity(root).try_insert(LoadoutApplied(Some(loadout.clone())));
+                    commands
+                        .entity(root)
+                        .try_insert(LoadoutApplied(Some(loadout.clone())));
                 }
             }
         }

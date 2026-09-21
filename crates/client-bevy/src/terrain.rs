@@ -38,7 +38,11 @@ fn fbm(act: Act) -> &'static Fbm<Perlin> {
     static FBMS: OnceLock<Vec<Fbm<Perlin>>> = OnceLock::new();
     let all = FBMS.get_or_init(|| {
         (0..Act::ALL.len() as u32)
-            .map(|i| Fbm::<Perlin>::new(i + 7).set_octaves(4).set_persistence(0.45))
+            .map(|i| {
+                Fbm::<Perlin>::new(i + 7)
+                    .set_octaves(4)
+                    .set_persistence(0.45)
+            })
             .collect()
     });
     &all[Act::ALL.iter().position(|a| *a == act).unwrap_or(0)]
@@ -94,8 +98,12 @@ fn dome(p: (f32, f32), c: (f32, f32), radius: f32, height: f32) -> f32 {
 /// The four rivers of Eden converge in the eastern basin (doc 01):
 /// Pishon, Gihon, Tigris, Euphrates — carved channels meeting at (2300, 0).
 const EDEN_CONFLUENCE: (f32, f32) = (2300.0, 0.0);
-const EDEN_RIVERS: [(f32, f32); 4] =
-    [(-3400.0, -2600.0), (-2200.0, 3400.0), (900.0, -3400.0), (1400.0, 3400.0)];
+const EDEN_RIVERS: [(f32, f32); 4] = [
+    (-3400.0, -2600.0),
+    (-2200.0, 3400.0),
+    (900.0, -3400.0),
+    (1400.0, 3400.0),
+];
 
 /// Doc-driven landform offset added onto the base fBm relief.
 fn landforms(act: Act, x: f32, z: f32) -> f32 {
@@ -193,7 +201,8 @@ pub fn terrain_height(act: Act, x: f32, z: f32) -> f32 {
 /// chosen in the shader from slope, so it needs no channel.
 fn splat_for(act: Act, x: f32, z: f32, h: f32) -> [f32; 4] {
     let patch = |scale: f32, seed: f64| {
-        (fbm(act).get([(x / scale) as f64 + seed, (z / scale) as f64 - seed]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0)
+        (fbm(act).get([(x / scale) as f64 + seed, (z / scale) as f64 - seed]) as f32 * 0.5 + 0.5)
+            .clamp(0.0, 1.0)
     };
     // Bare-earth patches: broad, soft blotches, heavier in the dry acts.
     let (dirt_bias, sand_bias) = match act {
@@ -250,7 +259,10 @@ pub fn build_terrain_mesh(act: Act) -> Mesh {
             indices.extend_from_slice(&[a, c, b, b, c, d]);
         }
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -281,7 +293,10 @@ mod tests {
                 }
             }
         }
-        assert!(wet >= 3, "at least 3 of Eden's four rivers hold water, got {wet}");
+        assert!(
+            wet >= 3,
+            "at least 3 of Eden's four rivers hold water, got {wet}"
+        );
         // 01: the Flaming Boundary rampart rises steeply on the far east rim.
         assert!(
             terrain_height(Act::Eden, 3500.0, 0.0) > terrain_height(Act::Eden, 3000.0, 0.0) + 80.0,
@@ -306,8 +321,14 @@ mod tests {
         // 05: the Abyssal Basins drown below the floodwater, but the Ark
         // plateau at the entry stays dry.
         let w = water_level(Act::Flood).unwrap();
-        assert!(terrain_height(Act::Flood, 2500.0, 1500.0) < w, "basins flooded");
-        assert!(terrain_height(Act::Flood, 0.0, 0.0) > w, "Ark plateau stays dry");
+        assert!(
+            terrain_height(Act::Flood, 2500.0, 1500.0) < w,
+            "basins flooded"
+        );
+        assert!(
+            terrain_height(Act::Flood, 0.0, 0.0) > w,
+            "Ark plateau stays dry"
+        );
     }
 
     #[test]

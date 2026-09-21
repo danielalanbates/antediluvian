@@ -41,6 +41,7 @@ mod lighting;
 mod menu;
 mod terrain;
 mod terrain_material;
+mod touch;
 mod ui;
 mod variety;
 mod vfx;
@@ -398,6 +399,11 @@ fn main() {
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
+        .insert_resource(touch::TouchMode::default())
+        .insert_resource(touch::TouchMove::default())
+        .insert_resource(touch::TouchLookDelta::default())
+        .insert_resource(touch::TouchSlots::default())
+        .insert_resource(touch::TouchButtons::default())
         .insert_resource(Session {
             name: display_name,
             apple_id: apple_id_for_session,
@@ -405,11 +411,17 @@ fn main() {
         })
         .insert_resource(menu::MenuOpen::default())
         .add_event::<CombatEvt>()
-        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
+        .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient, touch::touch_startup))
         .add_systems(
             Update,
             (
                 receive_from_server,
+                // Explicit order: touch_input feeds TouchMove/TouchLookDelta,
+                // which send_input and orbit_camera consume. (Also resolves
+                // the read/write ambiguity Bevy would otherwise report.)
+                touch::touch_input.before(send_input).before(orbit_camera),
+                touch::touch_layout,
+                touch::overlay_poll,
                 send_input,
                 chat_input,
                 orbit_camera,
@@ -2247,6 +2259,7 @@ fn send_input(
     mut last_yaw: Local<f32>,
     colliders: Res<PropColliders>,
     q_me: Query<&Transform, With<PlayerTag>>,
+    touch_move: Res<touch::TouchMove>,
 ) {
     // Ground-plane position of the local player, for prop collision tests.
     let me_pos = q_me
@@ -2279,6 +2292,13 @@ fn send_input(
     if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
         s += 1;
     }
+
+    // Touch joystick (touch.rs): quantized to the same (f, s) grid as the
+    // keyboard and combined, so both work at once. TouchMove is always zero
+    // on desktop, making this a no-op there.
+    let (tf, ts) = touch::quantize_stick(touch_move.0);
+    f = (f + tf).clamp(-1, 1);
+    s = (s + ts).clamp(-1, 1);
 
     // Re-send when the keys OR the camera yaw changed meaningfully while moving.
     let yaw_moved = (f, s) != (0, 0) && (orbit.yaw - *last_yaw).abs() > 0.03;
@@ -2337,6 +2357,30 @@ struct BuilderPreview {
     look: [u32; 3],
 }
 
+/// Shared character-create submit: the Enter key in `builder_screen` and the
+/// touch Create button (touch.rs) both funnel here so the Login message is
+/// identical.
+pub(crate) fn builder_try_submit(session: &mut Session, tx: &NetTx) {
+    let apple_id = session.apple_id.clone();
+    let Some(b) = session.builder.as_mut() else { return };
+    if b.submitted || b.name.trim().is_empty() {
+        return;
+    }
+    b.submitted = true;
+    b.error = None;
+    tx.send(ClientMsg::Login {
+        proto: antediluvia_protocol::PROTOCOL_VERSION,
+        apple_id,
+        character_name: None,
+        create: Some(antediluvia_protocol::CharacterCreate {
+            name: b.name.trim().to_string(),
+            class: b.class,
+            faction: b.faction.clone(),
+            appearance: b.appearance,
+        }),
+    });
+}
+
 /// Character-builder screen (C13): name typing, F1–F4 class, F5 lineage,
 /// Left/Right body model, Up/Down skin, F6 hair, Enter to create. Keeps a
 /// rotating rig preview in the empty pre-login world.
@@ -2353,8 +2397,13 @@ fn builder_screen(
     mut ui_text: Query<&mut Text, With<BuilderUi>>,
     mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode)>,
     mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
+    touch_mode: Res<touch::TouchMode>,
 ) {
-    let apple_id = session.apple_id.clone();
+    // Submit on Enter before borrowing the builder below (borrowck: the
+    // submit needs `&mut Session` while the input section holds `b`).
+    if keys.just_pressed(KeyCode::Enter) {
+        builder_try_submit(&mut session, &tx);
+    }
     let Some(b) = session.builder.as_mut() else {
         // Builder closed: clear any leftovers (screen + preview).
         for e in &ui_root {
@@ -2412,21 +2461,6 @@ fn builder_screen(
     if keys.just_pressed(KeyCode::F6) {
         b.appearance[2] = (b.appearance[2] + 1) % HAIR_CHOICES;
     }
-    if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
-        b.submitted = true;
-        b.error = None;
-        tx.send(ClientMsg::Login {
-            proto: antediluvia_protocol::PROTOCOL_VERSION,
-            apple_id,
-            character_name: None,
-            create: Some(antediluvia_protocol::CharacterCreate {
-                name: b.name.trim().to_string(),
-                class: b.class,
-                faction: b.faction.clone(),
-                appearance: b.appearance,
-            }),
-        });
-    }
 
     // ── Screen text ──────────────────────────────────────────────────────
     let body_names = ["Knight", "Barbarian", "Rogue", "Mage"];
@@ -2440,7 +2474,7 @@ fn builder_screen(
          Hair    F6          style {} of {}\n\n\
          {} distinct looks before gear\n\n\
          {}\n\
-         Press ENTER to walk the earth",
+         {}",
         b.name,
         b.class.as_str(),
         match b.class {
@@ -2461,6 +2495,11 @@ fn builder_screen(
             (Some(e), _) => format!("!! {e}"),
             (None, true) => "Creating...".into(),
             _ => String::new(),
+        },
+        if touch_mode.0 {
+            "Tap CREATE to walk the earth"
+        } else {
+            "Press ENTER to walk the earth"
         },
     );
     if let Ok(mut t) = ui_text.get_single_mut() {
@@ -2840,6 +2879,9 @@ fn orbit_camera(
     mut orbit: ResMut<Orbit>,
     mut cam: Query<&mut Transform, (With<MainCamera>, Without<PlayerTag>)>,
     player: Query<&Transform, With<PlayerTag>>,
+    mut touch_look: ResMut<touch::TouchLookDelta>,
+    session: Res<Session>,
+    menu_open: Res<menu::MenuOpen>,
 ) {
     // Press-and-drag with ANY button orbits both axes — WoW-style. Left is
     // included because on a trackpad a plain press-drag is the natural gesture
@@ -2855,6 +2897,21 @@ fn orbit_camera(
         }
     } else {
         motion.clear();
+    }
+    // Touch drag on the right half of the screen (touch.rs accumulates the
+    // deltas into TouchLookDelta). Same Orbit resource and pitch clamp as the
+    // mouse path; the builder/menu/chat own the input while they're up, so
+    // look is suppressed there just like click-attack is.
+    if session.builder.is_some()
+        || session.dev_input.is_some()
+        || session.chat_active
+        || menu_open.0
+    {
+        touch_look.0 = Vec2::ZERO;
+    } else {
+        orbit.yaw -= touch_look.0.x * 0.006;
+        orbit.pitch = (orbit.pitch + touch_look.0.y * 0.005).clamp(0.08, 1.35);
+        touch_look.0 = Vec2::ZERO;
     }
     // Trackpad: two-finger swipe. Horizontal turns the camera (standard),
     // vertical zooms. Pixel-unit scrolls (trackpad) are small, so scale up.

@@ -13,7 +13,9 @@
 //! 1024² layers, built by `scripts/build_terrain_arrays.py`). JPEG has no
 //! mips, so they are generated here on load, once.
 
-use bevy::image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::{
+    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
+};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef, ShaderType};
@@ -95,7 +97,10 @@ impl Plugin for TerrainMaterialPlugin {
         bevy::asset::embedded_asset!(app, "terrain.wgsl");
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_systems(Startup, load_arrays)
-            .add_systems(Update, (prepare_arrays, upgrade_ground, skin_rocks, skin_rock_scenes).chain());
+            .add_systems(
+                Update,
+                (prepare_arrays, upgrade_ground, skin_rocks, skin_rock_scenes).chain(),
+            );
     }
 }
 
@@ -120,7 +125,11 @@ fn prepare_arrays(mut arrays: ResMut<TerrainArrays>, mut images: ResMut<Assets<I
     if arrays.ready {
         return;
     }
-    let handles = [arrays.albedo.clone(), arrays.normal.clone(), arrays.arm.clone()];
+    let handles = [
+        arrays.albedo.clone(),
+        arrays.normal.clone(),
+        arrays.arm.clone(),
+    ];
     if handles.iter().any(|h| images.get(h).is_none()) {
         return;
     }
@@ -188,11 +197,36 @@ pub fn build_mips_layer_major(img: &mut Image) {
 pub fn act_params(act: Act) -> TerrainParams {
     let t = |r: f32, g: f32, b: f32| Vec4::new(r, g, b, 1.0);
     let (grass, dirt, rock, sand) = match act {
-        Act::Eden => (t(0.95, 1.05, 0.85), t(1.0, 0.95, 0.9), t(0.95, 0.95, 0.92), t(1.0, 0.97, 0.9)),
-        Act::Hermon => (t(0.88, 0.95, 0.85), t(0.95, 0.92, 0.9), t(0.92, 0.94, 0.98), t(0.95, 0.95, 0.95)),
-        Act::Nephilim => (t(1.15, 0.98, 0.68), t(1.12, 0.9, 0.72), t(1.05, 0.88, 0.75), t(1.1, 0.95, 0.8)),
-        Act::Enoch => (t(1.0, 0.98, 0.82), t(1.0, 0.94, 0.86), t(0.98, 0.95, 0.9), t(1.0, 0.96, 0.88)),
-        Act::Flood => (t(0.8, 0.92, 0.88), t(0.85, 0.88, 0.9), t(0.85, 0.9, 0.95), t(0.9, 0.93, 0.95)),
+        Act::Eden => (
+            t(0.95, 1.05, 0.85),
+            t(1.0, 0.95, 0.9),
+            t(0.95, 0.95, 0.92),
+            t(1.0, 0.97, 0.9),
+        ),
+        Act::Hermon => (
+            t(0.88, 0.95, 0.85),
+            t(0.95, 0.92, 0.9),
+            t(0.92, 0.94, 0.98),
+            t(0.95, 0.95, 0.95),
+        ),
+        Act::Nephilim => (
+            t(1.15, 0.98, 0.68),
+            t(1.12, 0.9, 0.72),
+            t(1.05, 0.88, 0.75),
+            t(1.1, 0.95, 0.8),
+        ),
+        Act::Enoch => (
+            t(1.0, 0.98, 0.82),
+            t(1.0, 0.94, 0.86),
+            t(0.98, 0.95, 0.9),
+            t(1.0, 0.96, 0.88),
+        ),
+        Act::Flood => (
+            t(0.8, 0.92, 0.88),
+            t(0.85, 0.88, 0.9),
+            t(0.85, 0.9, 0.95),
+            t(0.9, 0.93, 0.95),
+        ),
     };
     TerrainParams {
         tint0: grass,
@@ -209,7 +243,13 @@ pub fn act_params(act: Act) -> TerrainParams {
 /// (negative slope thresholds) and a tighter triplanar tile.
 fn rock_params(tint: [f32; 3]) -> TerrainParams {
     let t = Vec4::new(tint[0], tint[1], tint[2], 1.0);
-    TerrainParams { tint0: t, tint1: t, tint2: t, tint3: t, tiling: Vec4::new(22.0, 120.0, -2.0, -1.5) }
+    TerrainParams {
+        tint0: t,
+        tint1: t,
+        tint2: t,
+        tint3: t,
+        tiling: Vec4::new(22.0, 120.0, -2.0, -1.5),
+    }
 }
 
 fn skin_rocks(
@@ -222,13 +262,26 @@ fn skin_rocks(
         return;
     }
     if arrays.rocks.is_empty() {
-        let (a, n, m) = (arrays.albedo.clone(), arrays.normal.clone(), arrays.arm.clone());
+        let (a, n, m) = (
+            arrays.albedo.clone(),
+            arrays.normal.clone(),
+            arrays.arm.clone(),
+        );
         arrays.rocks = ROCK_TINTS
             .iter()
             .map(|t| {
                 mats.add(ExtendedMaterial {
-                    base: StandardMaterial { perceptual_roughness: 1.0, reflectance: 0.35, ..default() },
-                    extension: TerrainExt { params: rock_params(*t), albedo: a.clone(), normal: n.clone(), arm: m.clone() },
+                    base: StandardMaterial {
+                        perceptual_roughness: 1.0,
+                        reflectance: 0.35,
+                        ..default()
+                    },
+                    extension: TerrainExt {
+                        params: rock_params(*t),
+                        albedo: a.clone(),
+                        normal: n.clone(),
+                        arm: m.clone(),
+                    },
                 })
             })
             .collect();
@@ -237,7 +290,9 @@ fn skin_rocks(
         commands
             .entity(e)
             .remove::<(RockSkin, MeshMaterial3d<StandardMaterial>)>()
-            .insert(MeshMaterial3d(arrays.rocks[r.0 % arrays.rocks.len()].clone()));
+            .insert(MeshMaterial3d(
+                arrays.rocks[r.0 % arrays.rocks.len()].clone(),
+            ));
     }
 }
 
@@ -256,7 +311,9 @@ fn skin_rock_scenes(
         for d in children.iter_descendants(root) {
             if meshes.contains(d) {
                 found = true;
-                commands.entity(d).insert(RockSkin((root.index() as usize) % ROCK_TINTS.len()));
+                commands
+                    .entity(d)
+                    .insert(RockSkin((root.index() as usize) % ROCK_TINTS.len()));
             }
         }
         if found {
@@ -276,7 +333,11 @@ fn upgrade_ground(
     }
     for (e, g) in &grounds {
         let mat = mats.add(ExtendedMaterial {
-            base: StandardMaterial { perceptual_roughness: 1.0, reflectance: 0.3, ..default() },
+            base: StandardMaterial {
+                perceptual_roughness: 1.0,
+                reflectance: 0.3,
+                ..default()
+            },
             extension: TerrainExt {
                 params: act_params(g.0),
                 albedo: arrays.albedo.clone(),
@@ -306,7 +367,11 @@ mod tests {
             *px = 255;
         }
         let mut img = Image::new(
-            Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: layers as u32 },
+            Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: layers as u32,
+            },
             TextureDimension::D2,
             data,
             TextureFormat::Rgba8Unorm,

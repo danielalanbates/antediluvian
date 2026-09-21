@@ -29,7 +29,9 @@ pub struct ShotsPlugin;
 
 impl Plugin for ShotsPlugin {
     fn build(&self, app: &mut App) {
-        let Ok(dir) = std::env::var("ANTEDILUVIA_SHOTS") else { return };
+        let Ok(dir) = std::env::var("ANTEDILUVIA_SHOTS") else {
+            return;
+        };
         let mut times: Vec<f32> = std::env::var("ANTEDILUVIA_SHOT_TIMES")
             .ok()
             .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
@@ -37,10 +39,12 @@ impl Plugin for ShotsPlugin {
         times.sort_by(|a, b| a.total_cmp(b));
         let dir = std::path::PathBuf::from(dir);
         let _ = std::fs::create_dir_all(&dir);
-        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_millis(16)))
-            .insert_resource(ShotsInit { dir, times })
-            .add_systems(PreStartup, init_target)
-            .add_systems(Last, (retarget_cameras, take_shots));
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_millis(16),
+        ))
+        .insert_resource(ShotsInit { dir, times })
+        .add_systems(PreStartup, init_target)
+        .add_systems(Last, (retarget_cameras, take_shots));
     }
 }
 
@@ -51,7 +55,11 @@ struct ShotsInit {
 }
 
 fn init_target(mut commands: Commands, init: Res<ShotsInit>, mut images: ResMut<Assets<Image>>) {
-    let size = Extent3d { width: 1600, height: 900, ..default() };
+    let size = Extent3d {
+        width: 1600,
+        height: 900,
+        ..default()
+    };
     let mut img = Image::new_fill(
         size,
         TextureDimension::D2,
@@ -107,8 +115,9 @@ fn take_shots(
         if t >= at {
             let path = shots.dir.join(format!("shot_{:03}s.png", at as u32));
             info!("shots: capturing {}", path.display());
-            commands.spawn(Screenshot::image(shots.target.clone())).observe(
-                move |trigger: Trigger<ScreenshotCaptured>| {
+            commands
+                .spawn(Screenshot::image(shots.target.clone()))
+                .observe(move |trigger: Trigger<ScreenshotCaptured>| {
                     // Drop alpha: the render target's alpha is not coverage,
                     // and saving it made opaque characters look see-through.
                     match trigger.event().0.clone().try_into_dynamic() {
@@ -119,8 +128,7 @@ fn take_shots(
                         }
                         Err(e) => error!("shots: cannot convert capture: {e}"),
                     }
-                },
-            );
+                });
             shots.next += 1;
         }
     } else if t >= shots.times.last().copied().unwrap_or(0.0) + 3.0 {

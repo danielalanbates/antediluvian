@@ -60,6 +60,8 @@ pub struct XpFill;
 
 // Action bar.
 #[derive(Component)]
+pub struct ActionBarRoot;
+#[derive(Component)]
 pub struct ActionBarSlot;
 #[derive(Component)]
 pub struct ActionBarLabel(pub u8);
@@ -294,8 +296,10 @@ fn spawn_stat_bar(
 
 fn spawn_action_bar(commands: &mut Commands) {
     commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
+        .spawn((
+            ActionBarRoot,
+            Node {
+                position_type: PositionType::Absolute,
             bottom: Val::Px(16.0),
             left: Val::Percent(50.0),
             // Shift left by half its own width so it's truly centred.
@@ -303,7 +307,8 @@ fn spawn_action_bar(commands: &mut Commands) {
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
             ..default()
-        })
+            },
+        ))
         .with_children(|anchor| {
             // Inner row that we offset via negative margin.
             anchor

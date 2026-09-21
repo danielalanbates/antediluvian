@@ -14,6 +14,8 @@
         color: #e6edf3;
         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
         overflow: hidden;
+        /* Mobile: the game owns all gestures — no pull-to-refresh. */
+        overscroll-behavior: none;
       }
       /* Bevy creates its own canvas, appends it to <body>, and with
          fit_canvas_to_parent sizes it to the parent itself — so do not force
@@ -22,6 +24,53 @@
       canvas {
         display: block;
         outline: none;
+        /* Mobile: the game owns all touch gestures — no page scroll, pinch
+           zoom, or double-tap zoom fighting the canvas. */
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      /* DOM text-entry overlay for touch devices (chat + character name).
+         Bevy cannot summon the OS keyboard, so the game shows this real
+         <input> instead. font-size is 16px: iOS Safari zooms the page on
+         focus for anything smaller. It stays visibly tappable because iOS
+         only summons the keyboard from a genuine user gesture. */
+      #antediluvia-chatbar {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+        display: none;
+        gap: 8px;
+        z-index: 20;
+      }
+      #antediluvia-chat-input {
+        flex: 1;
+        min-width: 0;
+        font-size: 16px;
+        padding: 12px 14px;
+        color: #e6edf3;
+        background: rgba(10, 14, 20, 0.92);
+        border: 2px solid #00d9ff;
+        border-radius: 12px;
+        outline: none;
+      }
+      #antediluvia-chat-send,
+      #antediluvia-chat-cancel {
+        flex: none;
+        min-width: 56px;
+        min-height: 48px;
+        font-size: 15px;
+        font-weight: 700;
+        color: #0a0e14;
+        background: #00d9ff;
+        border: none;
+        border-radius: 12px;
+        cursor: pointer;
+      }
+      #antediluvia-chat-cancel {
+        color: #e6edf3;
+        background: #2a3442;
       }
       #boot {
         position: fixed;
@@ -90,6 +139,17 @@
       <button id="retry" type="button">Try again</button>
     </div>
 
+    <!-- Touch text entry (chat + character name). Hidden until the game shows
+         it; the game focuses the field, and the page posts submitted text back
+         into the wasm via the exported antediluvia_submit_overlay(). -->
+    <div id="antediluvia-chatbar">
+      <input id="antediluvia-chat-input" type="text" enterkeyhint="send"
+             autocomplete="off" autocapitalize="sentences" autocorrect="off"
+             spellcheck="false" maxlength="240" placeholder="Say something…" />
+      <button id="antediluvia-chat-send" type="button">Send</button>
+      <button id="antediluvia-chat-cancel" type="button" aria-label="Cancel">✕</button>
+    </div>
+
     <script type="module">
       // Replaced at build time with a hash of the compiled engine; the literal
       // below is only what a hand-opened, unbuilt copy of this file would use.
@@ -104,6 +164,56 @@
       const statusEl = document.getElementById('status');
       const barEl = document.querySelector('#bar > i');
       const bootEl = document.getElementById('boot');
+
+      // iOS Safari starts every AudioContext suspended and only resumes it
+      // from a real user gesture; Bevy/rodio never resumes on its own, so the
+      // game would be silent. Wrap the constructor (before the engine boots)
+      // to track every context the game creates, and resume suspended ones on
+      // every touch/click — kept persistent, not once, because iOS can
+      // re-suspend on interruptions.
+      const suspendedAudio = new Set();
+      for (const key of ['AudioContext', 'webkitAudioContext']) {
+        const Native = window[key];
+        if (typeof Native !== 'function' || window[`__antediluvia_wrapped_${key}`]) continue;
+        window[`__antediluvia_wrapped_${key}`] = true;
+        window[key] = function (...args) {
+          const ctx = new Native(...args);
+          suspendedAudio.add(ctx);
+          return ctx;
+        };
+      }
+      const resumeAudio = () => {
+        for (const ctx of suspendedAudio) {
+          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        }
+      };
+      window.addEventListener('touchstart', resumeAudio, { passive: true });
+      window.addEventListener('touchend', resumeAudio, { passive: true });
+      window.addEventListener('pointerdown', resumeAudio, { passive: true });
+
+      // Touch devices get touch-first boot instructions.
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+        document.getElementById('hint').textContent =
+          'First load pulls the whole game engine, so give it a moment — it is ' +
+          'cached afterwards. Left thumb to move, drag right side to look, tap the buttons to fight.';
+      }
+
+      // DOM text-entry overlay wiring (see #antediluvia-chatbar above). The
+      // wasm module namespace is captured in boot(); these listeners only fire
+      // on real user taps, after init() has succeeded.
+      let wasmMod = null;
+      const chatInput = document.getElementById('antediluvia-chat-input');
+      const submitChat = () => {
+        if (wasmMod) wasmMod.antediluvia_submit_overlay(chatInput.value);
+        chatInput.value = '';
+      };
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitChat(); }
+      });
+      document.getElementById('antediluvia-chat-send').addEventListener('click', submitChat);
+      document.getElementById('antediluvia-chat-cancel').addEventListener('click', () => {
+        if (wasmMod) wasmMod.antediluvia_cancel_overlay();
+      });
 
       const setStatus = (text) => { statusEl.textContent = text; };
       const setProgress = (frac) => {
@@ -138,7 +248,8 @@
         setStatus('Starting…');
 
         const bytes = new Blob(chunks);
-        const init = (await import(`./pkg/antediluvia.js?v=${BUILD_STAMP}`)).default;
+        wasmMod = await import(`./pkg/antediluvia.js?v=${BUILD_STAMP}`);
+        const init = wasmMod.default;
 
         // Bevy runs its own loop from here and never returns control, so the
         // splash has to be dismissed by watching for the canvas rather than by

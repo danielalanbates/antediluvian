@@ -40,7 +40,9 @@ fn cheek_z(x: f32, y: f32) -> f32 {
 
 /// Returns true when the mesh was a face and got restyled.
 pub fn restyle_head(mesh: &mut Mesh, bearded: bool) -> bool {
-    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).cloned() else {
+    let Some(VertexAttributeValues::Float32x3(pos)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION).cloned()
+    else {
         return false;
     };
     let mut pos = pos;
@@ -97,12 +99,16 @@ pub fn restyle_faces(
         if done.0.contains(&id) {
             continue;
         }
-        let Ok(name) = names.get(parent.get()) else { continue };
+        let Ok(name) = names.get(parent.get()) else {
+            continue;
+        };
         let n = name.as_str();
         if !(n.ends_with("_Head") || n.ends_with("_Head_Hooded")) {
             continue;
         }
-        let Some(mesh) = meshes.get_mut(id) else { continue };
+        let Some(mesh) = meshes.get_mut(id) else {
+            continue;
+        };
         restyle_head(mesh, head_is_bearded(n));
         done.0.insert(id);
     }
@@ -116,22 +122,36 @@ mod tests {
 
     fn mesh(points: Vec<[f32; 3]>) -> Mesh {
         let n = vec![[0.0, 0.0, 1.0]; points.len()];
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, points)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, n)
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, points)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, n)
     }
 
     fn positions(m: &Mesh) -> Vec<[f32; 3]> {
-        m.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec()
+        m.attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap()
+            .to_vec()
     }
 
     #[test]
     fn mouth_fold_is_flattened_and_nose_grows() {
         // Real Rogue vertices: a mouth fold vertex, the nose tip, an eye.
-        let mut m = mesh(vec![[0.05, 1.42, 0.417], [0.02, 1.52, 0.519], [0.17, 1.54, 0.388]]);
+        let mut m = mesh(vec![
+            [0.05, 1.42, 0.417],
+            [0.02, 1.52, 0.519],
+            [0.17, 1.54, 0.388],
+        ]);
         assert!(restyle_head(&mut m, false));
         let p = positions(&m);
-        assert!((p[0][2] - cheek_z(0.05, 1.42)).abs() < 1e-5, "mouth not flattened");
+        assert!(
+            (p[0][2] - cheek_z(0.05, 1.42)).abs() < 1e-5,
+            "mouth not flattened"
+        );
         assert!(p[1][2] > 0.519 + 0.03, "nose did not grow: {}", p[1][2]);
         assert_eq!(p[2], [0.17, 1.54, 0.388], "eye must be untouched");
     }

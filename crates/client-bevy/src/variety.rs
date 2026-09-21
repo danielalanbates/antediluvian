@@ -22,7 +22,9 @@ fn h01(seed: u64) -> f32 {
 }
 
 fn hash_str(s: &str) -> u64 {
-    s.bytes().fold(1469598103934665603u64, |h, b| (h ^ b as u64).wrapping_mul(1099511628211))
+    s.bytes().fold(1469598103934665603u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(1099511628211)
+    })
 }
 
 // ─── Rig tinting (mobs + player skin/hair) ───────────────────────────────────
@@ -64,16 +66,29 @@ pub const HAIR_CHOICES: u32 = 12;
 pub fn skin_hue(idx: u32) -> (f32, f32) {
     // Warm earth tones through cool ash: hue shift + lightness.
     let table = [
-        (0.0, 1.0), (12.0, 1.08), (25.0, 0.95), (40.0, 1.15), (330.0, 0.9),
-        (300.0, 1.05), (200.0, 0.85), (160.0, 1.1), (80.0, 0.9), (55.0, 1.2),
-        (18.0, 0.72), (32.0, 0.6), (8.0, 1.25), (210.0, 1.15), (275.0, 0.75),
+        (0.0, 1.0),
+        (12.0, 1.08),
+        (25.0, 0.95),
+        (40.0, 1.15),
+        (330.0, 0.9),
+        (300.0, 1.05),
+        (200.0, 0.85),
+        (160.0, 1.1),
+        (80.0, 0.9),
+        (55.0, 1.2),
+        (18.0, 0.72),
+        (32.0, 0.6),
+        (8.0, 1.25),
+        (210.0, 1.15),
+        (275.0, 0.75),
         (120.0, 0.68),
     ];
     table[idx as usize % SKIN_CHOICES as usize]
 }
 pub fn hair_hue(idx: u32) -> f32 {
-    [0.0, 30.0, 60.0, 100.0, 140.0, 180.0, 220.0, 260.0, 300.0, 340.0, 15.0, 45.0]
-        [idx as usize % HAIR_CHOICES as usize]
+    [
+        0.0, 30.0, 60.0, 100.0, 140.0, 180.0, 220.0, 260.0, 300.0, 340.0, 15.0, 45.0,
+    ][idx as usize % HAIR_CHOICES as usize]
 }
 
 // ─── Player hairstyles (Alpha-2 A3) ─────────────────────────────────────────
@@ -134,7 +149,11 @@ pub fn attach_hair_style(
                 // Mohawk: 4 spikes down the crown midline.
                 for i in 0..4u64 {
                     let m = meshes.add(spike_mesh(seed ^ i, 0.16, 0.05));
-                    spawn(&mut commands, m, Transform::from_xyz(0.0, 0.16, 0.06 - i as f32 * 0.05));
+                    spawn(
+                        &mut commands,
+                        m,
+                        Transform::from_xyz(0.0, 0.16, 0.06 - i as f32 * 0.05),
+                    );
                 }
             }
             2 => {
@@ -145,62 +164,96 @@ pub fn attach_hair_style(
             3 => {
                 // Long fall: flattened spike down the back.
                 let m = meshes.add(spike_mesh(seed, 0.42, 0.11));
-                spawn(&mut commands, m, Transform::from_xyz(0.0, 0.12, -0.07)
-                    .with_rotation(Quat::from_rotation_x(2.6))
-                    .with_scale(Vec3::new(1.3, 1.0, 0.5)));
+                spawn(
+                    &mut commands,
+                    m,
+                    Transform::from_xyz(0.0, 0.12, -0.07)
+                        .with_rotation(Quat::from_rotation_x(2.6))
+                        .with_scale(Vec3::new(1.3, 1.0, 0.5)),
+                );
             }
             4 => {
                 // Twin tails.
                 for side in [-1.0f32, 1.0] {
                     let m = meshes.add(spike_mesh(seed ^ (side as i64 as u64), 0.3, 0.07));
-                    spawn(&mut commands, m, Transform::from_xyz(side * 0.09, 0.1, -0.05)
-                        .with_rotation(Quat::from_rotation_x(2.4) * Quat::from_rotation_z(side * 0.3)));
+                    spawn(
+                        &mut commands,
+                        m,
+                        Transform::from_xyz(side * 0.09, 0.1, -0.05).with_rotation(
+                            Quat::from_rotation_x(2.4) * Quat::from_rotation_z(side * 0.3),
+                        ),
+                    );
                 }
             }
             5 => {
                 // Crown crest, front-to-back fin.
                 let m = meshes.add(spike_mesh(seed, 0.24, 0.1));
-                spawn(&mut commands, m, Transform::from_xyz(0.0, 0.15, 0.0)
-                    .with_scale(Vec3::new(0.35, 1.0, 1.6)));
+                spawn(
+                    &mut commands,
+                    m,
+                    Transform::from_xyz(0.0, 0.15, 0.0).with_scale(Vec3::new(0.35, 1.0, 1.6)),
+                );
             }
             6 => {
                 // Side sweep.
                 let m = meshes.add(spike_mesh(seed, 0.26, 0.1));
-                spawn(&mut commands, m, Transform::from_xyz(0.07, 0.14, 0.0)
-                    .with_rotation(Quat::from_rotation_z(-0.9))
-                    .with_scale(Vec3::new(1.0, 1.0, 1.4)));
+                spawn(
+                    &mut commands,
+                    m,
+                    Transform::from_xyz(0.07, 0.14, 0.0)
+                        .with_rotation(Quat::from_rotation_z(-0.9))
+                        .with_scale(Vec3::new(1.0, 1.0, 1.4)),
+                );
             }
             7 => {
                 // Bun + fringe.
                 let m = meshes.add(spike_mesh(seed, 0.12, 0.08));
                 spawn(&mut commands, m, Transform::from_xyz(0.0, 0.14, -0.08));
                 let f = meshes.add(spike_mesh(seed ^ 9, 0.1, 0.09));
-                spawn(&mut commands, f, Transform::from_xyz(0.0, 0.12, 0.09)
-                    .with_rotation(Quat::from_rotation_x(-2.2)).with_scale(Vec3::new(1.5, 1.0, 0.6)));
+                spawn(
+                    &mut commands,
+                    f,
+                    Transform::from_xyz(0.0, 0.12, 0.09)
+                        .with_rotation(Quat::from_rotation_x(-2.2))
+                        .with_scale(Vec3::new(1.5, 1.0, 0.6)),
+                );
             }
             8 => {
                 // Wild mane: ring of 6 short spikes.
                 for i in 0..6u64 {
                     let th = std::f32::consts::TAU * i as f32 / 6.0;
                     let m = meshes.add(spike_mesh(seed ^ i, 0.13, 0.05));
-                    spawn(&mut commands, m, Transform::from_xyz(th.cos() * 0.08, 0.13, th.sin() * 0.08)
-                        .with_rotation(Quat::from_rotation_z(-th.cos()) * Quat::from_rotation_x(th.sin())));
+                    spawn(
+                        &mut commands,
+                        m,
+                        Transform::from_xyz(th.cos() * 0.08, 0.13, th.sin() * 0.08).with_rotation(
+                            Quat::from_rotation_z(-th.cos()) * Quat::from_rotation_x(th.sin()),
+                        ),
+                    );
                 }
             }
             9 => {
                 // Braided tail: 3 segments down the back.
                 for i in 0..3u64 {
                     let m = meshes.add(spike_mesh(seed ^ i, 0.16, 0.06 - i as f32 * 0.012));
-                    spawn(&mut commands, m, Transform::from_xyz(0.0, 0.1 - i as f32 * 0.1, -0.08 - i as f32 * 0.05)
-                        .with_rotation(Quat::from_rotation_x(2.7)));
+                    spawn(
+                        &mut commands,
+                        m,
+                        Transform::from_xyz(0.0, 0.1 - i as f32 * 0.1, -0.08 - i as f32 * 0.05)
+                            .with_rotation(Quat::from_rotation_x(2.7)),
+                    );
                 }
             }
             10 => {
                 // Horned circlet: hair styled around two small nubs.
                 for side in [-1.0f32, 1.0] {
                     let m = meshes.add(spike_mesh(seed, 0.09, 0.05));
-                    spawn(&mut commands, m, Transform::from_xyz(side * 0.09, 0.15, 0.03)
-                        .with_rotation(Quat::from_rotation_z(-side * 0.5)));
+                    spawn(
+                        &mut commands,
+                        m,
+                        Transform::from_xyz(side * 0.09, 0.15, 0.03)
+                            .with_rotation(Quat::from_rotation_z(-side * 0.5)),
+                    );
                 }
                 let c = meshes.add(spike_mesh(seed ^ 3, 0.14, 0.09));
                 spawn(&mut commands, c, Transform::from_xyz(0.0, 0.15, -0.03));
@@ -208,9 +261,13 @@ pub fn attach_hair_style(
             _ => {
                 // Pompadour: forward-leaning fat crest.
                 let m = meshes.add(spike_mesh(seed, 0.2, 0.11));
-                spawn(&mut commands, m, Transform::from_xyz(0.0, 0.15, 0.05)
-                    .with_rotation(Quat::from_rotation_x(-0.5))
-                    .with_scale(Vec3::new(0.9, 1.0, 1.2)));
+                spawn(
+                    &mut commands,
+                    m,
+                    Transform::from_xyz(0.0, 0.15, 0.05)
+                        .with_rotation(Quat::from_rotation_x(-0.5))
+                        .with_scale(Vec3::new(0.9, 1.0, 1.2)),
+                );
             }
         }
         commands.entity(root).try_insert(HairApplied);
@@ -249,7 +306,9 @@ pub fn apply_tints(
             let handle = if let Some(h) = cache.0.get(&key) {
                 h.clone()
             } else {
-                let Some(src) = materials.get(mat.0.id()) else { continue };
+                let Some(src) = materials.get(mat.0.id()) else {
+                    continue;
+                };
                 let mut m = src.clone();
                 let mut hsla: Hsla = Hsla::from(m.base_color);
                 // Untextured animal rigs (the Quaternius Bull above all) are
@@ -346,7 +405,11 @@ pub fn silhouette_key(tag: &str) -> (u32, [i32; 3], u32) {
         | ((h01(seed ^ 0xD5) > 0.55) as u32) << 5;
     (
         species_plan(tag),
-        [(s.x * 20.0) as i32, (s.y * 20.0) as i32, (s.z * 20.0) as i32],
+        [
+            (s.x * 20.0) as i32,
+            (s.y * 20.0) as i32,
+            (s.z * 20.0) as i32,
+        ],
         bits,
     )
 }
@@ -392,7 +455,10 @@ fn spike_mesh(seed: u64, len: f32, girth: f32) -> Mesh {
             indices.extend_from_slice(&[a, b, c, b, d, c]);
         }
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
@@ -425,7 +491,10 @@ pub fn attach_species_parts(
                 if head.is_none() && (n.contains("head") || n.contains("neck")) {
                     head = Some(ent);
                 } else if spine.is_none()
-                    && (n.contains("spine") || n.contains("torso") || n.contains("body") || n.contains("chest"))
+                    && (n.contains("spine")
+                        || n.contains("torso")
+                        || n.contains("body")
+                        || n.contains("chest"))
                 {
                     spine = Some(ent);
                 } else if tail.is_none() && n.contains("tail") {
@@ -446,7 +515,11 @@ pub fn attach_species_parts(
             if h01(seed ^ 0xA1) > 0.25 {
                 let horns = 1 + (h01(seed ^ 0xA2) * 2.0) as u32; // 1–2 pairs
                 for i in 0..horns {
-                    let m = meshes.add(spike_mesh(seed ^ (0xB00 + i as u64), 0.28 + h01(seed ^ (0xA3 + i as u64)) * 0.5, 0.05 + h01(seed ^ (0xA4 + i as u64)) * 0.06));
+                    let m = meshes.add(spike_mesh(
+                        seed ^ (0xB00 + i as u64),
+                        0.28 + h01(seed ^ (0xA3 + i as u64)) * 0.5,
+                        0.05 + h01(seed ^ (0xA4 + i as u64)) * 0.06,
+                    ));
                     let x = 0.09 + i as f32 * 0.07;
                     let tilt = (h01(seed ^ (0xA5 + i as u64)) - 0.3) * 1.2;
                     for side in [-1.0f32, 1.0] {
@@ -473,14 +546,19 @@ pub fn attach_species_parts(
             }
             // Tusks (A2): down-curved pair jutting forward from the jaw.
             if h01(seed ^ 0xB1) > 0.6 {
-                let m = meshes.add(spike_mesh(seed ^ 0x705C, 0.22 + h01(seed ^ 0xB2) * 0.2, 0.05));
+                let m = meshes.add(spike_mesh(
+                    seed ^ 0x705C,
+                    0.22 + h01(seed ^ 0xB2) * 0.2,
+                    0.05,
+                ));
                 for side in [-1.0f32, 1.0] {
                     commands.entity(head).with_children(|p| {
                         p.spawn((
                             Mesh3d(m.clone()),
                             MeshMaterial3d(mat.clone()),
-                            Transform::from_xyz(side * 0.07, -0.04, 0.12)
-                                .with_rotation(Quat::from_rotation_x(-1.9) * Quat::from_rotation_z(side * 0.35)),
+                            Transform::from_xyz(side * 0.07, -0.04, 0.12).with_rotation(
+                                Quat::from_rotation_x(-1.9) * Quat::from_rotation_z(side * 0.35),
+                            ),
                         ));
                     });
                 }
@@ -491,7 +569,11 @@ pub fn attach_species_parts(
                 // Back ridge: 3–5 unique spikes down the spine.
                 let n = 3 + (h01(seed ^ 0xA7) * 3.0) as u32;
                 for i in 0..n {
-                    let m = meshes.add(spike_mesh(seed ^ (0xE00 + i as u64), 0.16 + h01(seed ^ (0xA8 + i as u64)) * 0.22, 0.05));
+                    let m = meshes.add(spike_mesh(
+                        seed ^ (0xE00 + i as u64),
+                        0.16 + h01(seed ^ (0xA8 + i as u64)) * 0.22,
+                        0.05,
+                    ));
                     commands.entity(spine).with_children(|p| {
                         p.spawn((
                             Mesh3d(m),
@@ -502,7 +584,11 @@ pub fn attach_species_parts(
                 }
             } else if h01(seed ^ 0xD5) > 0.55 {
                 // Dorsal sail (A2): tall thin fin along the spine.
-                let m = meshes.add(spike_mesh(seed ^ 0x5A11, 0.35 + h01(seed ^ 0xD6) * 0.3, 0.14));
+                let m = meshes.add(spike_mesh(
+                    seed ^ 0x5A11,
+                    0.35 + h01(seed ^ 0xD6) * 0.3,
+                    0.14,
+                ));
                 commands.entity(spine).with_children(|p| {
                     p.spawn((
                         Mesh3d(m),
@@ -531,7 +617,11 @@ pub fn attach_species_parts(
             if h01(seed ^ 0xB7) > 0.45 {
                 let n = 2 + (h01(seed ^ 0xB8) * 2.0) as u32;
                 for i in 0..n {
-                    let m = meshes.add(spike_mesh(seed ^ (0x7A11 + i as u64), 0.12 + h01(seed ^ (0xB9 + i as u64)) * 0.14, 0.04));
+                    let m = meshes.add(spike_mesh(
+                        seed ^ (0x7A11 + i as u64),
+                        0.12 + h01(seed ^ (0xB9 + i as u64)) * 0.14,
+                        0.04,
+                    ));
                     commands.entity(tail).with_children(|p| {
                         p.spawn((
                             Mesh3d(m),
@@ -582,25 +672,57 @@ pub fn formation_mesh(seed: u64) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let (rx, ry, rz) = match family {
-        0 => (1.0 + h01(seed ^ 1) * 0.8, 0.7 + h01(seed ^ 2) * 0.5, 1.0 + h01(seed ^ 3) * 0.8), // boulder
-        1 => (0.45 + h01(seed ^ 1) * 0.3, 1.6 + h01(seed ^ 2) * 1.4, 0.45 + h01(seed ^ 3) * 0.3), // spire
-        2 => (1.4 + h01(seed ^ 1) * 1.0, 0.35 + h01(seed ^ 2) * 0.3, 1.0 + h01(seed ^ 3) * 0.7), // slab
-        3 => (1.2 + h01(seed ^ 1) * 0.7, 0.9 + h01(seed ^ 2) * 0.4, 1.2 + h01(seed ^ 3) * 0.7), // mesa
-        4 => (0.6 + h01(seed ^ 1) * 0.25, 1.4 + h01(seed ^ 2) * 1.0, 0.6 + h01(seed ^ 3) * 0.25), // hoodoo
-        5 => (1.3 + h01(seed ^ 1) * 0.6, 1.1 + h01(seed ^ 2) * 0.6, 0.5 + h01(seed ^ 3) * 0.2), // arch
-        6 => (0.8 + h01(seed ^ 1) * 0.5, 1.2 + h01(seed ^ 2) * 0.9, 0.8 + h01(seed ^ 3) * 0.5), // shards
-        _ => (1.3 + h01(seed ^ 1) * 0.8, 0.7 + h01(seed ^ 2) * 0.35, 1.1 + h01(seed ^ 3) * 0.6), // terrace
+        0 => (
+            1.0 + h01(seed ^ 1) * 0.8,
+            0.7 + h01(seed ^ 2) * 0.5,
+            1.0 + h01(seed ^ 3) * 0.8,
+        ), // boulder
+        1 => (
+            0.45 + h01(seed ^ 1) * 0.3,
+            1.6 + h01(seed ^ 2) * 1.4,
+            0.45 + h01(seed ^ 3) * 0.3,
+        ), // spire
+        2 => (
+            1.4 + h01(seed ^ 1) * 1.0,
+            0.35 + h01(seed ^ 2) * 0.3,
+            1.0 + h01(seed ^ 3) * 0.7,
+        ), // slab
+        3 => (
+            1.2 + h01(seed ^ 1) * 0.7,
+            0.9 + h01(seed ^ 2) * 0.4,
+            1.2 + h01(seed ^ 3) * 0.7,
+        ), // mesa
+        4 => (
+            0.6 + h01(seed ^ 1) * 0.25,
+            1.4 + h01(seed ^ 2) * 1.0,
+            0.6 + h01(seed ^ 3) * 0.25,
+        ), // hoodoo
+        5 => (
+            1.3 + h01(seed ^ 1) * 0.6,
+            1.1 + h01(seed ^ 2) * 0.6,
+            0.5 + h01(seed ^ 3) * 0.2,
+        ), // arch
+        6 => (
+            0.8 + h01(seed ^ 1) * 0.5,
+            1.2 + h01(seed ^ 2) * 0.9,
+            0.8 + h01(seed ^ 3) * 0.5,
+        ), // shards
+        _ => (
+            1.3 + h01(seed ^ 1) * 0.8,
+            0.7 + h01(seed ^ 2) * 0.35,
+            1.1 + h01(seed ^ 3) * 0.6,
+        ), // terrace
     };
     for r in 0..=rings {
         let phi = std::f32::consts::PI * 0.5 * r as f32 / rings as f32;
         let t = r as f32 / rings as f32;
         // Family-specific vertical profile warps.
         let (prof, twist) = match family {
-            3 => (if t < 0.35 { 1.0 } else { 0.55 }, 0.0),               // mesa: flat cap, pinched base
-            4 => (0.65 + 0.5 * ((t * 9.0).sin().abs()), 0.0),           // hoodoo: bulge stack
-            5 => (1.0, 0.0),                                             // arch handled per-vertex below
-            6 => (1.0 - t * 0.35, h01(seed ^ 0xF1) * 1.4),               // shards: twisted taper
-            7 => (1.0 - (t * 4.0).floor() * 0.18, 0.0),                  // terrace: stepped shelves
+            3 => (if t < 0.35 { 1.0 } else { 0.55 }, 0.0), // mesa: flat cap, pinched base
+            4 => (0.65 + 0.5 * ((t * 9.0).sin().abs()), 0.0), // hoodoo: bulge stack
+            5 => (1.0, 0.0),                               // arch handled per-vertex below
+            6 => (1.0 - t * 0.35, h01(seed ^ 0xF1) * 1.4), // shards: twisted taper
+            7 => (1.0 - (t * 4.0).floor() * 0.18, 0.0),    // terrace: stepped shelves
             _ => (1.0, 0.0),
         };
         for s in 0..segs {
@@ -631,7 +753,10 @@ pub fn formation_mesh(seed: u64) -> Mesh {
             indices.extend_from_slice(&[a, b, c, b, d, c]);
         }
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
@@ -664,7 +789,12 @@ mod tests {
     /// different mob models" claim rests on this.
     #[test]
     fn species_geometry_is_unique_per_seed() {
-        let tags = ["cainite_raider", "nephilim_goliath", "abyssal_aurochs", "eden_wolf"];
+        let tags = [
+            "cainite_raider",
+            "nephilim_goliath",
+            "abyssal_aurochs",
+            "eden_wolf",
+        ];
         let mut all: Vec<Vec<[f32; 3]>> = Vec::new();
         for t in tags {
             let s = species_parts_seed(t);
@@ -676,10 +806,16 @@ mod tests {
             let st = species_stretch(t);
             // Alpha-2 body plans widen the band deliberately (serpentine z
             // reaches ~2.1); keep a sanity ceiling so shear stays invisible.
-            assert!(st.min_element() > 0.4 && st.max_element() < 2.2, "{t}: stretch out of band");
+            assert!(
+                st.min_element() > 0.4 && st.max_element() < 2.2,
+                "{t}: stretch out of band"
+            );
         }
         // Stretch must differ across species too.
-        assert_ne!(species_stretch("eden_wolf"), species_stretch("abyssal_aurochs"));
+        assert_ne!(
+            species_stretch("eden_wolf"),
+            species_stretch("abyssal_aurochs")
+        );
     }
 
     #[test]
@@ -700,12 +836,26 @@ mod tests {
             fams.insert(formation_family(seed));
             let p = positions(&formation_mesh(seed));
             assert!(p.len() >= 24, "seed {seed}: degenerate mesh");
-            let key: Vec<[i64; 3]> = p.iter()
-                .map(|v| [(v[0] * 1e4) as i64, (v[1] * 1e4) as i64, (v[2] * 1e4) as i64])
+            let key: Vec<[i64; 3]> = p
+                .iter()
+                .map(|v| {
+                    [
+                        (v[0] * 1e4) as i64,
+                        (v[1] * 1e4) as i64,
+                        (v[2] * 1e4) as i64,
+                    ]
+                })
                 .collect();
-            assert!(geoms.insert(key), "seed {seed}: duplicate formation geometry");
+            assert!(
+                geoms.insert(key),
+                "seed {seed}: duplicate formation geometry"
+            );
         }
-        assert_eq!(fams.len(), FORMATION_FAMILIES as usize, "unreachable formation family");
+        assert_eq!(
+            fams.len(),
+            FORMATION_FAMILIES as usize,
+            "unreachable formation family"
+        );
     }
 
     /// A2: across a bestiary-sized namespace of species tags, silhouettes
@@ -714,15 +864,14 @@ mod tests {
     #[test]
     fn species_silhouettes_hundreds_distinct() {
         let bases = [
-            "cainite", "nephilim", "abyssal", "eden", "marsh", "dune", "vale",
-            "ridge", "hollow", "grove", "reef", "peak", "shade", "storm",
-            "ember", "frost", "iron", "gilded", "wild", "elder",
+            "cainite", "nephilim", "abyssal", "eden", "marsh", "dune", "vale", "ridge", "hollow",
+            "grove", "reef", "peak", "shade", "storm", "ember", "frost", "iron", "gilded", "wild",
+            "elder",
         ];
         let kinds = [
-            "raider", "goliath", "aurochs", "wolf", "serpent", "stalker",
-            "brute", "harrier", "lurker", "matron", "whelp", "tyrant",
-            "warden", "husk", "render", "sentinel", "hound", "drake",
-            "gorger", "shaman",
+            "raider", "goliath", "aurochs", "wolf", "serpent", "stalker", "brute", "harrier",
+            "lurker", "matron", "whelp", "tyrant", "warden", "husk", "render", "sentinel", "hound",
+            "drake", "gorger", "shaman",
         ];
         let mut plans = std::collections::HashSet::new();
         let mut keys = std::collections::HashSet::new();
@@ -750,11 +899,16 @@ mod tests {
     fn character_creation_hundreds_of_choices() {
         let combos = 4 * SKIN_CHOICES * HAIR_CHOICES; // bodies x skins x hairs
         assert!(combos >= 700, "only {combos} combos");
-        let skins: std::collections::HashSet<_> =
-            (0..SKIN_CHOICES).map(|i| { let (h, l) = skin_hue(i); ((h * 10.0) as i32, (l * 100.0) as i32) }).collect();
+        let skins: std::collections::HashSet<_> = (0..SKIN_CHOICES)
+            .map(|i| {
+                let (h, l) = skin_hue(i);
+                ((h * 10.0) as i32, (l * 100.0) as i32)
+            })
+            .collect();
         assert_eq!(skins.len(), SKIN_CHOICES as usize, "duplicate skin tones");
-        let hairs: std::collections::HashSet<_> =
-            (0..HAIR_CHOICES).map(|i| (hair_hue(i) * 10.0) as i32).collect();
+        let hairs: std::collections::HashSet<_> = (0..HAIR_CHOICES)
+            .map(|i| (hair_hue(i) * 10.0) as i32)
+            .collect();
         assert_eq!(hairs.len(), HAIR_CHOICES as usize, "duplicate hair colors");
     }
 }

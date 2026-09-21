@@ -43,7 +43,10 @@ pub struct AmbientBed {
 pub fn init_audio_assets(mut commands: Commands, assets: Res<AssetServer>) {
     let load = |p: &str| assets.load::<AudioSource>(p.to_string());
     commands.insert_resource(AudioAssets {
-        attack: vec![load("audio/sfx/attack_0.ogg"), load("audio/sfx/attack_1.ogg")],
+        attack: vec![
+            load("audio/sfx/attack_0.ogg"),
+            load("audio/sfx/attack_1.ogg"),
+        ],
         cast: vec![load("audio/sfx/cast_0.ogg"), load("audio/sfx/cast_1.ogg")],
         hit: vec![
             load("audio/sfx/hit_0.ogg"),
@@ -63,12 +66,7 @@ pub fn init_audio_assets(mut commands: Commands, assets: Res<AssetServer>) {
 }
 
 /// Play a one-shot from `pool`, volume-attenuated by distance to the camera.
-pub fn one_shot(
-    commands: &mut Commands,
-    audio: &mut AudioAssets,
-    pool: Pool,
-    dist: f32,
-) {
+pub fn one_shot(commands: &mut Commands, audio: &mut AudioAssets, pool: Pool, dist: f32) {
     if audio.muted {
         return;
     }
@@ -150,7 +148,10 @@ pub fn ambient_system(
             commands.spawn((
                 AudioPlayer::new(h.clone()),
                 PlaybackSettings::LOOP.with_volume(Volume::new(0.0)),
-                AmbientBed { act: session.act, target: full },
+                AmbientBed {
+                    act: session.act,
+                    target: full,
+                },
             ));
         }
     }

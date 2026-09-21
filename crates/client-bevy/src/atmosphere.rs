@@ -65,8 +65,16 @@ pub fn act_mood(act: Act) -> Mood {
     }
 }
 
-pub fn generate_sky_gradient(images: &mut Assets<Image>, zenith: Color, horizon: Color) -> Handle<Image> {
-    let size = Extent3d { width: 1, height: 128, depth_or_array_layers: 1 };
+pub fn generate_sky_gradient(
+    images: &mut Assets<Image>,
+    zenith: Color,
+    horizon: Color,
+) -> Handle<Image> {
+    let size = Extent3d {
+        width: 1,
+        height: 128,
+        depth_or_array_layers: 1,
+    };
     let mut data = Vec::with_capacity(128 * 4);
     for y in 0..128 {
         // y=0 is bottom (horizon), y=127 is top (zenith)
@@ -101,7 +109,7 @@ pub fn spawn_sky(
     // We want the sphere to be visible from the inside, but Bevy's default sphere
     // has normals pointing out. We can cull front faces or disable culling.
     let texture = generate_sky_gradient(images, mood.sky_zenith, mood.sky_horizon);
-    
+
     let material = materials.add(StandardMaterial {
         base_color_texture: Some(texture),
         unlit: true,
@@ -110,18 +118,23 @@ pub fn spawn_sky(
     });
 
     // Huge sphere that bounds the camera
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(4000.0).mesh().uv(32, 18))),
-        MeshMaterial3d(material),
-        Transform::default(),
-        SkySphere,
-    )).id()
+    commands
+        .spawn((
+            Mesh3d(meshes.add(Sphere::new(4000.0).mesh().uv(32, 18))),
+            MeshMaterial3d(material),
+            Transform::default(),
+            SkySphere,
+        ))
+        .id()
 }
 
 /// Screenshot-tuning knob: `ANTEDILUVIA_FOG=<multiplier>`.
 fn fog_scale() -> f32 {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(v) = std::env::var("ANTEDILUVIA_FOG").ok().and_then(|v| v.parse().ok()) {
+    if let Some(v) = std::env::var("ANTEDILUVIA_FOG")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
         return v;
     }
     // Realism pass: at the physical exposure the old densities were a wall.
@@ -135,27 +148,33 @@ pub fn update_atmosphere(
     mut commands: Commands,
     mut meshes: Local<Option<Handle<Mesh>>>,
     mut materials: Local<Option<Handle<StandardMaterial>>>,
-    mut q_sun: Query<(&mut Transform, &mut DirectionalLight), (With<Sun>, Without<crate::MainCamera>, Without<SkySphere>)>,
+    mut q_sun: Query<
+        (&mut Transform, &mut DirectionalLight),
+        (With<Sun>, Without<crate::MainCamera>, Without<SkySphere>),
+    >,
     mut q_sky: Query<&mut Transform, (With<SkySphere>, Without<crate::MainCamera>, Without<Sun>)>,
-    mut q_cam: Query<(Entity, &Transform, &mut DistanceFog), (With<crate::MainCamera>, Without<Sun>, Without<SkySphere>)>,
+    mut q_cam: Query<
+        (Entity, &Transform, &mut DistanceFog),
+        (With<crate::MainCamera>, Without<Sun>, Without<SkySphere>),
+    >,
     mut ambient: ResMut<AmbientLight>,
     mut global_meshes: ResMut<Assets<Mesh>>,
     mut global_materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let t = session.time_of_day; // 0.0 to 1.0
-    // Time of day logic: 
-    // 0.25 = sunrise (sun at horizon)
-    // 0.5 = noon (sun at zenith)
-    // 0.75 = sunset (sun at horizon)
-    // 0.0 / 1.0 = midnight (sun below horizon)
-    
+                                 // Time of day logic:
+                                 // 0.25 = sunrise (sun at horizon)
+                                 // 0.5 = noon (sun at zenith)
+                                 // 0.75 = sunset (sun at horizon)
+                                 // 0.0 / 1.0 = midnight (sun below horizon)
+
     // Convert t to an angle where 0.5 is -PI/2 (looking down), 0.25 is 0 (looking horizontal).
     // angle = (t - 0.25) * 2PI. At 0.25 -> 0. At 0.5 -> PI/2.
     let angle = (t - 0.25) * std::f32::consts::TAU;
 
     // Ambient light: minimum ~80 at night.
     let mood = act_mood(session.act);
-    
+
     // Pitch around X axis.
     if let Ok((mut sun_tf, mut sun_light)) = q_sun.get_single_mut() {
         // Realism pass: the sun used to pass straight overhead, so at noon
@@ -165,7 +184,7 @@ pub fn update_atmosphere(
         let az = 0.6 + (t - 0.5) * 2.4;
         let dir = Vec3::new(az.sin() * elev.cos(), elev.sin(), az.cos() * elev.cos());
         *sun_tf = Transform::IDENTITY.looking_to(-dir, Vec3::Y);
-        
+
         // Intensity peaks at noon, zero at night.
         let is_day = t > 0.2 && t < 0.8;
         let day_factor = if is_day { (angle.sin()).max(0.0) } else { 0.0 };
@@ -179,11 +198,14 @@ pub fn update_atmosphere(
     ambient.color = mood.ambient_color;
 
     // Cave interiors (C09): darken ambient + tighten fog inside a pocket.
-    let in_cave = q_cam.get_single().ok().map(|(_, cam_tf, _)| {
-        let p = cam_tf.translation;
-        crate::caves_for_act(session.act)
-            .any(|c| (p.x - c.x).hypot(p.z - c.y) < 260.0)
-    }).unwrap_or(false);
+    let in_cave = q_cam
+        .get_single()
+        .ok()
+        .map(|(_, cam_tf, _)| {
+            let p = cam_tf.translation;
+            crate::caves_for_act(session.act).any(|c| (p.x - c.x).hypot(p.z - c.y) < 260.0)
+        })
+        .unwrap_or(false);
     if in_cave {
         ambient.brightness *= 0.25;
     }
@@ -197,7 +219,7 @@ pub fn update_atmosphere(
             base_fog.red * night_dim * cave_dim,
             base_fog.green * night_dim * cave_dim,
             base_fog.blue * night_dim * cave_dim,
-            1.0
+            1.0,
         );
         fog.falloff = FogFalloff::Exponential {
             density: mood.fog_density * if in_cave { 4.0 } else { 1.0 } * fog_scale(),
@@ -210,13 +232,19 @@ pub fn update_atmosphere(
 
         // Spawn rain in Flood act
         if session.act == Act::Flood {
-            let mesh = meshes.get_or_insert_with(|| global_meshes.add(Sphere::new(1.0))).clone();
-            let mat = materials.get_or_insert_with(|| global_materials.add(StandardMaterial {
-                base_color: Color::srgba(0.6, 0.7, 0.8, 0.4),
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                ..default()
-            })).clone();
+            let mesh = meshes
+                .get_or_insert_with(|| global_meshes.add(Sphere::new(1.0)))
+                .clone();
+            let mat = materials
+                .get_or_insert_with(|| {
+                    global_materials.add(StandardMaterial {
+                        base_color: Color::srgba(0.6, 0.7, 0.8, 0.4),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Blend,
+                        ..default()
+                    })
+                })
+                .clone();
 
             let spawn_count = 5; // Drops per frame
             for i in 0..spawn_count {
@@ -224,7 +252,7 @@ pub fn update_atmosphere(
                 let x = (s.sin() * 41.0 % 1.0) as f32 * 400.0 - 200.0;
                 let y = 150.0 + (s.cos() * 53.0 % 1.0) as f32 * 50.0;
                 let z = (s.sin() * 79.0 % 1.0) as f32 * -300.0 - 50.0; // In front of camera
-                
+
                 let mut p = commands.spawn((
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(mat.clone()),
@@ -241,4 +269,3 @@ pub fn update_atmosphere(
         }
     }
 }
-

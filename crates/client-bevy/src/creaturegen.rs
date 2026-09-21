@@ -23,9 +23,9 @@
 //!   set batches under one material, faceted flat normals.
 
 use bevy::prelude::*;
+use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::mesh::{Mesh, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
-use bevy::render::mesh::PrimitiveTopology;
 
 use crate::propgen::{h01, rng, Builder, Rgba};
 
@@ -172,7 +172,15 @@ fn limb_mesh(seed: u64, len: f32, girth: f32, segs: u32, splay: f32, c: Rgba) ->
         at += Vec3::new(lean.x, -seg_len, lean.z);
     }
     // Foot: a squat pad so the limb doesn't end in a needle point.
-    b.blob(at, Vec3::new(girth * 1.5, girth * 0.7, girth * 2.1), 3, 6, 0.12, seed ^ 0x0F00, c);
+    b.blob(
+        at,
+        Vec3::new(girth * 1.5, girth * 0.7, girth * 2.1),
+        3,
+        6,
+        0.12,
+        seed ^ 0x0F00,
+        c,
+    );
     b.finish()
 }
 
@@ -274,16 +282,16 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
     // Overall proportions, jittered per seed so no two of a plan match.
     let scale_all = 0.8 + h01(seed ^ 0x11) * 0.6;
     let (body_len, body_r, leg_len) = match plan {
-        0 => (1.05, 0.34, 0.46),  // heavy quadruped
-        1 => (0.95, 0.22, 0.66),  // light quadruped
-        2 => (1.9, 0.19, 0.0),    // serpent
-        3 => (0.62, 0.26, 0.62),  // avian
-        4 => (1.0, 0.20, 0.40),   // insectoid
-        5 => (0.72, 0.30, 0.52),  // arachnid
-        6 => (0.86, 0.32, 0.30),  // amphibian
-        7 => (0.86, 0.38, 0.60),  // biped brute
-        8 => (0.80, 0.34, 0.26),  // crustacean
-        _ => (0.56, 0.20, 0.34),  // chiropteran
+        0 => (1.05, 0.34, 0.46), // heavy quadruped
+        1 => (0.95, 0.22, 0.66), // light quadruped
+        2 => (1.9, 0.19, 0.0),   // serpent
+        3 => (0.62, 0.26, 0.62), // avian
+        4 => (1.0, 0.20, 0.40),  // insectoid
+        5 => (0.72, 0.30, 0.52), // arachnid
+        6 => (0.86, 0.32, 0.30), // amphibian
+        7 => (0.86, 0.38, 0.60), // biped brute
+        8 => (0.80, 0.34, 0.26), // crustacean
+        _ => (0.56, 0.20, 0.34), // chiropteran
     };
     let body_len = body_len * scale_all * (0.85 + h01(seed ^ 0x12) * 0.35);
     let body_r = body_r * scale_all * (0.82 + h01(seed ^ 0x13) * 0.42);
@@ -295,8 +303,8 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
     {
         let mut b = Builder::default();
         let segs = match plan {
-            2 => 9,          // serpent: a long chain IS the body
-            4 | 5 | 8 => 3,  // segmented arthropods
+            2 => 9,         // serpent: a long chain IS the body
+            4 | 5 | 8 => 3, // segmented arthropods
             _ => 4,
         };
         let step = body_len / segs as f32;
@@ -312,7 +320,11 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             let r = body_r * bulge;
             b.blob(
                 Vec3::new(0.0, 0.0, -(s as f32) * step + body_len * 0.5),
-                Vec3::new(r * (0.9 + h01(seed ^ (s as u64 + 71)) * 0.3), r, step * 0.78),
+                Vec3::new(
+                    r * (0.9 + h01(seed ^ (s as u64 + 71)) * 0.3),
+                    r,
+                    step * 0.78,
+                ),
                 4,
                 8,
                 0.10,
@@ -344,7 +356,15 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
         let mut b = Builder::default();
         let hr = body_r * (0.62 + h01(seed ^ 0x21) * 0.45);
         // Skull.
-        b.blob(Vec3::ZERO, Vec3::new(hr * 0.86, hr, hr * 1.15), 4, 8, 0.10, seed ^ 0x22, c);
+        b.blob(
+            Vec3::ZERO,
+            Vec3::new(hr * 0.86, hr, hr * 1.15),
+            4,
+            8,
+            0.10,
+            seed ^ 0x22,
+            c,
+        );
         match plan {
             3 => {
                 // Beak: a forward cone.
@@ -424,7 +444,10 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
         let (head_y, head_z) = match plan {
             // Brutes carry the head low on the shoulders, not on a stalk.
             7 => (hip_y + body_r * 0.75 + hr * 0.4, -body_len * 0.42),
-            3 => (hip_y + neck * 0.9 + body_r * 0.5, -(body_len * 0.5 + neck * 0.5)),
+            3 => (
+                hip_y + neck * 0.9 + body_r * 0.5,
+                -(body_len * 0.5 + neck * 0.5),
+            ),
             _ => (hip_y + neck * 0.35, -(body_len * 0.5 + neck * 0.5)),
         };
         parts.push(Part {
@@ -444,7 +467,15 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             for k in 0..=n {
                 let u = k as f32 / n as f32;
                 let r = body_r * (0.55 - u * 0.2).max(0.2);
-                nb.blob(gap * u, Vec3::splat(r), 3, 6, 0.08, seed ^ (0x2A0 + k as u64), c);
+                nb.blob(
+                    gap * u,
+                    Vec3::splat(r),
+                    3,
+                    6,
+                    0.08,
+                    seed ^ (0x2A0 + k as u64),
+                    c,
+                );
             }
             parts.push(Part {
                 attach: Attach::Head,
@@ -499,7 +530,11 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
         for i in 0..pairs {
             // Spread multiple pairs along the body so six/eight legs don't
             // stack on one hip.
-            let spread = if pairs > 1 { i as f32 / (pairs - 1) as f32 - 0.5 } else { 0.0 };
+            let spread = if pairs > 1 {
+                i as f32 / (pairs - 1) as f32 - 0.5
+            } else {
+                0.0
+            };
             let z = if front {
                 -body_len * (0.30 + spread * 0.22)
             } else {
@@ -511,7 +546,12 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             // length independently is what made every creature float by
             // body_r*0.9 — the quadrupeds only passed the ground test by
             // squeaking under its tolerance.
-            let attach_y = hip_y * if front { 0.88 + h01(seed ^ 0x43) * 0.3 } else { 1.0 };
+            let attach_y = hip_y
+                * if front {
+                    0.88 + h01(seed ^ 0x43) * 0.3
+                } else {
+                    1.0
+                };
             let l = (attach_y - girth * 0.6).max(0.05);
             for left in [true, false] {
                 let side: f32 = if left { -1.0 } else { 1.0 };
@@ -537,11 +577,21 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
         let span = body_len * if plan == 9 { 2.3 } else { 1.4 } * (0.8 + h01(seed ^ 0x51) * 0.5);
         for left in [true, false] {
             let side = if left { -1.0 } else { 1.0 };
-            let m = membrane_mesh(seed ^ (0x900 + left as u64), span, body_len * 0.7, if left { -1.0 } else { 1.0 }, c);
+            let m = membrane_mesh(
+                seed ^ (0x900 + left as u64),
+                span,
+                body_len * 0.7,
+                if left { -1.0 } else { 1.0 },
+                c,
+            );
             parts.push(Part {
                 attach: Attach::Limb { front: true, left },
                 xf: Transform::from_xyz(side * body_r * 0.8, hip_y + body_r * 0.45, 0.0)
-                    .with_rotation(Quat::from_rotation_y(if left { std::f32::consts::PI } else { 0.0 }))
+                    .with_rotation(Quat::from_rotation_y(if left {
+                        std::f32::consts::PI
+                    } else {
+                        0.0
+                    }))
                     .with_scale(Vec3::new(1.0, 1.0, 1.0)),
                 mesh: m,
             });
@@ -560,7 +610,11 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             );
             parts.push(Part {
                 attach: Attach::Limb { front: true, left },
-                xf: Transform::from_xyz(side * body_r * 1.05, hip_y + body_r * 0.55, -body_len * 0.2),
+                xf: Transform::from_xyz(
+                    side * body_r * 1.05,
+                    hip_y + body_r * 0.55,
+                    -body_len * 0.2,
+                ),
                 mesh: m,
             });
         }
@@ -581,7 +635,11 @@ pub fn creature_mesh_plan(seed: u64, plan: u32) -> Mesh {
     let mut pos: Vec<[f32; 3]> = Vec::new();
     let mut col: Vec<[f32; 4]> = Vec::new();
     for p in &parts {
-        let Some(vp) = p.mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else {
+        let Some(vp) = p
+            .mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|a| a.as_float3())
+        else {
             continue;
         };
         let vc = match p.mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
@@ -591,10 +649,16 @@ pub fn creature_mesh_plan(seed: u64, plan: u32) -> Mesh {
         for (i, v) in vp.iter().enumerate() {
             let w = p.xf.transform_point(Vec3::from(*v));
             pos.push([w.x, w.y, w.z]);
-            col.push(vc.and_then(|c| c.get(i).copied()).unwrap_or([1.0, 1.0, 1.0, 1.0]));
+            col.push(
+                vc.and_then(|c| c.get(i).copied())
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]),
+            );
         }
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
     // Parts arrive already de-indexed (Builder::finish duplicates vertices),
@@ -614,11 +678,62 @@ const PLAN_KEYWORDS: &[(&[&str], u32)] = &[
     (&["spider", "scorpion", "arachnid", "tarantula"], 5),
     (&["crab", "lobster", "crustacean", "tortoise", "turtle"], 8),
     (&["bat", "pterosaur", "pteranodon", "wyvern"], 9),
-    (&["serpent", "snake", "wyrm", "eel", "leviathan", "worm", "basilisk", "viper"], 2),
-    (&["eagle", "bird", "roc", "vulture", "owl", "hawk", "condor", "raven", "falcon"], 3),
-    (&["crawler", "beetle", "mantis", "locust", "scarab", "centipede", "wasp", "ant"], 4),
-    (&["crocodile", "salamander", "newt", "frog", "toad", "lizard", "gecko"], 6),
-    (&["megatherium", "ape", "gorilla", "sloth", "troll", "ogre", "yeti"], 7),
+    (
+        &[
+            "serpent",
+            "snake",
+            "wyrm",
+            "eel",
+            "leviathan",
+            "worm",
+            "basilisk",
+            "viper",
+        ],
+        2,
+    ),
+    (
+        &[
+            "eagle", "bird", "roc", "vulture", "owl", "hawk", "condor", "raven", "falcon",
+        ],
+        3,
+    ),
+    (
+        &[
+            "crawler",
+            "beetle",
+            "mantis",
+            "locust",
+            "scarab",
+            "centipede",
+            "wasp",
+            "ant",
+        ],
+        4,
+    ),
+    (
+        &[
+            "crocodile",
+            "salamander",
+            "newt",
+            "frog",
+            "toad",
+            "lizard",
+            "gecko",
+        ],
+        6,
+    ),
+    (
+        &[
+            "megatherium",
+            "ape",
+            "gorilla",
+            "sloth",
+            "troll",
+            "ogre",
+            "yeti",
+        ],
+        7,
+    ),
     (&["chimera", "elasmotherium", "rhino", "manticore"], 0),
 ];
 
@@ -645,12 +760,15 @@ pub fn named_plan(tag: &str) -> Option<u32> {
 /// Body plan for a bestiary species: its name first, else a stable hash onto
 /// the generic-monster plans (quadrupeds and brutes read best as "unknown").
 pub fn plan_for_species(tag: &str) -> u32 {
-    named_plan(tag).unwrap_or_else(|| [0u32, 1, 7][(species_seed(&tag.to_ascii_lowercase()) % 3) as usize])
+    named_plan(tag)
+        .unwrap_or_else(|| [0u32, 1, 7][(species_seed(&tag.to_ascii_lowercase()) % 3) as usize])
 }
 
 /// Stable per-species seed (FNV-1a) — the same tag always builds the same body.
 pub fn species_seed(tag: &str) -> u64 {
-    tag.bytes().fold(0xCBF2_9CE4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01B3))
+    tag.bytes().fold(0xCBF2_9CE4_8422_2325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01B3)
+    })
 }
 
 /// A body waiting for its mesh. `spawn_visual` has no mesh-asset access, so it
@@ -717,7 +835,15 @@ pub struct ProcGait {
 
 impl ProcGait {
     pub fn new(root: Entity, base: Transform, start: Vec3) -> Self {
-        Self { root, base, last: start, phase: 0.0, speed: 0.0, bob: base.scale.y * 0.06, died_at: None }
+        Self {
+            root,
+            base,
+            last: start,
+            phase: 0.0,
+            speed: 0.0,
+            bob: base.scale.y * 0.06,
+            died_at: None,
+        }
     }
 }
 
@@ -740,12 +866,16 @@ pub fn animate_proc_gait(
             let k = ((now - at) / 0.6).clamp(0.0, 1.0);
             let ease = 1.0 - (1.0 - k) * (1.0 - k);
             *t = g.base;
-            t.rotation = g.base.rotation * Quat::from_rotation_z(ease * std::f32::consts::FRAC_PI_2);
+            t.rotation =
+                g.base.rotation * Quat::from_rotation_z(ease * std::f32::consts::FRAC_PI_2);
             t.translation.y = g.base.translation.y + g.base.scale.y * 0.25 * ease;
             continue;
         }
-        let Ok(root) = roots.get(g.root) else { continue };
-        let moved = Vec2::new(root.translation.x - g.last.x, root.translation.z - g.last.z).length();
+        let Ok(root) = roots.get(g.root) else {
+            continue;
+        };
+        let moved =
+            Vec2::new(root.translation.x - g.last.x, root.translation.z - g.last.z).length();
         g.last = root.translation;
         // Units/sec, smoothed so 10 Hz snapshot easing doesn't strobe the gait.
         let target = moved / dt;
@@ -774,7 +904,10 @@ mod tests {
         // Whole-word guard: "giant" contains "ant" but is not an insect.
         assert_ne!(plan_for_species("giant_chimera_alpha"), 4);
         // Stable across calls.
-        assert_eq!(plan_for_species("giant_chimera_alpha"), plan_for_species("giant_chimera_alpha"));
+        assert_eq!(
+            plan_for_species("giant_chimera_alpha"),
+            plan_for_species("giant_chimera_alpha")
+        );
     }
 
     #[test]
@@ -1016,19 +1149,36 @@ pub fn spawn_beast_sheet(
         perceptual_roughness: 1.0,
         ..default()
     });
-    commands.spawn((Mesh3d(ground), MeshMaterial3d(gmat), Transform::from_xyz(0.0, 0.0, 0.0)));
+    commands.spawn((
+        Mesh3d(ground),
+        MeshMaterial3d(gmat),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
 
     commands.spawn((
-        DirectionalLight { illuminance: 14_000.0, shadows_enabled: true, ..default() },
+        DirectionalLight {
+            illuminance: 14_000.0,
+            shadows_enabled: true,
+            ..default()
+        },
         Transform::from_xyz(20.0, 40.0, 14.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     let envf = |k: &str, d: f32| -> f32 {
-        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
     };
     let (cam_h, cam_d) = if only.is_some() {
-        (envf("ANTEDILUVIA_BEASTSHEET_CAMH", 1.6), envf("ANTEDILUVIA_BEASTSHEET_CAMD", 7.0))
+        (
+            envf("ANTEDILUVIA_BEASTSHEET_CAMH", 1.6),
+            envf("ANTEDILUVIA_BEASTSHEET_CAMD", 7.0),
+        )
     } else {
-        (envf("ANTEDILUVIA_BEASTSHEET_CAMH", 17.0), envf("ANTEDILUVIA_BEASTSHEET_CAMD", 22.0))
+        (
+            envf("ANTEDILUVIA_BEASTSHEET_CAMH", 17.0),
+            envf("ANTEDILUVIA_BEASTSHEET_CAMD", 22.0),
+        )
     };
     commands.spawn((
         Camera3d::default(),

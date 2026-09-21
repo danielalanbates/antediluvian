@@ -55,7 +55,9 @@ fn preload_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     // dressing code when needed and stream in on demand instead.
     const LAZY_DIRS: [&str; 1] = ["polyhaven"];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -117,7 +119,10 @@ struct FpsText;
 fn spawn_fps_text(mut commands: Commands) {
     commands.spawn((
         Text::new("FPS --"),
-        TextFont { font_size: 18.0, ..default() },
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
         TextColor(Color::srgb(0.6, 1.0, 0.6)),
         Node {
             position_type: PositionType::Absolute,
@@ -130,7 +135,9 @@ fn spawn_fps_text(mut commands: Commands) {
 }
 
 fn fps_overlay(diag: Res<DiagnosticsStore>, mut q: Query<&mut Text, With<FpsText>>) {
-    let Ok(mut text) = q.get_single_mut() else { return };
+    let Ok(mut text) = q.get_single_mut() else {
+        return;
+    };
     if let Some(fps) = diag
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())

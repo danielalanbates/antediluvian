@@ -100,7 +100,10 @@ fn clump_mesh(blades: usize, segments: usize) -> Mesh {
             }
         }
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -133,7 +136,6 @@ fn grass_material() -> StandardMaterial {
     }
 }
 
-
 pub fn init_grass(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -164,7 +166,9 @@ pub fn update_grass(
     mut state: ResMut<GrassState>,
     mut tufts: Query<(&GrassTuft, &mut Transform), Without<crate::PlayerTag>>,
 ) {
-    let Ok(pt) = q_player.get_single() else { return };
+    let Ok(pt) = q_player.get_single() else {
+        return;
+    };
     let act = session.act;
     let cell = (
         (pt.translation.x / CELL).floor() as i64,
@@ -252,7 +256,10 @@ pub struct FarGrassChunk;
 /// Placement rules (roads, water, gaps) match `update_grass`.
 pub fn far_chunk_mesh(act: antediluvia_protocol::Act, cx: i64, cz: i64) -> Option<Mesh> {
     let tuft = far_tuft_mesh();
-    let tp = tuft.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3()?.to_vec();
+    let tp = tuft
+        .attribute(Mesh::ATTRIBUTE_POSITION)?
+        .as_float3()?
+        .to_vec();
     let tc = match tuft.attribute(Mesh::ATTRIBUTE_COLOR)? {
         bevy::render::mesh::VertexAttributeValues::Float32x4(v) => v.clone(),
         _ => return None,
@@ -284,7 +291,10 @@ pub fn far_chunk_mesh(act: antediluvia_protocol::Act, cx: i64, cz: i64) -> Optio
                 .with_rotation(Quat::from_rotation_y(h01(seed ^ 5) * std::f32::consts::TAU))
                 .with_scale(Vec3::new(s, s * (0.8 + h01(seed ^ 6) * 0.6), s));
             let base = pos.len() as u32;
-            pos.extend(tp.iter().map(|p| xf.transform_point(Vec3::from(*p)).to_array()));
+            pos.extend(
+                tp.iter()
+                    .map(|p| xf.transform_point(Vec3::from(*p)).to_array()),
+            );
             col.extend(tc.iter().copied());
             idx.extend(ti.iter().map(|i| base + i));
         }
@@ -293,7 +303,10 @@ pub fn far_chunk_mesh(act: antediluvia_protocol::Act, cx: i64, cz: i64) -> Optio
         return None;
     }
     let normals = vec![[0.0, 1.0, 0.0]; pos.len()];
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
@@ -309,9 +322,14 @@ pub fn update_far_grass(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Ok(pt) = q_player.get_single() else { return };
+    let Ok(pt) = q_player.get_single() else {
+        return;
+    };
     let act = session.act;
-    let pc = ((pt.translation.x / FAR_CHUNK).floor() as i64, (pt.translation.z / FAR_CHUNK).floor() as i64);
+    let pc = (
+        (pt.translation.x / FAR_CHUNK).floor() as i64,
+        (pt.translation.z / FAR_CHUNK).floor() as i64,
+    );
     if far.centre == Some((pc.0, pc.1, act)) {
         return;
     }
@@ -319,9 +337,7 @@ pub fn update_far_grass(
     far.centre = Some((pc.0, pc.1, act));
     let mat = far
         .material
-        .get_or_insert_with(|| {
-            materials.add(grass_material())
-        })
+        .get_or_insert_with(|| materials.add(grass_material()))
         .clone();
     let reach = (FAR_RADIUS / FAR_CHUNK).ceil() as i64;
     let mut want = std::collections::HashSet::new();
@@ -350,7 +366,9 @@ pub fn update_far_grass(
         let handle = match far.cache.get(&(act, cx, cz)) {
             Some(h) => h.clone(),
             None => {
-                let Some(m) = far_chunk_mesh(act, cx, cz) else { continue };
+                let Some(m) = far_chunk_mesh(act, cx, cz) else {
+                    continue;
+                };
                 let h = meshes.add(m);
                 far.cache.insert((act, cx, cz), h.clone());
                 h

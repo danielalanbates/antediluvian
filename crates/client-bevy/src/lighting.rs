@@ -113,7 +113,11 @@ fn irradiance(s: &Sky, d: Vec3) -> Vec3 {
 fn to_srgb8(c: Vec3) -> [u8; 4] {
     let enc = |x: f32| {
         let x = x.clamp(0.0, 1.0);
-        let s = if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+        let s = if x <= 0.0031308 {
+            x * 12.92
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
         (s * 255.0 + 0.5) as u8
     };
     [enc(c.x), enc(c.y), enc(c.z), 255]
@@ -127,7 +131,11 @@ fn cube_image(size: u32, levels: u32, f: impl Fn(Vec3, f32) -> Vec3) -> Image {
     for face in 0..6 {
         for level in 0..levels {
             let sz = (size >> level).max(1);
-            let rough = if levels > 1 { level as f32 / (levels - 1) as f32 } else { 1.0 };
+            let rough = if levels > 1 {
+                level as f32 / (levels - 1) as f32
+            } else {
+                1.0
+            };
             for y in 0..sz {
                 for x in 0..sz {
                     let u = (x as f32 + 0.5) / sz as f32 * 2.0 - 1.0;
@@ -147,9 +155,16 @@ fn cube_image(size: u32, levels: u32, f: impl Fn(Vec3, f32) -> Vec3) -> Image {
     // panicked in debug/test builds even though the descriptor was then set
     // to `levels` — the env maps declared 8 mip levels but could only ever
     // carry 1 through the constructor. Build the struct directly instead.
-    let mut img = Image { data, ..Default::default() };
+    let mut img = Image {
+        data,
+        ..Default::default()
+    };
     img.texture_descriptor.dimension = TextureDimension::D2;
-    img.texture_descriptor.size = Extent3d { width: size, height: size, depth_or_array_layers: 6 };
+    img.texture_descriptor.size = Extent3d {
+        width: size,
+        height: size,
+        depth_or_array_layers: 6,
+    };
     img.texture_descriptor.format = TextureFormat::Rgba8UnormSrgb;
     img.texture_descriptor.mip_level_count = levels;
     img.asset_usage = RenderAssetUsages::RENDER_WORLD;
@@ -251,7 +266,11 @@ pub fn ripple_normal_texture() -> Image {
         }
     }
     let mut img = Image::new(
-        Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 },
+        Extent3d {
+            width: N as u32,
+            height: N as u32,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8Unorm,
@@ -274,7 +293,11 @@ pub fn ripple_normal_texture() -> Image {
 #[derive(Component)]
 pub struct RippleWater(pub Handle<StandardMaterial>);
 
-pub fn drift_ripples(time: Res<Time>, q: Query<&RippleWater>, mut mats: ResMut<Assets<StandardMaterial>>) {
+pub fn drift_ripples(
+    time: Res<Time>,
+    q: Query<&RippleWater>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+) {
     let t = time.elapsed_secs();
     for w in &q {
         if let Some(m) = mats.get_mut(&w.0) {
@@ -295,7 +318,10 @@ mod tests {
     fn env_maps_have_full_mip_chain_and_sky_above_ground() {
         let (diff, spec) = build_env_maps(Act::Eden);
         assert_eq!(spec.texture_descriptor.mip_level_count, 8);
-        let expect: usize = (0..8).map(|l| ((128usize >> l).max(1)).pow(2) * 4).sum::<usize>() * 6;
+        let expect: usize = (0..8)
+            .map(|l| ((128usize >> l).max(1)).pow(2) * 4)
+            .sum::<usize>()
+            * 6;
         assert_eq!(spec.data.len(), expect);
         assert_eq!(diff.data.len(), 16 * 16 * 4 * 6);
         let s = sky_for(Act::Eden);

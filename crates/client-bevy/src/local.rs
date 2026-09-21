@@ -22,10 +22,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::unbounded_channel;
 
 /// Spawn the embedded sim thread; returns Bevy-side channel ends.
-pub fn start_local(
-    display_name: String,
-    create: Option<CharacterCreate>,
-) -> (NetTx, NetRx) {
+pub fn start_local(display_name: String, create: Option<CharacterCreate>) -> (NetTx, NetRx) {
     let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
     let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
 
@@ -141,24 +138,86 @@ fn apply(
             world.set_intent(a, me, Vec2::new(dx, dy));
             false
         }
-        ClientMsg::Attack => { world.queue_attack(a, me); false }
-        ClientMsg::Cast { ability } => { world.queue_cast(a, me, ability); false }
+        ClientMsg::Attack => {
+            world.queue_attack(a, me);
+            false
+        }
+        ClientMsg::Cast { ability } => {
+            world.queue_cast(a, me, ability);
+            false
+        }
         ClientMsg::SelectClass { class } => {
-            match world.select_class(a, me, class) { Ok(t) | Err(t) => notice(t) }; true
+            match world.select_class(a, me, class) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
         }
         ClientMsg::LearnTalent { talent } => {
-            match world.learn_talent(a, me, &talent) { Ok(t) | Err(t) => notice(t) }; true
+            match world.learn_talent(a, me, &talent) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
         }
-        ClientMsg::Talk => { match world.talk(a, me) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::UseItem { item } => { match world.use_item(a, me, &item) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Equip { item } => { match world.equip(a, me, &item) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Craft { recipe } => { match world.craft(a, me, &recipe) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Buy { item } => { match world.buy(a, me, &item) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Sell { item } => { match world.sell(a, me, &item) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Mount => { match world.toggle_mount(a, me) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Tame { target } => { match world.tame(a, me, target) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::ChooseFaction { faction } => { match world.choose_faction(a, me, &faction) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::SetHome => { match world.set_home(a, me) { Ok(t) | Err(t) => notice(t) }; false }
+        ClientMsg::Talk => {
+            match world.talk(a, me) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::UseItem { item } => {
+            match world.use_item(a, me, &item) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Equip { item } => {
+            match world.equip(a, me, &item) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Craft { recipe } => {
+            match world.craft(a, me, &recipe) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Buy { item } => {
+            match world.buy(a, me, &item) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Sell { item } => {
+            match world.sell(a, me, &item) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Mount => {
+            match world.toggle_mount(a, me) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Tame { target } => {
+            match world.tame(a, me, target) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::ChooseFaction { faction } => {
+            match world.choose_faction(a, me, &faction) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::SetHome => {
+            match world.set_home(a, me) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            false
+        }
         ClientMsg::TogglePvp => {
             if let Some(on) = world.toggle_pvp(a, me) {
                 notice(format!("PvP {}.", if on { "enabled" } else { "disabled" }));
@@ -170,12 +229,17 @@ fn apply(
                 if let Some(mut s) = world.player_sheet(a, me) {
                     world.remove_player(a, me);
                     s.act = dest;
-                    s.x = 0.0; s.y = 0.0;
+                    s.x = 0.0;
+                    s.y = 0.0;
                     let new_ent = world.spawn_player(1, s.clone());
                     *act = dest;
                     *me_ref = new_ent; // dev cmds/actions must track the new entity
-                    // Same entity-id convention as the server: re-Welcome.
-                    send(ServerMsg::Welcome { entity_id: new_ent, character: s, is_dev: true });
+                                       // Same entity-id convention as the server: re-Welcome.
+                    send(ServerMsg::Welcome {
+                        entity_id: new_ent,
+                        character: s,
+                        is_dev: true,
+                    });
                     notice(format!("You travel to {}.", dest.as_str()));
                 }
             }
@@ -197,26 +261,72 @@ fn apply(
                     format!("[dev] time set to {:.2}", t.rem_euclid(1.0))
                 }
             };
-            notice(text); true
+            notice(text);
+            true
         }
-        ClientMsg::Chat { text } => { send(ServerMsg::Chat { from: "you".into(), text }); false }
-        ClientMsg::Ping => { send(ServerMsg::Pong); false }
+        ClientMsg::Chat { text } => {
+            send(ServerMsg::Chat {
+                from: "you".into(),
+                text,
+            });
+            false
+        }
+        ClientMsg::Ping => {
+            send(ServerMsg::Pong);
+            false
+        }
         // Multiplayer-only in solo play.
-        ClientMsg::GuildCreate { .. } | ClientMsg::GuildInvite { .. } | ClientMsg::GuildAccept
-        | ClientMsg::GuildLeave | ClientMsg::GuildChat { .. }
-        | ClientMsg::PartyInvite { .. } | ClientMsg::PartyAccept | ClientMsg::PartyLeave
-        | ClientMsg::Duel { .. } | ClientMsg::DuelAccept
-        | ClientMsg::TradeGive { .. } | ClientMsg::TradeGold { .. }
-        | ClientMsg::MailSend { .. } | ClientMsg::MailCheck
-        | ClientMsg::AuctionList { .. } | ClientMsg::AuctionBuy { .. } | ClientMsg::AuctionBrowse => {
-            notice("Not available in solo play.".into()); false
+        ClientMsg::GuildCreate { .. }
+        | ClientMsg::GuildInvite { .. }
+        | ClientMsg::GuildAccept
+        | ClientMsg::GuildLeave
+        | ClientMsg::GuildChat { .. }
+        | ClientMsg::PartyInvite { .. }
+        | ClientMsg::PartyAccept
+        | ClientMsg::PartyLeave
+        | ClientMsg::Duel { .. }
+        | ClientMsg::DuelAccept
+        | ClientMsg::TradeGive { .. }
+        | ClientMsg::TradeGold { .. }
+        | ClientMsg::MailSend { .. }
+        | ClientMsg::MailCheck
+        | ClientMsg::AuctionList { .. }
+        | ClientMsg::AuctionBuy { .. }
+        | ClientMsg::AuctionBrowse => {
+            notice("Not available in solo play.".into());
+            false
         }
         // Bank works solo (personal vault).
-        ClientMsg::BankDeposit { item } => { match world.bank_item(a, me, &item, true) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::BankWithdraw { item } => { match world.bank_item(a, me, &item, false) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::BankGold { amount } => { match world.bank_gold(a, me, amount) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Stable { item } => { match world.stable_mount(a, me, &item, true) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Unstable { item } => { match world.stable_mount(a, me, &item, false) { Ok(t) | Err(t) => notice(t) }; true }
+        ClientMsg::BankDeposit { item } => {
+            match world.bank_item(a, me, &item, true) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::BankWithdraw { item } => {
+            match world.bank_item(a, me, &item, false) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::BankGold { amount } => {
+            match world.bank_gold(a, me, amount) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Stable { item } => {
+            match world.stable_mount(a, me, &item, true) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
+        ClientMsg::Unstable { item } => {
+            match world.stable_mount(a, me, &item, false) {
+                Ok(t) | Err(t) => notice(t),
+            };
+            true
+        }
         ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } => false,
     }
 }
