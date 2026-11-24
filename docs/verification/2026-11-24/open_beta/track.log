@@ -1,0 +1,20 @@
+ok   welcome: {"t":"welcome","entity_id":1099,"character":{"name":"TubalA","act":"eden","x":2950.0,"y":0.0,"level":1,"xp":0,"max_xp":100,"health":100,"max_health":100,"mana":
+ok   zone banner: {"t":"zone_banner","act":"eden","name":"Eden and Nod","subtitle":"Levels 1-12","level_min":1,"level_max":12,"pvp":false}
+ok   welcome: {"t":"welcome","entity_id":1100,"character":{"name":"NaamahA","act":"eden","x":2950.0,"y":0.0,"level":1,"xp":0,"max_xp":100,"health":100,"max_health":100,"mana"
+ok   zone banner: {"t":"zone_banner","act":"eden","name":"Eden and Nod","subtitle":"Levels 1-12","level_min":1,"level_max":12,"pvp":false}
+ok   channels: {"t":"channels","joined":["general","trade","zone"],"available":["general","trade","lfg","zone"]}
+ok   general chat: {"t":"channel_msg","channel":"general","from":"TubalA","text":"hail"}
+ok   whisper: {"t":"whisper","from":"TubalA","to":"NaamahA","text":"psst"}
+ok   friends: {"t":"friends","friends":[{"name":"NaamahA","online":true,"act":"eden","level":1}],"ignored":[]}
+ok   who: {"t":"who_list","players":[{"name":"IdleGate","level":1,"class":null,"act":"eden","guild":null},{"name":"IdleInn","level":1,"class":null,"act":"eden","guild":nu
+ok   emote: {"t":"emote","from":"TubalA","emote":"wave","text":"TubalA waves at NaamahA."}
+ok   ignore list: {"t":"friends","friends":[],"ignored":["TubalA"]}
+ok   ignored notice: {"t":"notice","text":"NaamahA is ignoring you."}
+ok   raid invite: {"t":"notice","text":"TubalA invites you to a raid. Accept with RaidAccept."}
+ok   raid roster: {"t":"raid_info","leader":"TubalA","members":["TubalA","NaamahA"]}
+ok   flight paths: {"t":"flight_paths","here":null,"nodes":[{"id":"inn_eden","name":"Inn of Eden","act":"eden","x":0.0,"y":0.0,"known":false,"cost":0},{"id":"fp_381","name":"The O
+ok   gear: {"t":"gear","items":[{"item":"animal_skins","rarity":"common","color":"#ffffff","slot":"chest","durability":60,"max_durability":60},{"item":"hearthstone","rarit
+ok   no board at the gate: {"t":"notice","text":"There is no notice board here. Boards stand at points of interest and cave mouths."}
+ok   release refused alive: {"t":"notice","text":"You are not dead."}
+ok   repair needs the inn: {"t":"notice","text":"The Innkeeper mends gear only at the inn."}
+TRACK-E2E-OK

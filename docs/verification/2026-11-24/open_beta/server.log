@@ -1,0 +1,35 @@
+2026-11-24T23:42:10.121969Z  INFO antediluvia_server: persistence: /Volumes/x10/Daniel Backup/Mac Offload/adv-src/target/tmp/qbot-20261124/db.sqlite
+2026-11-24T23:42:10.122119Z  INFO antediluvia_server: Antediluvia server listening on ws://127.0.0.1:8797  (proto v17)
+2026-11-24T23:42:10.126192Z  INFO antediluvia_server: AH seed: Alulim lists bread at 1g
+2026-11-24T23:42:10.126338Z  INFO antediluvia_server: AH seed: Enmenluana lists bread at 2g
+2026-11-24T23:42:10.126497Z  INFO antediluvia_server: AH seed: Alulim lists taming_lasso at 37g
+2026-11-24T23:42:10.126634Z  INFO antediluvia_server: AH seed: Enmenluana lists healing_potion at 27g
+2026-11-24T23:42:10.126811Z  INFO antediluvia_server: AH seed: Ensipadzidana lists bread at 2g
+2026-11-24T23:42:11.129154Z  INFO antediluvia_server::net: client connected conn=1 peer=Some(127.0.0.1:55949)
+2026-11-24T23:42:11.129885Z  INFO antediluvia_server: login (apple_id=test_IdleGate) conn=1 name=IdleGate act="eden"
+2026-11-24T23:42:14.716275Z  INFO antediluvia_server::net: client connected conn=2 peer=Some(127.0.0.1:55952)
+2026-11-24T23:42:14.716785Z  INFO antediluvia_server: login (apple_id=test_Quest1) conn=2 name=Quest1 act="eden"
+2026-11-24T23:43:10.128244Z  INFO antediluvia_server: tick telemetry: avg 118.293µs max 677.417µs over 60s (2 conns)
+2026-11-24T23:43:32.529664Z  INFO antediluvia_server::net: client disconnected conn=2
+2026-11-24T23:43:32.569822Z  INFO antediluvia_server::net: client connected conn=3 peer=Some(127.0.0.1:56012)
+2026-11-24T23:43:32.570250Z  INFO antediluvia_server: login (apple_id=test_Quest2) conn=3 name=Quest2 act="eden"
+2026-11-24T23:44:10.132883Z  INFO antediluvia_server: tick telemetry: avg 118.129µs max 1.041625ms over 60s (2 conns)
+2026-11-24T23:44:33.932057Z  INFO antediluvia_server: player died conn=3 name=Quest2 act="eden"
+2026-11-24T23:45:10.208921Z  INFO antediluvia_server: tick telemetry: avg 141.102µs max 13.261584ms over 60s (2 conns)
+2026-11-24T23:45:33.494286Z  INFO antediluvia_server::net: client disconnected conn=3
+2026-11-24T23:46:00.839966Z  INFO antediluvia_server::net: client connected conn=4 peer=Some(127.0.0.1:56056)
+2026-11-24T23:46:00.844061Z  INFO antediluvia_server: login (apple_id=test_IdleInn) conn=4 name=IdleInn act="eden"
+2026-11-24T23:46:00.912387Z  INFO antediluvia_server::net: client connected conn=5 peer=Some(127.0.0.1:56057)
+2026-11-24T23:46:00.912875Z  INFO antediluvia_server: login (apple_id=track_TubalA) conn=5 name=TubalA act="eden"
+2026-11-24T23:46:01.139437Z  INFO antediluvia_server::net: client connected conn=6 peer=Some(127.0.0.1:56058)
+2026-11-24T23:46:01.139833Z  INFO antediluvia_server: login (apple_id=track_NaamahA) conn=6 name=NaamahA act="eden"
+2026-11-24T23:46:01.392644Z  INFO antediluvia_server::net: client disconnected conn=5
+2026-11-24T23:46:01.392666Z  INFO antediluvia_server::net: client disconnected conn=6
+2026-11-24T23:46:10.389421Z  INFO antediluvia_server: tick telemetry: avg 198.71µs max 34.339125ms over 60s (2 conns)
+2026-11-24T23:47:10.399747Z  INFO antediluvia_server: tick telemetry: avg 127.954µs max 379µs over 60s (2 conns)
+2026-11-24T23:47:41.100971Z  INFO antediluvia_server::net: client disconnected conn=1
+2026-11-24T23:48:10.399667Z  INFO antediluvia_server: tick telemetry: avg 116.494µs max 341.25µs over 60s (1 conns)
+2026-11-24T23:49:10.401948Z  INFO antediluvia_server: tick telemetry: avg 107.845µs max 456.459µs over 60s (1 conns)
+2026-11-24T23:50:10.419550Z  INFO antediluvia_server: tick telemetry: avg 112.307µs max 1.353875ms over 60s (1 conns)
+2026-11-24T23:51:10.419021Z  INFO antediluvia_server: tick telemetry: avg 105.511µs max 388.042µs over 60s (1 conns)
+2026-11-24T23:51:47.219562Z  INFO antediluvia_server::net: client disconnected conn=4
