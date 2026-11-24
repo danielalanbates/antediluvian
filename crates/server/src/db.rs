@@ -63,6 +63,9 @@ struct SheetExt {
     stamina: i32,
     #[serde(default)]
     max_stamina: i32,
+    // beta-server-track (B06)
+    #[serde(default)]
+    durability: std::collections::BTreeMap<String, u32>,
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -197,6 +200,7 @@ impl Db {
                         appearance: ext.appearance,
                         stamina: ext.stamina,
                         max_stamina: ext.max_stamina,
+                        durability: ext.durability, // beta-server-track (B06)
                     })
                 },
             )
@@ -250,6 +254,7 @@ impl Db {
             appearance: c.appearance,
             stamina: c.stamina,
             max_stamina: c.max_stamina,
+            durability: c.durability.clone(), // beta-server-track (B06)
         })?;
         self.conn.execute(
             "INSERT INTO accounts
@@ -413,5 +418,12 @@ fn parse_act(s: &str) -> Act {
         "enoch" => Act::Enoch,
         "flood" => Act::Flood,
         _ => Act::Eden,
+    }
+}
+
+// ── beta-server-track: raw connection for the social tables (social_db.rs) ──
+impl Db {
+    pub(crate) fn raw(&self) -> &Connection {
+        &self.conn
     }
 }

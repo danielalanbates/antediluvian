@@ -2172,6 +2172,9 @@ fn receive_from_server(
                 session.ability_cd.insert(ability, (now, now + cooldown));
             }
             ServerMsg::Pong => {}
+            // beta-server-track (B05-B08): new server messages have no UI
+            // yet; ignore them until the client panels land.
+            _ => {}
         }
     }
 

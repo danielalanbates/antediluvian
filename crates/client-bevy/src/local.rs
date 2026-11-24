@@ -226,6 +226,9 @@ fn apply(
         ClientMsg::Stable { item } => { match world.stable_mount(a, me, &item, true) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Unstable { item } => { match world.stable_mount(a, me, &item, false) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } => false,
+        // beta-server-track (B05-B08): boards, social, flight and repair are
+        // not wired into solo play yet (the client UI for them is a later job).
+        _ => { notice("Not available in solo play yet.".into()); false }
     }
 }
 

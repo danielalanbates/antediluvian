@@ -233,6 +233,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ServerMsg::CastStart { .. } | ServerMsg::AbilityUsed { .. } => {}
             ServerMsg::Pong => {}
+            // beta-server-track (B05-B08): print anything newer verbatim.
+            other => {
+                if let Ok(j) = serde_json::to_string(&other) {
+                    println!("[msg] {j}");
+                }
+            }
         }
     }
     let _ = write.close().await;
