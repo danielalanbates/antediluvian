@@ -318,6 +318,11 @@ fn apply(
             }
             false
         }
+        // B10: a battleground needs other players and a server.
+        ClientMsg::BgQueue | ClientMsg::BgLeave | ClientMsg::BgBuy { .. } => {
+            notice("Battlegrounds need a server: not available in solo play.".into());
+            false
+        }
         ClientMsg::FriendList => { send(ServerMsg::Friends { friends: Vec::new(), ignored: Vec::new() }); false }
         ClientMsg::ChannelList => { send(ServerMsg::Channels { joined: Vec::new(), available: Vec::new() }); false }
         // Other people are needed for these.

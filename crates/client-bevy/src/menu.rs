@@ -27,6 +27,8 @@ pub(crate) enum MenuCmd {
     TogglePvp,
     Dev(DevCmd),
     Travel(Act),
+    /// B10: join or leave the battleground queue.
+    Bg(bool),
 }
 
 // ─── Design tokens (match ui.rs) ─────────────────────────────────────────────
@@ -101,6 +103,10 @@ pub(crate) fn menu_buttons(
             }
             MenuCmd::Travel(act) => {
                 tx.send(ClientMsg::Travel { act: *act });
+                close_menu(&mut commands, &mut menu_open, &roots);
+            }
+            MenuCmd::Bg(join) => {
+                tx.send(if *join { ClientMsg::BgQueue } else { ClientMsg::BgLeave });
                 close_menu(&mut commands, &mut menu_open, &roots);
             }
         }
@@ -200,6 +206,10 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                     TextColor(TEXT_DIM),
                 ));
 
+                // ── B10 battleground ──
+                menu_button(&mut *panel, MenuCmd::Bg(true), "Battleground: queue for the Relic of Seth", GOLD, false);
+                menu_button(&mut *panel, MenuCmd::Bg(false), "Battleground: leave the queue or the field", TEXT_DIM, false);
+
                 // ── Developer section (dev-allowlisted accounts only) ──
                 if session.is_dev {
                     crate::win::devpanel::build(panel);
@@ -218,7 +228,8 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                          B bags | C character | L quest log | P spellbook\n\
                          M map | O social | Esc closes the top window\n\
                          /pvp | /duel NAME | /lineage sethite|cainite (10+)\n\
-                         /party NAME shares XP nearby | /ginvite NAME",
+                         /party NAME shares XP nearby | /ginvite NAME\n\
+                         /bg queue | /bg leave | /bgbuy ITEM (honor, at an inn)",
                     ),
                     TextFont { font_size: 12.0, ..default() },
                     TextColor(TEXT),

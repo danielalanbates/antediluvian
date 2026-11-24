@@ -472,7 +472,15 @@ pub enum ClientMsg {
     Repair,
     /// Rarity + durability for everything you carry or wear, plus the
     /// repair quote. Reply: `ServerMsg::Gear`.
-    GearInfo,
+    GearInfo,    // ── B10 battleground ────────────────────────────────────────────────
+    /// Join the queue for the Relic of Seth (from anywhere; the Esc menu,
+    /// the battlemaster or `/bg`). Leaving the match returns you to where
+    /// you queued.
+    BgQueue,
+    /// Leave the queue, or leave the match you are in.
+    BgLeave,
+    /// Buy a battlemaster ware for honor (at an inn).
+    BgBuy { item: String },
 }
 
 // ─── Server → Client ─────────────────────────────────────────────────────────
@@ -548,6 +556,8 @@ pub enum ServerMsg {
     },
     /// Rarity + durability of carried/worn items and the repair quote.
     Gear { items: Vec<ItemInfo>, repair_cost: u32 },
+    /// Battleground queue / match / scoreboard state (B10).
+    BgState { info: BgInfo },
 }
 
 // ── beta-server-track payload types ─────────────────────────────────────────

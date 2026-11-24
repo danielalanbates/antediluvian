@@ -5,6 +5,7 @@
 //! `World` and steps every zone at a fixed rate. Clients talk to the game loop
 //! only through channels, so the simulation stays lock-free and deterministic.
 
+mod bg;
 mod db;
 mod net;
 mod snap;
@@ -145,6 +146,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 let events = world.step();
                 dispatch_events(&mut world, &mut conns, events, &hub, &mut listeners);
                 track::tick(ticks, &mut world, &mut conns, &db); // beta-server-track hook
+                bg::tick(&mut world, &mut conns); // B10 battleground
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
                     let s0 = std::time::Instant::now();
@@ -253,6 +255,8 @@ fn handle_cmd(
             });
         }
         GameCmd::Disconnect { id } => {
+            // B10: off the field and back where they queued before the save.
+            bg::before_disconnect(id, world, conns);
             if let Some(c) = conns.remove(&id) {
                 if let (Some(ent), true) = (c.entity, c.logged_in) {
                     if let Some(mut sheet) = world.player_sheet(c.act, ent) {
@@ -284,6 +288,31 @@ fn handle_client_msg(
     active_names: &mut HashSet<String>,
     db: &Db,
 ) {
+    // B10 chunk: the older social messages share the flood gate and honour
+    // ignore lists; battleground messages are handled in bg.rs.
+    if !matches!(msg, ClientMsg::Login { .. }) {
+        if !track::legacy_gate(id, &msg, conns) {
+            return;
+        }
+        let target = match &msg {
+            ClientMsg::TradeGive { player, .. }
+            | ClientMsg::TradeGold { player, .. }
+            | ClientMsg::Duel { player }
+            | ClientMsg::GuildInvite { player }
+            | ClientMsg::PartyInvite { player } => Some(player.as_str()),
+            ClientMsg::MailSend { to, .. } => Some(to.as_str()),
+            _ => None,
+        };
+        if let Some(t) = target {
+            let from = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            if track::ignored_by(conns, t, &from) {
+                return notice(conns, id, format!("{t} is not accepting that from you."));
+            }
+        }
+        if bg::handle(id, &msg, world, conns) {
+            return;
+        }
+    }
     match msg {
         ClientMsg::Login { proto, apple_id, character_name, create, wire } => {
             let apple_id = apple_id.trim().to_string();
@@ -556,6 +585,10 @@ fn handle_client_msg(
         ClientMsg::Talk => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.talk(act, ent) {
+                Ok(text) if text.starts_with("Battlemaster:") => {
+                    notice(conns, id, text);
+                    bg::handle(id, &ClientMsg::BgQueue, world, conns); // B10
+                }
                 Ok(text) | Err(text) => notice(conns, id, text),
             }
             send_stats(world, conns, id);
@@ -801,6 +834,12 @@ fn handle_client_msg(
             };
             if conns.get(&id).map(|c| c.party.is_some()).unwrap_or(false) {
                 return notice(conns, id, "You are already in a party.".into());
+            }
+            // B10 chunk: parties hold 5 (raids, 40, are the bigger group).
+            let pid_now = conns.get(&inviter).and_then(|c| c.party).unwrap_or(inviter);
+            let size = conns.values().filter(|c| c.logged_in && c.party == Some(pid_now)).count().max(1);
+            if size >= PARTY_CAP {
+                return notice(conns, id, format!("That party is full ({PARTY_CAP}). Form a raid for more."));
             }
             if !conns.get(&inviter).map(|c| c.logged_in).unwrap_or(false) {
                 return notice(conns, id, "The inviter is no longer online.".into());
@@ -1103,6 +1142,9 @@ fn broadcast_party_info(conns: &HashMap<u64, Conn>, pid: u64) {
     }
 }
 
+/// Party size cap (B10 chunk).
+const PARTY_CAP: usize = 5;
+
 fn conn_entity(conns: &HashMap<u64, Conn>, id: u64) -> Option<(Act, EntityId)> {
     let c = conns.get(&id)?;
     if !c.logged_in {
@@ -1230,6 +1272,9 @@ fn dispatch_events(
                 c.send(ServerMsg::Notice { text: format!("You collected {item}.") });
             }
             SimEvent::Info { text, .. } => {
+                if text == "Honorable kill!" {
+                    bg::note_kill(owner); // B10 scoreboard
+                }
                 c.send(ServerMsg::Notice { text });
             }
             SimEvent::CastStart { ability, secs, .. } => {

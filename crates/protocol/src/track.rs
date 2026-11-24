@@ -130,3 +130,52 @@ pub struct FlightNode {
     /// Gold fare from where the character stands (0 if not at a node).
     pub cost: u32,
 }
+
+/// One scoreboard row of a battleground match (B10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BgRow {
+    pub name: String,
+    pub team: u8,
+    pub caps: u32,
+    pub kills: u32,
+    pub deaths: u32,
+}
+
+/// Battleground status for one player (B10), sent about once a second
+/// while queued or in a match, and once more when it ends or is left.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BgInfo {
+    /// "idle" | "queued" | "live" | "ended".
+    pub phase: String,
+    /// Players waiting in the queue (queued phase).
+    #[serde(default)]
+    pub queued: u32,
+    #[serde(default)]
+    pub score: [u32; 2],
+    #[serde(default)]
+    pub my_team: u8,
+    /// "altar" | "carried" | "dropped".
+    #[serde(default)]
+    pub relic: String,
+    /// Who carries the relic, if anyone.
+    #[serde(default)]
+    pub carrier: Option<String>,
+    #[serde(default)]
+    pub relic_x: f32,
+    #[serde(default)]
+    pub relic_y: f32,
+    #[serde(default)]
+    pub secs_left: u32,
+    /// Set once ended: `Some(team)`; `None` with phase "ended" is a draw.
+    #[serde(default)]
+    pub winner: Option<u8>,
+    #[serde(default)]
+    pub rows: Vec<BgRow>,
+    /// Spendable honor, lifetime honor and the rank it gives.
+    #[serde(default)]
+    pub honor: i32,
+    #[serde(default)]
+    pub honor_earned: i32,
+    #[serde(default)]
+    pub rank: String,
+}

@@ -35,6 +35,7 @@ pub mod spellbook;
 pub mod vendor;
 pub mod worldmap;
 pub mod zonebanner;
+pub mod bgboard;
 
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -233,6 +234,8 @@ pub struct WinState {
     /// Seconds until the auto-opened loot window closes itself.
     pub loot_left: f32,
     pub zone: Option<ZoneCard>,
+    /// Battleground queue / match state (B10); `None` when idle.
+    pub bg: Option<antediluvia_protocol::BgInfo>,
     pub buffs: Vec<Buff>,
     pub chat_tab: chattabs::ChatTab,
     pub social_tab: SocialTab,
@@ -263,6 +266,7 @@ impl Default for WinState {
             loot_fresh: false,
             loot_left: 0.0,
             zone: None,
+            bg: None,
             buffs: Vec::new(),
             chat_tab: chattabs::ChatTab::All,
             social_tab: SocialTab::Friends,
@@ -464,6 +468,9 @@ pub(crate) fn on_server_msg(msg: ServerMsg, session: &mut Session, st: &mut WinS
         }
         // The bags and character sheet compute rarity and wear from the sheet
         // (same sim tables as the server), so `Gear` only matters to `/gear`.
+        ServerMsg::BgState { info } => {
+            st.bg = (info.phase != "idle").then_some(info);
+        }
         other => crate::track_ui::on_server_msg(other, session),
     }
 }
@@ -835,6 +842,7 @@ impl Plugin for WinPlugin {
                     minimap::spawn,
                     buffs::spawn,
                     zonebanner::spawn,
+                    bgboard::spawn,
                     markers::spawn,
                     chattabs::spawn,
                 ),
@@ -850,6 +858,7 @@ impl Plugin for WinPlugin {
                     rested::update,
                     death::update,
                     zonebanner::update,
+                    bgboard::update,
                     markers::update,
                     chattabs::update,
                     loot::auto_close,

@@ -134,6 +134,10 @@ pub(crate) fn slash(text: &str, tx: &NetTx) -> bool {
         ("/release", true) => ClientMsg::ReleaseSpirit,
         ("/repair", true) => ClientMsg::Repair,
         ("/gear", true) => ClientMsg::GearInfo,
+        // B10 battleground.
+        ("/bg", true) => ClientMsg::BgQueue,
+        ("/bg", false) if rest == "leave" => ClientMsg::BgLeave,
+        ("/bgbuy", false) => ClientMsg::BgBuy { item: arg() },
         _ => return false,
     };
     tx.send(msg);

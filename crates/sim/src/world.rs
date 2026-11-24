@@ -757,6 +757,9 @@ impl World {
         // Faction Quartermaster (C10): rep-gated vendor at every inn.
         let id = self.alloc_id();
         zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-160.0, -60.0), "Quartermaster"));
+        // Battlemaster (B10): queues for the Relic of Seth, sells honor wares.
+        let id = self.alloc_id();
+        zone.entities.insert(id, make_npc(id, zone.entry + Vec2::new(-250.0, 150.0), "Battlemaster"));
         // Beast-Master Jabal offers the mount questline in Enoch (C06).
         if act == Act::Enoch {
             let id = self.alloc_id();
@@ -2106,6 +2109,20 @@ impl World {
 
         let e = self.entity_mut(act, id).unwrap();
         let s = e.sheet.as_mut().ok_or("no sheet")?;
+
+        // Battlemaster (B10): the server queues the talker on this reply.
+        if npc == "Battlemaster" {
+            let (honor, earned) = crate::battleground::honor(s);
+            let wares = crate::battleground::VENDOR
+                .iter()
+                .map(|(i, c, r)| format!("{i} {c} honor ({})", crate::battleground::RANKS[*r].1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(format!(
+                "Battlemaster: The Relic of Seth awaits - I have put your name down. You hold {honor} honor, rank {}. Wares: {wares}. /bgbuy ITEM",
+                crate::battleground::rank_of(earned).1
+            ));
+        }
 
         // Innkeeper (C11): vendor — list staples and the buyback rate.
         if npc == "Innkeeper" {

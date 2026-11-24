@@ -249,6 +249,54 @@ pub(crate) fn offline_rest(sheet: &mut antediluvia_protocol::CharacterSheet, now
     state().pending_rest.insert(sheet.name.to_lowercase(), gained);
 }
 
+/// main.rs hook (B10 chunk): the flood gate for the older messages main.rs
+/// handles itself (zone and guild chat, trade, mail, duel, guild and party
+/// invites, auction calls, battleground calls). They share the per-
+/// connection budget with the B07 social messages. False = drop it.
+pub(crate) fn legacy_gate(id: u64, msg: &ClientMsg, conns: &HashMap<u64, Conn>) -> bool {
+    let cost = match msg {
+        ClientMsg::Chat { .. }
+        | ClientMsg::GuildChat { .. }
+        | ClientMsg::TradeGive { .. }
+        | ClientMsg::TradeGold { .. }
+        | ClientMsg::MailSend { .. }
+        | ClientMsg::Duel { .. }
+        | ClientMsg::GuildInvite { .. }
+        | ClientMsg::GuildCreate { .. }
+        | ClientMsg::PartyInvite { .. } => social::FLOOD_COST_CHAT,
+        ClientMsg::MailCheck
+        | ClientMsg::AuctionList { .. }
+        | ClientMsg::AuctionBuy { .. }
+        | ClientMsg::AuctionBrowse
+        | ClientMsg::BgQueue
+        | ClientMsg::BgLeave
+        | ClientMsg::BgBuy { .. } => 2,
+        _ => return true,
+    };
+    let verdict = {
+        let mut g = state();
+        let now = g.now;
+        g.flood.charge(id, now, cost)
+    };
+    match verdict {
+        Flood::Pass => true,
+        Flood::Warn => {
+            crate::notice(conns, id, "You are sending messages too quickly. Wait a few seconds.".into());
+            false
+        }
+        Flood::Drop => false,
+    }
+}
+
+/// main.rs hook (B10 chunk): true when the online character `target`
+/// ignores `from` (trade, duel, mail, guild and party invites are refused).
+pub(crate) fn ignored_by(conns: &HashMap<u64, Conn>, target: &str, from: &str) -> bool {
+    match find_conn(conns, target) {
+        Some(t) => !state().hears(t, from),
+        None => false,
+    }
+}
+
 /// main.rs hook (zone chat): false when connection `to` ignores `from`.
 pub(crate) fn hears(to: u64, from: &str) -> bool {
     state().hears(to, from)
