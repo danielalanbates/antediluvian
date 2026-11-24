@@ -388,6 +388,9 @@ pub struct Entity {
     // AI / behavior
     pub origin: Vec2,
     pub aggro_range: f32,
+    /// B10 chunk: who last hurt this enemy and seconds left to chase
+    /// them, so a mob shot from beyond its aggro range still answers.
+    pub provoked: Option<(EntityId, f32)>,
     pub patrol_radius: f32,
     pub state: AiState,
     pub state_timer: f32,
@@ -811,6 +814,7 @@ impl World {
             speed: PLAYER_SPEED,
             origin: pos,
             aggro_range: 0.0,
+            provoked: None,
             patrol_radius: 0.0,
             state: AiState::Static,
             state_timer: 0.0,
@@ -1369,8 +1373,18 @@ impl World {
                             .find(|(pid, _)| *pid == t)
                             .map(|(pid, ppos)| (*pid, *ppos, e.pos.distance(*ppos)))
                     });
-                    let taunted = taunter.is_some();
-                    let nearest = taunter.or_else(|| nearest_of(&players, e.pos));
+                    // Hit from range (B10 chunk): chase the attacker for a while.
+                    if let Some((_, left)) = e.provoked.as_mut() {
+                        *left -= DT;
+                    }
+                    if e.provoked.is_some_and(|(_, left)| left <= 0.0) {
+                        e.provoked = None;
+                    }
+                    let provoker = e.provoked.and_then(|(t, _)| {
+                        players.iter().find(|(pid, _)| *pid == t).map(|(pid, ppos)| (*pid, *ppos, e.pos.distance(*ppos)))
+                    });
+                    let taunted = taunter.is_some() || provoker.is_some();
+                    let nearest = taunter.or(provoker).or_else(|| nearest_of(&players, e.pos));
                     match nearest {
                         Some((pid, ppos, dist)) if taunted || dist <= e.aggro_range => {
                             e.state = AiState::Chase;
@@ -1555,6 +1569,11 @@ impl World {
                     t.mounted = false;
                 }
                 t.combat_timer = COMBAT_LOCK_SECS;
+                if t.kind == EntityKind::Enemy {
+                    if let Some(att) = attacker {
+                        t.provoked = Some((att, 10.0));
+                    }
+                }
                 if t.godmode {
                     continue; // dev godmode (C14)
                 }
@@ -3063,6 +3082,7 @@ fn make_enemy_raw(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
         speed: ENEMY_SPEED,
         origin: pos,
         aggro_range: 380.0,
+        provoked: None,
         patrol_radius: 260.0,
         state: AiState::Patrol,
         state_timer: 0.0,
@@ -3109,6 +3129,7 @@ fn make_npc(id: EntityId, pos: Vec2, name: &str) -> Entity {
         speed: 0.0,
         origin: pos,
         aggro_range: 0.0,
+        provoked: None,
         patrol_radius: 0.0,
         state: AiState::Static,
         state_timer: 0.0,
@@ -3155,6 +3176,7 @@ fn make_wildlife(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         speed: WILDLIFE_SPEED,
         origin: pos,
         aggro_range: 240.0, // used as flee range
+        provoked: None,
         patrol_radius: 200.0,
         state: AiState::Graze,
         state_timer: 0.0,
@@ -3201,6 +3223,7 @@ fn make_resource(id: EntityId, pos: Vec2, tag: &str) -> Entity {
         speed: 0.0,
         origin: pos,
         aggro_range: 0.0,
+        provoked: None,
         patrol_radius: 0.0,
         state: AiState::Static,
         state_timer: 0.0,

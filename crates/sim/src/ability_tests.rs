@@ -705,3 +705,22 @@ fn every_first_ability_is_affordable_at_level_one() {
         }
     }
 }
+
+/// B10 chunk: a mob hit from beyond its aggro range turns and chases.
+#[test]
+fn a_mob_hit_from_range_answers() {
+    let (mut w, pid) = arena(Class::Warrior, 10);
+    let mob = add_mob(&mut w, 300.0, 5);
+    {
+        let m = ent_mut(&mut w, mob);
+        m.speed = 120.0;
+        m.aggro_range = 50.0; // the player at 300 is far outside it
+    }
+    step_n(&mut w, 5);
+    assert!(ent(&w, mob).pos.distance(HOME) > 290.0, "unprovoked, it stays");
+    // Hurt it as a ranged hit would land: queued damage from the player.
+    let before = ent(&w, mob).pos.distance(HOME);
+    ent_mut(&mut w, mob).provoked = Some((pid, 10.0));
+    step_n(&mut w, 20);
+    assert!(ent(&w, mob).pos.distance(HOME) < before - 50.0, "provoked, it closes in");
+}
