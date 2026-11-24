@@ -13,10 +13,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 
-cargo build --release -j 4 -p antediluvia-server -p antediluvia-client-bevy
+cargo build --release -j "${CARGO_BUILD_JOBS:-4}" -p antediluvia-server -p antediluvia-client-bevy
 
 APP=dist/Antediluvia.app
-rm -rf "$APP"
+# Keep exactly one current bundle: archive the previous build, never delete it.
+if [ -d "$APP" ]; then
+  OLDV=$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo old)
+  mkdir -p dist/archive
+  mv "$APP" "dist/archive/Antediluvia-$OLDV-$(date +%Y%m%d%H%M).app"
+fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp scripts/app/Info.plist "$APP/Contents/"
 cp scripts/app/launcher.sh "$APP/Contents/MacOS/Antediluvia"
@@ -24,6 +29,14 @@ chmod +x "$APP/Contents/MacOS/Antediluvia"
 cp scripts/app/AppIcon.icns "$APP/Contents/Resources/"
 cp target/release/antediluvia-server target/release/antediluvia-client-bevy \
    "$APP/Contents/Resources/"
+
+# Default shard baked into the bundle (beta builds point at the dev shard).
+# DEFAULT_SERVER=none builds a single-player bundle. Overrides at run time:
+# ANTEDILUVIA_SERVER env, then ~/Library/Application Support/Antediluvia/server_url.
+DEFAULT_SERVER="${DEFAULT_SERVER:-ws://159-54-191-177.sslip.io:8080}"
+if [ "$DEFAULT_SERVER" != "none" ]; then
+  printf '%s\n' "$DEFAULT_SERVER" > "$APP/Contents/Resources/default_server_url"
+fi
 
 # Sign in with Apple helper (real SIWA when the bundle is provisioned with the
 # applesignin entitlement; stable local UUID fallback otherwise).

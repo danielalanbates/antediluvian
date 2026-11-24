@@ -18,6 +18,12 @@ SERVER_URL="${ANTEDILUVIA_SERVER:-}"
 if [ -z "$SERVER_URL" ] && [ -f "$SUPPORT/server_url" ]; then
   SERVER_URL="$(tr -d ' \t\r\n' < "$SUPPORT/server_url")"
 fi
+# Beta bundles carry a default shard (the private dev shard). Write "local"
+# to $SUPPORT/server_url to force the bundled single-player server instead.
+if [ -z "$SERVER_URL" ] && [ -f "$RES/default_server_url" ]; then
+  SERVER_URL="$(tr -d ' \t\r\n' < "$RES/default_server_url")"
+fi
+[ "$SERVER_URL" = "local" ] && SERVER_URL=""
 
 SERVER_PID=""
 if [ -n "$SERVER_URL" ]; then
