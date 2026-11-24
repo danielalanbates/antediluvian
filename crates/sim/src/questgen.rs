@@ -1032,7 +1032,14 @@ mod tests {
             }
             let (nid, npos) = {
                 let z = &w.zones[&Act::Eden];
-                let n = z.entities.values().find(|e| e.kind == EntityKind::Resource && e.tag.as_deref() == Some(source)).expect("ore node");
+                // Nearest node to the cave (ties by id): the entity map is a
+                // hash map, and taking "any" node made this test flaky.
+                let n = z
+                    .entities
+                    .values()
+                    .filter(|e| e.kind == EntityKind::Resource && e.tag.as_deref() == Some(source))
+                    .min_by(|a, b| a.pos.distance(an.pos).total_cmp(&b.pos.distance(an.pos)).then(a.id.cmp(&b.id)))
+                    .expect("ore node");
                 (n.id, n.pos)
             };
             for _ in 0..60 {

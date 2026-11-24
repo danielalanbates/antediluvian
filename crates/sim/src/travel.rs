@@ -339,6 +339,10 @@ impl World {
             sheet.y = land.y;
             self.spawn_player(owner, sheet)
         };
+        // A flight jumps many AoI cells at once: refile now, not a tick later.
+        if let Some(z) = self.zones.get_mut(&dest.act) {
+            z.refile_entity(entity);
+        }
         self.gold_sunk += cost as u64;
         Ok(Flight { act: dest.act, entity, cost, text })
     }
@@ -361,6 +365,10 @@ impl World {
         e.cast_queued = None;
         if let Some(s) = e.sheet.as_mut() {
             s.health = e.health;
+        }
+        // The graveyard may be cells away from the corpse: refile now.
+        if let Some(z) = self.zones.get_mut(&act) {
+            z.refile_entity(id);
         }
         Ok(format!("You release your spirit and rise at {name}, weakened."))
     }
@@ -451,6 +459,37 @@ mod tests {
         assert!(w.player_pos(Act::Eden, id).unwrap().distance(dest.pos) <= FLIGHT_RADIUS);
         assert_eq!(sheet(&w, Act::Eden, id).gold, 100 - 2 * fare);
         assert_eq!(w.gold_sunk, sunk0 + 2 * fare as u64, "fares are a gold sink");
+    }
+
+    /// Review regression (merge of the AoI grid with the travel track): a
+    /// flight or a spirit release moves the character outside the tick, so
+    /// the grid must be refiled at once or the character is missing from
+    /// its own visibility set until the next step.
+    #[test]
+    fn flight_and_spirit_release_refile_the_aoi_grid_at_once() {
+        let mut w = World::new(23);
+        let dest = flight_nodes()
+            .iter()
+            .filter(|n| n.act == Act::Eden && !n.inn)
+            .max_by(|a, b| a.pos.length().total_cmp(&b.pos.length()))
+            .unwrap();
+        assert_ne!(
+            crate::aoi::cell_of(dest.pos.x, dest.pos.y),
+            crate::aoi::cell_of(10.0, 10.0),
+            "the test needs a destination in another cell"
+        );
+        let id = spawn(&mut w, Act::Eden, Vec2::new(10.0, 10.0), 5000);
+        {
+            let s = w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&id).unwrap().sheet.as_mut().unwrap();
+            s.discovered.push(dest.name.to_string());
+        }
+        w.flight_take(Act::Eden, id, dest.id).unwrap();
+        assert!(w.visible_entities(Act::Eden, id, 60.0).contains(&id), "stale cell after a flight");
+        // Die out there, release: the graveyard is wherever it is; the
+        // character must be findable around its new position immediately.
+        w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&id).unwrap().health = 0;
+        w.release_spirit(Act::Eden, id).unwrap();
+        assert!(w.visible_entities(Act::Eden, id, 60.0).contains(&id), "stale cell after a spirit release");
     }
 
     #[test]

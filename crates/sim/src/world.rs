@@ -512,7 +512,7 @@ impl Zone {
     /// Refile one entity after its position changed outside the sim tick
     /// (dev teleport, test setup). Ordinary sim movement is covered by the
     /// refile pass at the end of `step_zone`.
-    fn refile_entity(&mut self, id: EntityId) {
+    pub(crate) fn refile_entity(&mut self, id: EntityId) {
         let (pos, old) = match self.entities.get(&id) {
             Some(e) => (e.pos, e.cell as usize),
             None => return,
