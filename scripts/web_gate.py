@@ -25,6 +25,7 @@ if "159.54.191.177" in a.ws or ":8787" in a.ws:
 name = "Gate" + "".join(random.choice("abcdefghijklmnop") for _ in range(5)).capitalize()
 url = f"http://127.0.0.1:{a.http}/?server={a.ws}&name={name}"
 lines, errors = [], []
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 PANIC = re.compile(r"panicked|RuntimeError|unreachable", re.I)
 
 with sync_playwright() as p:
@@ -54,7 +55,11 @@ with sync_playwright() as p:
             slog = open(a.server_log, errors="replace").read()
         except OSError:
             slog = ""
-        if entered is None and re.search(rf"name={name}\b.*login", slog):
+        # tracing output carries ANSI colour codes and prints the message
+        # ("login (...)") before the fields, so strip colours and match the
+        # login line and our name in either order.
+        slog = ANSI.sub("", slog)
+        if entered is None and any("login" in l and re.search(rf"name={name}\b", l) for l in slog.splitlines()):
             entered = time.time()
             print("in world at", round(entered - t0), "s", flush=True)
         if entered and time.time() - entered >= a.secs:

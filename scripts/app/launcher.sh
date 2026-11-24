@@ -27,12 +27,11 @@ fi
 
 SERVER_PID=""
 if [ -n "$SERVER_URL" ]; then
-  # Remote shard: never spawn a local server, and don't let a stray local one
-  # linger and confuse the next launch.
-  pkill -f antediluvia-server 2>/dev/null
+  # Remote shard: never spawn a local server. Never kill servers this
+  # launcher did not start (other local shards may be running on purpose).
+  :
 elif ! nc -z 127.0.0.1 8787 2>/dev/null; then
-  # One server only: kill any stray non-listening leftovers first.
-  pkill -f antediluvia-server 2>/dev/null
+  # Start our own server; only the PID started here is ever killed.
   "$RES/antediluvia-server" >>"$SUPPORT/server.log" 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 1 50); do nc -z 127.0.0.1 8787 2>/dev/null && break; sleep 0.1; done
@@ -54,7 +53,7 @@ CLIENT_ARGS=("$APPLE_ID" "$USER")
 "$RES/antediluvia-client-bevy" "${CLIENT_ARGS[@]}" >>"$SUPPORT/client.log" 2>&1
 STATUS=$?
 
-if [ -n "$SERVER_PID" ]; then
+if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
   kill "$SERVER_PID" 2>/dev/null
 fi
 exit $STATUS
