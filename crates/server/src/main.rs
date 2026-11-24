@@ -7,6 +7,7 @@
 
 mod db;
 mod net;
+mod snap;
 // beta-server-track (B05-B08): new message handling lives in these modules.
 mod social_db;
 mod track;
@@ -33,6 +34,8 @@ pub enum GameCmd {
 pub enum Out {
     Msg(ServerMsg),
     Raw(String),
+    /// A binary delta snapshot frame (B11, `snap`).
+    Bin(Vec<u8>),
 }
 
 struct Conn {
@@ -55,6 +58,11 @@ struct Conn {
     party: Option<u64>,
     /// (party id or 0=new, inviter conn id) of the latest party invite.
     pending_party_invite: Option<u64>,
+    /// Snapshot wire asked for at login (B11): `wire::WIRE_JSON` or
+    /// `wire::WIRE_BINARY`.
+    wire: u8,
+    /// Binary wire: the client asked for a keyframe (`Resync`).
+    resync: bool,
 }
 
 impl Conn {
@@ -119,6 +127,15 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     let mut tick_max = Duration::ZERO;
     let mut seed_round: u64 = 0;
     seed_auctions(&db, &mut seed_round);
+    let mut hub = snap::SnapHub::new();
+    // Telemetry window in seconds (60 by default; shorter for load tests).
+    let telemetry_secs: u64 = std::env::var("ANTEDILUVIA_TELEMETRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(60);
+    let mut snap_accum = Duration::ZERO;
+    let mut snap_max = Duration::ZERO;
 
     loop {
         tokio::select! {
@@ -129,7 +146,11 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 track::tick(ticks, &mut world, &mut conns, &db); // beta-server-track hook
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
-                    broadcast_snapshots(&world, &conns);
+                    let s0 = std::time::Instant::now();
+                    broadcast_snapshots(&world, &mut conns, &mut hub);
+                    let s = s0.elapsed();
+                    snap_accum += s;
+                    snap_max = snap_max.max(s);
                 }
                 let spent = t0.elapsed();
                 tick_accum += spent;
@@ -137,13 +158,26 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 if spent.as_millis() > 45 {
                     tracing::warn!("slow tick: {:?} ({} conns)", spent, conns.len());
                 }
-                if ticks % (TICK_HZ * 60) == 0 && ticks > 0 {
+                if ticks % (TICK_HZ * telemetry_secs) == 0 && ticks > 0 {
                     tracing::info!(
-                        "tick telemetry: avg {:?} max {:?} over 60s ({} conns)",
-                        tick_accum / (TICK_HZ * 60) as u32, tick_max, conns.len()
+                        "tick telemetry: avg {:?} max {:?} over {}s ({} conns)",
+                        tick_accum / (TICK_HZ * telemetry_secs) as u32, tick_max, telemetry_secs, conns.len()
                     );
                     tick_accum = Duration::ZERO;
                     tick_max = Duration::ZERO;
+                    // Binary snapshot cost (B11): time per snapshot pass and
+                    // bytes per client per second.
+                    let st = hub.take_stats();
+                    let bin = conns.values().filter(|c| c.logged_in && c.wire != 0).count() as u64;
+                    if bin > 0 {
+                        tracing::info!(
+                            "snap telemetry: pass avg {:?} max {:?}; {} binary clients, {} B/s each, {} frames, {} keyframes, {} enters, {} updates, {} leaves",
+                            snap_accum / (TICK_HZ * telemetry_secs / 2) as u32, snap_max, bin,
+                            st.bytes / telemetry_secs / bin, st.frames, st.keyframes, st.enters, st.updates, st.leaves
+                        );
+                    }
+                    snap_accum = Duration::ZERO;
+                    snap_max = Duration::ZERO;
                 }
                 ticks += 1;
                 // Persist all online characters every ~10s.
@@ -213,6 +247,8 @@ fn handle_cmd(
                 pending_guild_invite: None,
                 party: None,
                 pending_party_invite: None,
+                wire: antediluvia_protocol::wire::WIRE_JSON,
+                resync: false,
             });
         }
         GameCmd::Disconnect { id } => {
@@ -248,7 +284,7 @@ fn handle_client_msg(
     db: &Db,
 ) {
     match msg {
-        ClientMsg::Login { proto, apple_id, character_name, create } => {
+        ClientMsg::Login { proto, apple_id, character_name, create, wire } => {
             let apple_id = apple_id.trim().to_string();
             let reject = |conns: &HashMap<u64, Conn>, reason: &str| {
                 if let Some(c) = conns.get(&id) {
@@ -360,6 +396,8 @@ fn handle_client_msg(
                 c.logged_in = true;
                 c.guild = guild;
                 c.is_dev = is_dev;
+                c.wire = wire.min(antediluvia_protocol::wire::WIRE_BINARY);
+                c.resync = true;
                 c.send(ServerMsg::Welcome { entity_id, character: sheet, is_dev });
                 if newborn {
                     // Prologue (Gen 3): every mortal's story starts at the
@@ -1024,6 +1062,12 @@ fn handle_client_msg(
                 c.send(ServerMsg::Pong);
             }
         }
+        ClientMsg::Resync => {
+            // Answered with a keyframe by `snap` (rate-limited there).
+            if let Some(c) = conns.get_mut(&id) {
+                c.resync = true;
+            }
+        }
         // beta-server-track hook: every B05-B08 message is handled in track.rs.
         other => track::handle_client(id, other, world, conns, db),
     }
@@ -1179,67 +1223,78 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
 /// Radius (world units) a client is told about. Entities beyond this are culled
 /// from that player's snapshot — the core MMO bandwidth control.
 const AOI_RADIUS: f32 = 1400.0;
-/// Hard ceiling on entities in one snapshot frame, nearest-first. This is the
-/// interest-management backstop: AOI alone does not bound anything when a
-/// thousand players pile into the same square, which is exactly when the
-/// server can least afford O(N²) frame building.
+/// Hard ceiling on entities in one JSON snapshot frame, nearest-first. This
+/// is the interest-management backstop of the text wire: AOI alone does not
+/// bound anything when a thousand players pile into the same square. The
+/// binary wire (`snap`) has its own, much higher caps.
 const MAX_ENTITIES_PER_FRAME: usize = 150;
 
-/// Send each logged-in client an area-of-interest snapshot centered on its own
-/// player: only the entities near it, not the whole zone.
-fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
+/// Send each logged-in client a snapshot centered on its own player. Binary
+/// clients get delta frames from `snap`; JSON clients (test tools) get their
+/// nearest `MAX_ENTITIES_PER_FRAME` entities in full. Both walk the AoI grid:
+/// no entity is read or serialized unless some client can see it.
+fn broadcast_snapshots(world: &World, conns: &mut HashMap<u64, Conn>, hub: &mut snap::SnapHub) {
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     // 86400 seconds in a day. time_of_day = 0.0 at midnight UTC, 0.5 at noon UTC.
     let time_of_day = world
         .time_override
         .unwrap_or((now_secs % 86400) as f32 / 86400.0);
 
-    // C15: serialize every entity ONCE per zone, then assemble each client's
-    // frame from the shared fragments — 1,000 clients no longer cost 1,000
-    // full serde passes over the same entities.
-    let mut per_act: HashMap<Act, (u64, Vec<(antediluvia_protocol::Vec2, String)>)> = HashMap::new();
-    for act in Act::ALL {
-        if !conns.values().any(|c| c.logged_in && c.act == act) {
+    // Binary delta clients.
+    let mut reqs: Vec<snap::ClientReq> = Vec::new();
+    for (id, c) in conns.iter_mut() {
+        if !c.logged_in || c.wire == antediluvia_protocol::wire::WIRE_JSON {
             continue;
         }
-        let (tick, frags) = world.zone_serialized(act);
-        per_act.insert(act, (tick, frags));
+        let Some(entity) = c.entity else { continue };
+        reqs.push(snap::ClientReq { conn: *id, act: c.act, entity, aoi: c.aoi, resync: c.resync });
+        c.resync = false;
     }
+    hub.run(world, &reqs, time_of_day, |conn, frame| {
+        if let Some(c) = conns.get(&conn) {
+            let _ = c.out.send(Out::Bin(frame));
+        }
+    });
+
+    // JSON clients. Each entity is serialized at most once per snapshot, on
+    // first need, and the fragment is shared by every client that sees it.
+    let mut frags: HashMap<EntityId, String> = HashMap::new();
+    let mut near: Vec<(f32, EntityId)> = Vec::new();
     for c in conns.values() {
-        if !c.logged_in {
+        if !c.logged_in || c.wire != antediluvia_protocol::wire::WIRE_JSON {
             continue;
         }
         let Some(ent) = c.entity else { continue };
-        let Some((tick, frags)) = per_act.get(&c.act) else { continue };
+        let Some(zone) = world.zones.get(&c.act) else { continue };
         let pos = world.player_pos(c.act, ent).unwrap_or_default();
         let r2 = c.aoi * c.aoi;
-        let mut frame = format!(
-            "{{\"t\":\"snapshot\",\"act\":\"{}\",\"tick\":{},\"time_of_day\":{},\"entities\":[",
-            c.act.as_str(), tick, time_of_day
-        );
-        // Collect candidates with their distance, then send only the nearest
-        // MAX_ENTITIES_PER_FRAME. Without this cap a crowded zone is O(N²):
-        // every one of N clients gets a frame containing all N entities, which
-        // measured at ~1 GB/s and 67-82 ms ticks with 1000 players. The cap
-        // bounds both egress and per-tick CPU no matter how dense the zone is,
-        // and losing the 200th-nearest entity is imperceptible.
-        let mut near: Vec<(f32, &str)> = frags
-            .iter()
-            .filter_map(|(p, json)| {
-                let d2 = p.distance_squared(pos);
-                (d2 <= r2).then_some((d2, json.as_str()))
-            })
-            .collect();
+        near.clear();
+        for cell in antediluvia_sim::aoi::cells_in_radius(pos, c.aoi) {
+            for id in zone.grid.cell_entities(cell) {
+                if let Some(e) = zone.entities.get(id) {
+                    let d2 = e.pos.distance_squared(pos);
+                    if d2 <= r2 {
+                        near.push((d2, *id));
+                    }
+                }
+            }
+        }
+        // Without this cap a crowded zone is O(N^2) on the text wire: every
+        // one of N clients gets a frame containing all N entities in full.
         if near.len() > MAX_ENTITIES_PER_FRAME {
-            // Partial select — cheaper than a full sort, and we don't care
-            // about the ordering within the kept set.
-            near.select_nth_unstable_by(MAX_ENTITIES_PER_FRAME, |a, b| {
-                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            near.select_nth_unstable_by(MAX_ENTITIES_PER_FRAME, |a, b| a.0.total_cmp(&b.0));
             near.truncate(MAX_ENTITIES_PER_FRAME);
         }
+        let mut frame = format!(
+            "{{\"t\":\"snapshot\",\"act\":\"{}\",\"tick\":{},\"time_of_day\":{},\"entities\":[",
+            c.act.as_str(), zone.tick, time_of_day
+        );
         let mut first = true;
-        for (_, json) in &near {
+        for (_, id) in &near {
+            let Some(e) = zone.entities.get(id) else { continue };
+            let json = frags
+                .entry(*id)
+                .or_insert_with(|| serde_json::to_string(&e.to_state()).unwrap_or_default());
             if !first {
                 frame.push(',');
             }

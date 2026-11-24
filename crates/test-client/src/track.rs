@@ -53,6 +53,7 @@ async fn login(url: &str, name: &str) -> Result<Ws, Box<dyn std::error::Error>> 
         apple_id: format!("track_{name}"),
         character_name: Some(name.to_string()),
         create: None,
+        wire: 0,
     }).await?;
     expect(&mut ws, "welcome", |m| matches!(m, ServerMsg::Welcome { .. })).await?;
     expect(&mut ws, "zone banner", |m| matches!(m, ServerMsg::ZoneBanner { .. })).await?;

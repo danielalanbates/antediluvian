@@ -166,6 +166,7 @@ pub fn create_message(b: &Builder, apple_id: &str) -> Result<ClientMsg, &'static
             appearance: [b.appearance[0] % 4, (look.skin as u32).min(15), (look.hair_color as u32).min(11)],
             look: look.pack(),
         }),
+        wire: crate::net::wanted_wire(),
     })
 }
 

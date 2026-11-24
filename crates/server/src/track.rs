@@ -739,6 +739,8 @@ mod tests {
                 pending_guild_invite: None,
                 party: None,
                 pending_party_invite: None,
+                wire: 0,
+                resync: false,
             });
             self.rx.insert(id, rx);
         }

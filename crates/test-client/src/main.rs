@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             apple_id: format!("test_{name}"),
             character_name: Some(name.clone()),
             create: None,
+            wire: 0, // JSON snapshots: this tool prints them
         }).into()))
         .await?;
 
