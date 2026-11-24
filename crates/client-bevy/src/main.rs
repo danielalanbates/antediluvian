@@ -18,6 +18,7 @@
 
 mod atmosphere;
 mod castbar;
+mod crowd;
 mod track_ui;
 mod audio;
 mod ambient;
@@ -1925,8 +1926,9 @@ fn spawn_visual(
         }
     };
 
-    // Health-bar nameplate for anything that fights or lives.
-    if matches!(e.kind, EntityKind::Player | EntityKind::Enemy | EntityKind::Wildlife) {
+    // Health bar for anything that fights or lives; in a crowd only the
+    // players drawn as full rigs carry one (B11, see `crowd`).
+    if crowd::wants_health_bar(e.kind, cheap) {
         let mut fill = Entity::PLACEHOLDER;
         commands.entity(root).with_children(|p| {
             p.spawn((
@@ -1953,16 +1955,19 @@ fn spawn_visual(
     }
 
     // Floating gold name over NPCs, WoW-style, so the Elder, Innkeeper and
-    // Quartermaster can be told apart at a glance.
-    if e.kind == EntityKind::Npc {
+    // Quartermaster can be told apart at a glance; pale blue names over the
+    // other players near enough to be full rigs (B11: bounded by the rig
+    // budget, block figures have none).
+    if let Some(colour) = crowd::name_plate(e.kind, is_me, cheap) {
         if let Some(name) = e.name.as_deref() {
+            let height = if e.kind == EntityKind::Npc { NAME_HEIGHT } else { PLAYER_NAME_HEIGHT };
             commands.spawn((
                 Text::new(name),
                 TextFont { font_size: 15.0, ..default() },
-                TextColor(Color::srgb(1.0, 0.84, 0.25)),
+                TextColor(colour),
                 Node { position_type: PositionType::Absolute, ..default() },
                 Visibility::Hidden,
-                NameLabel { root, chars: name.chars().count() as f32 },
+                NameLabel { root, chars: name.chars().count() as f32, height },
             ));
         }
     }
@@ -1979,10 +1984,14 @@ fn spawn_visual(
 struct NameLabel {
     root: Entity,
     chars: f32,
+    /// Height above the root where the name floats.
+    height: f32,
 }
 
-/// Height above the root where names float (above the rig's head).
+/// Height above the root where NPC names float (above the rig's head).
 const NAME_HEIGHT: f32 = 80.0;
+/// Player names sit just above the health bar.
+const PLAYER_NAME_HEIGHT: f32 = BAR_HEIGHT + 14.0;
 /// Past this camera distance names are hidden, as in WoW.
 const NAME_RANGE: f32 = 900.0;
 
@@ -1999,7 +2008,7 @@ fn update_name_labels(
             commands.entity(ent).despawn_recursive();
             continue;
         };
-        let world = root.translation() + Vec3::Y * NAME_HEIGHT;
+        let world = root.translation() + Vec3::Y * label.height;
         let near = world.distance(cam_xf.translation()) < NAME_RANGE;
         match camera.world_to_viewport(cam_xf, world) {
             Ok(p) if near => {
@@ -2183,11 +2192,16 @@ fn receive_from_server(
         }
     }
 
-    if let Some(entities) = latest {
+    if let Some(mut entities) = latest {
         let my_id = session.my_id;
         wins.radar(&entities, my_id); // minimap, markers, death prompt
         // Target frame: nearest living enemy within engage range.
         let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
+        // Nearest first, so when a whole crowd comes into view at once the
+        // rig budget goes to the players closest to us (B11).
+        if let Some((mx, my)) = me_pos {
+            entities.sort_by(|a, b| crowd::dist2(a, mx, my).total_cmp(&crowd::dist2(b, mx, my)));
+        }
         let nearest = me_pos.and_then(|(mx, my)| {
             entities
                 .iter()
@@ -2557,6 +2571,7 @@ fn dev_autocmd(
     tx: Res<NetTx>,
     mut wins: ResMut<win::WinState>,
     mut session: ResMut<Session>,
+    mut orbit: ResMut<Orbit>,
 ) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
@@ -2572,6 +2587,14 @@ fn dev_autocmd(
             // character builder in a windowless run.
             if let Some(b) = session.builder.as_mut() {
                 look::builder::autocmd(b, arg);
+            }
+        } else if let Some(arg) = line.strip_prefix("cam ") {
+            // "cam 1400 0.9": pull the camera back for a crowd shot (B11).
+            if let Some((dist, pitch)) = crowd::parse_cam(arg) {
+                orbit.dist = dist;
+                if let Some(p) = pitch {
+                    orbit.pitch = p;
+                }
             }
         } else if let Some(arg) = line.strip_prefix("ui ") {
             // "ui bags", "ui only map", "ui close", "ui menu": open windows
@@ -3108,15 +3131,20 @@ fn smooth_motion(
     map: Res<EntityMap>,
     mut models: Query<&mut Transform, Without<NetTarget>>,
 ) {
-    let k = 1.0 - (-14.0 * time.delta_secs()).exp();
+    let dt = time.delta_secs();
+    let k_rig = 1.0 - (-crowd::ease_rate(false) * dt).exp();
+    let k_far = 1.0 - (-crowd::ease_rate(true) * dt).exp();
     for (target, mut t, ent) in &mut roots {
+        let mirrored = map.0.get(&ent.0);
+        // Block figures are updated at 2.5 Hz: glide, do not dart (B11).
+        let k = if mirrored.is_some_and(|m| m.lod_cheap == Some(true)) { k_far } else { k_rig };
         let d = target.pos - t.translation;
         if d.length_squared() > 200.0 * 200.0 {
             t.translation = target.pos; // teleport/travel: snap, don't glide
         } else {
             t.translation += d * k;
         }
-        if let Some(m) = map.0.get(&ent.0).and_then(|m| m.model) {
+        if let Some(m) = mirrored.and_then(|m| m.model) {
             if let Ok(mut mt) = models.get_mut(m) {
                 let want = Quat::from_rotation_y(-target.rot);
                 mt.rotation = mt.rotation.slerp(want, k);

@@ -128,6 +128,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     let mut seed_round: u64 = 0;
     seed_auctions(&db, &mut seed_round);
     let mut hub = snap::SnapHub::new();
+    let mut listeners: (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
     // Telemetry window in seconds (60 by default; shorter for load tests).
     let telemetry_secs: u64 = std::env::var("ANTEDILUVIA_TELEMETRY_SECS")
         .ok()
@@ -142,7 +143,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
             _ = tick.tick() => {
                 let t0 = std::time::Instant::now();
                 let events = world.step();
-                dispatch_events(&mut world, &mut conns, events);
+                dispatch_events(&mut world, &mut conns, events, &hub, &mut listeners);
                 track::tick(ticks, &mut world, &mut conns, &db); // beta-server-track hook
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
@@ -180,10 +181,10 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                     snap_max = Duration::ZERO;
                 }
                 ticks += 1;
-                // Persist all online characters every ~10s.
-                if ticks % (TICK_HZ * 10) == 0 {
-                    save_all(&world, &conns, &db);
-                }
+                // Persist every online character once every ~10s, a slice
+                // of the connections each tick: saving 1,000 sheets in one
+                // tick would blow the 50 ms budget by itself.
+                save_slice(&world, &conns, &db, ticks);
                 // Economy heartbeat (C11): hourly gold-flow log, daily AH re-seed.
                 if ticks % (TICK_HZ * 3600) == 0 && ticks > 0 {
                     tracing::info!(
@@ -1128,14 +1129,44 @@ fn send_stats(world: &World, conns: &HashMap<u64, Conn>, id: u64) {
 
 /// Push per-tick simulation events (level-ups, deaths, loot) to their owners,
 /// along with a refreshed stat block.
-fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Vec<SimEvent>) {
+fn dispatch_events(
+    world: &mut World,
+    conns: &mut HashMap<u64, Conn>,
+    events: Vec<SimEvent>,
+    hub: &snap::SnapHub,
+    listeners: &mut (Vec<u64>, Vec<u64>),
+) {
     for ev in events {
-        // Combat events are cosmetic and zone-wide: fan out to every client in
-        // the act (same pattern as zone chat) rather than to one owner.
+        // Combat events are cosmetic (they drive swing / hit / death
+        // animations), and only entities drawn as full rigs animate. They
+        // used to fan out to every client in the act, which is N listeners
+        // for each of N fighters; now a client hears of an event when its
+        // source is in that client's 10 Hz tier (B11), or, for JSON clients,
+        // within the near radius.
         if let SimEvent::Combat { act, kind, src, dst } = ev {
-            for c in conns.values() {
-                if c.logged_in && c.act == act {
-                    c.send(ServerMsg::Event { act, kind, src, dst });
+            let (binary, plain) = (&mut listeners.0, &mut listeners.1);
+            hub.event_listeners(world, act, src, binary, plain);
+            // Whoever is hit always hears of it.
+            let victim = dst
+                .and_then(|d| world.zones.get(&act).and_then(|z| z.entities.get(&d)))
+                .and_then(|e| e.owner);
+            if let Some(v) = victim {
+                if !binary.contains(&v) && !plain.contains(&v) {
+                    binary.push(v);
+                }
+            }
+            for id in binary.iter() {
+                if let Some(c) = conns.get(id) {
+                    if c.logged_in && c.act == act {
+                        c.send(ServerMsg::Event { act, kind, src, dst });
+                    }
+                }
+            }
+            for id in plain.iter() {
+                if let Some(c) = conns.get(id) {
+                    if c.logged_in && c.act == act && c.wire == antediluvia_protocol::wire::WIRE_JSON {
+                        c.send(ServerMsg::Event { act, kind, src, dst });
+                    }
                 }
             }
             continue;
@@ -1306,8 +1337,16 @@ fn broadcast_snapshots(world: &World, conns: &mut HashMap<u64, Conn>, hub: &mut 
     }
 }
 
-fn save_all(world: &World, conns: &HashMap<u64, Conn>, db: &Db) {
-    for c in conns.values() {
+/// Ticks between two saves of the same character (10 s).
+const SAVE_PERIOD: u64 = TICK_HZ * 10;
+
+/// Save the characters whose turn it is this tick (connection id modulo the
+/// save period), so the work is level instead of one spike every 10 s.
+fn save_slice(world: &World, conns: &HashMap<u64, Conn>, db: &Db, ticks: u64) {
+    for (id, c) in conns.iter() {
+        if (id + ticks) % SAVE_PERIOD != 0 {
+            continue;
+        }
         if let (true, Some(ent)) = (c.logged_in, c.entity) {
             if let Some(sheet) = world.player_sheet(c.act, ent) {
                 if let Err(e) = db.save(&sheet, None) {

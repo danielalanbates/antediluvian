@@ -147,7 +147,7 @@ mod native {
                     };
                     println!("[net] connected to {url}");
                     let (mut sink, mut stream) = ws.split();
-                    let mut inbound = Inbound::default();
+                    let mut decode = Inbound::default();
 
                     // Authenticate immediately.
                     if let Some(txt) = login_json(apple_id, character_name) {
@@ -168,14 +168,14 @@ mod native {
                             },
                             inbound = stream.next() => match inbound {
                                 Some(Ok(Message::Text(txt))) => {
-                                    if let Ok(msg) = inbound.text(&txt) {
+                                    if let Ok(msg) = decode.text(&txt) {
                                         if tx_server.send(msg).is_err() {
                                             break;
                                         }
                                     }
                                 }
                                 Some(Ok(Message::Binary(bytes))) => {
-                                    let (msg, ask) = inbound.binary(&bytes);
+                                    let (msg, ask) = decode.binary(&bytes);
                                     if let Some(msg) = msg {
                                         if tx_server.send(msg).is_err() {
                                             break;

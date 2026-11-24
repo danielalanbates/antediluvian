@@ -44,7 +44,8 @@ pub const SCAN_EVERY: u32 = 4;
 pub const MAX_PLAYERS_PER_CLIENT: usize = 1200;
 /// Most non-player entities one client is told about.
 pub const MAX_OTHERS_PER_CLIENT: usize = 400;
-/// Snapshots between unprompted keyframes (60 s).
+/// Snapshots between unprompted keyframes (60 s, plus up to 25.5 s of
+/// per-connection stagger).
 pub const KEYFRAME_EVERY: u32 = 600;
 /// A client's `Resync` is answered at most this often (2 s).
 pub const RESYNC_MIN_GAP: u32 = 20;
@@ -220,6 +221,8 @@ struct ClientView {
     /// Per slot: snapshot number of the last send, 0 = not known to the client.
     known: Vec<u32>,
     near: Vec<u32>,
+    /// Per slot: in the 10 Hz tier (mirrors `near`, for event routing).
+    is_near: Vec<bool>,
     far: [Vec<u32>; FAR_PHASES as usize],
     frame_seq: u32,
     last_key: u32,
@@ -236,6 +239,7 @@ impl ClientView {
             entity,
             known: Vec::new(),
             near: Vec::new(),
+            is_near: Vec::new(),
             far: Default::default(),
             frame_seq: 0,
             last_key: 0,
@@ -283,6 +287,55 @@ impl SnapHub {
 
     pub fn take_stats(&mut self) -> SnapStats {
         std::mem::take(&mut self.stats)
+    }
+
+    /// Who should hear about a combat event of `src` (swing, cast, hit,
+    /// death)? Events only drive animations, and only full rigs animate, so
+    /// a client hears of it when `src` is in its 10 Hz tier. In a crowd of
+    /// 1,000 that is about 64 listeners per event instead of 1,000.
+    ///
+    /// `binary` receives the connections with a view that holds `src` near;
+    /// `plain` receives every other player connection within `NEAR_RADIUS`
+    /// (JSON clients, or binary ones not served yet: the caller filters).
+    pub fn event_listeners(
+        &self,
+        world: &World,
+        act: Act,
+        src: EntityId,
+        binary: &mut Vec<u64>,
+        plain: &mut Vec<u64>,
+    ) {
+        binary.clear();
+        plain.clear();
+        let Some(zone) = world.zones.get(&act) else { return };
+        let zv = self.zones.get(&act);
+        let slot = zv.and_then(|z| z.by_id.get(&src).copied());
+        // A mob that died this tick may already be gone from the sim: its
+        // last known place is still in the table.
+        let pos = match (zone.entities.get(&src), slot, zv) {
+            (Some(e), _, _) => e.pos,
+            (None, Some(si), Some(z)) => z.slots[si as usize].pos,
+            _ => return,
+        };
+        let r2 = NEAR_RADIUS * NEAR_RADIUS;
+        for cell in aoi::cells_in_radius(pos, NEAR_RADIUS) {
+            for id in zone.grid.cell_entities(cell) {
+                let Some(e) = zone.entities.get(id) else { continue };
+                let Some(owner) = e.owner else { continue };
+                if e.kind != EntityKind::Player || e.pos.distance_squared(pos) > r2 {
+                    continue;
+                }
+                match self.clients.get(&owner) {
+                    Some(cv) if cv.act == act => {
+                        let near = slot.is_some_and(|si| cv.is_near.get(si as usize).copied().unwrap_or(false));
+                        if near || *id == src {
+                            binary.push(owner);
+                        }
+                    }
+                    _ => plain.push(owner),
+                }
+            }
+        }
     }
 
     /// Build one frame per client and hand it to `emit`.
@@ -358,11 +411,18 @@ fn build_frame(
     }
     cv.want_key |= r.resync;
     let since_key = seq.wrapping_sub(cv.last_key);
-    let key = cv.fresh || since_key >= KEYFRAME_EVERY || (cv.want_key && since_key >= RESYNC_MIN_GAP);
+    // Clients that logged in together must not all be re-keyed in the same
+    // second: each waits up to 25.5 s longer, by connection id.
+    let key_due = KEYFRAME_EVERY + (r.conn % 256) as u32;
+    let key = cv.fresh || since_key >= key_due || (cv.want_key && since_key >= RESYNC_MIN_GAP);
     let respawned = cv.entity != r.entity;
     cv.entity = r.entity;
+    if cv.is_near.len() < zv.slots.len() {
+        cv.is_near.resize(zv.slots.len(), false);
+    }
     if key {
         cv.known.iter_mut().for_each(|k| *k = 0);
+        cv.is_near.iter_mut().for_each(|n| *n = false);
         cv.near.clear();
         cv.far.iter_mut().for_each(Vec::clear);
         cv.last_key = seq;
@@ -489,6 +549,9 @@ fn scan(
     }
 
     // Enter the new ones and deal everything into its tier.
+    for &si in &cv.near {
+        cv.is_near[si as usize] = false;
+    }
     cv.near.clear();
     cv.far.iter_mut().for_each(Vec::clear);
     let near2 = NEAR_RADIUS * NEAR_RADIUS;
@@ -506,6 +569,7 @@ fn scan(
             }
             if i < budget && d2 <= near2 {
                 cv.near.push(si);
+                cv.is_near[si as usize] = true;
             } else {
                 cv.far[(si % FAR_PHASES) as usize].push(si);
             }
@@ -777,7 +841,7 @@ mod tests {
         let me = rig.player("Asa", 0.0, 0.0, 600.0, true);
         let conn = rig.conn_of(me);
         let mut keys = 0;
-        for _ in 0..(KEYFRAME_EVERY + 5) {
+        for _ in 0..(KEYFRAME_EVERY + 256 + 5) {
             rig.snap();
             if rig.last[&conn].key {
                 keys += 1;
@@ -859,6 +923,42 @@ mod tests {
         assert_eq!(total, 200, "each far player once per cycle: {sent:?}");
         assert!(sent.iter().all(|n| *n < 120), "spread over the phases: {sent:?}");
         rig.assert_matches_sim(me);
+    }
+
+    #[test]
+    fn combat_events_reach_only_clients_that_draw_the_source_as_a_rig() {
+        let mut rig = Rig::new();
+        // 300 clients packed on one spot: everyone is inside everyone's
+        // near radius, but each holds only the nearest NEAR_PLAYERS at 10 Hz.
+        let mut ids = Vec::new();
+        for i in 0..300 {
+            let a = i as f32 * 2.399_963;
+            let rad = 8.0 * (i as f32).sqrt();
+            ids.push(rig.player(&format!("P{i}"), a.cos() * rad, a.sin() * rad, 1400.0, true));
+        }
+        let outsider = rig.player("Far", 3000.0, 3000.0, 1400.0, true);
+        rig.settle();
+        let (mut bin, mut plain) = (Vec::new(), Vec::new());
+        let mut total = 0;
+        for src in &ids {
+            rig.hub.event_listeners(&rig.world, Act::Eden, *src, &mut bin, &mut plain);
+            assert!(plain.is_empty(), "every client here has a view");
+            assert!(bin.contains(&rig.conn_of(*src)), "you always hear your own swing");
+            assert!(!bin.contains(&rig.conn_of(outsider)));
+            assert!(bin.len() <= 300);
+            total += bin.len();
+        }
+        let avg = total / ids.len();
+        assert!(avg <= NEAR_PLAYERS + 1, "{avg} listeners per event on average, not 300");
+        assert!(avg >= NEAR_PLAYERS / 2, "{avg}: neighbours do hear it");
+        // A player with no view (JSON client) is offered by distance.
+        let json = rig.player("Json", 5.0, 5.0, 150.0, false);
+        rig.hub.event_listeners(&rig.world, Act::Eden, ids[0], &mut bin, &mut plain);
+        let json_conn = rig.world.zones[&Act::Eden].entities[&json].owner.unwrap();
+        assert_eq!(plain, vec![json_conn]);
+        // Unknown source: nobody.
+        rig.hub.event_listeners(&rig.world, Act::Eden, 9_999_999, &mut bin, &mut plain);
+        assert!(bin.is_empty() && plain.is_empty());
     }
 
     /// Byte budget for the goal: 1,000 players gathered on one spot, all
