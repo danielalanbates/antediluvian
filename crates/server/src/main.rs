@@ -1223,6 +1223,10 @@ fn dispatch_events(
                 _ => continue,
             };
             let Some(ent) = ent else { continue };
+            // Deaths go to the log so a shard's journal shows who dies where
+            // (open beta: idle players at spawn must never appear here).
+            let who = conns.get(&owner).and_then(|c| c.name.clone()).unwrap_or_default();
+            tracing::info!(conn = owner, name = %who, act = cur_act.as_str(), "player died");
             let home_msg = match home {
                 Some(h) if *h != cur_act => {
                     if let Some(mut sheet) = world.player_sheet(cur_act, ent) {
