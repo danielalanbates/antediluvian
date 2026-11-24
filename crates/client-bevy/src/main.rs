@@ -17,6 +17,8 @@
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
 
 mod atmosphere;
+mod castbar;
+mod track_ui;
 mod audio;
 mod ambient;
 mod creaturegen;
@@ -405,6 +407,8 @@ fn main() {
         })
         .insert_resource(menu::MenuOpen::default())
         .add_event::<CombatEvt>()
+        .add_systems(Startup, castbar::spawn_cast_bar)
+        .add_systems(Update, castbar::update_cast_bar)
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
         .add_systems(
             Update,
@@ -2172,9 +2176,9 @@ fn receive_from_server(
                 session.ability_cd.insert(ability, (now, now + cooldown));
             }
             ServerMsg::Pong => {}
-            // beta-server-track (B05-B08): new server messages have no UI
-            // yet; ignore them until the client panels land.
-            _ => {}
+            // beta-server-track (B05-B08): text-level display until the
+            // dedicated windows land.
+            other => track_ui::on_server_msg(other, &mut session),
         }
     }
 
@@ -2329,6 +2333,7 @@ fn send_input(
     mut last_yaw: Local<f32>,
     colliders: Res<PropColliders>,
     q_me: Query<&Transform, With<PlayerTag>>,
+    menu_open: Res<menu::MenuOpen>,
 ) {
     // Ground-plane position of the local player, for prop collision tests.
     let me_pos = q_me
@@ -2395,7 +2400,9 @@ fn send_input(
     }
     // Action bar (B03): keys 1-9 and 0 cast the class kit in slot order.
     // The server decides; its `AbilityUsed` reply starts the cooldown sweep.
-    if let Some(class) = session.class {
+    // Not while the escape menu, builder or dev console owns the keyboard.
+    let keys_free = !menu_open.0 && session.builder.is_none() && session.dev_input.is_none();
+    if let Some(class) = session.class.filter(|_| keys_free) {
         let bar = class_bar(class);
         for (key, ab) in BAR_KEYS.iter().zip(bar.iter()) {
             if keys.just_pressed(*key) {
@@ -2844,7 +2851,9 @@ pub fn dispatch_chat_line(text: &str, tx: &NetTx) {
     {
         {
                 // Slash commands (P1): party management from the chat box.
-                if let Some(id) = text.strip_prefix("/cast ") {
+                if track_ui::slash(&text, tx) {
+                    // beta-server-track commands (boards, raid, channels, ...).
+                } else if let Some(id) = text.strip_prefix("/cast ") {
                     // /cast <ability_id> - same as pressing its bar key (B03).
                     tx.send(ClientMsg::Cast { ability: id.trim().to_string() });
                 } else if let Some(name) = text.strip_prefix("/class ") {

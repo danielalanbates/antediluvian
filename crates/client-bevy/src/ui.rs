@@ -691,23 +691,18 @@ pub fn update_ui_frames(
         *vis = if frac > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
     }
 
-    // Hint line under the bar: cast in progress, or the classless prompt.
+    // Hint line under the bar: the classless prompt.
     if let Ok((mut vis, mut text)) = q_class_select.get_single_mut() {
-        let line = match (&session.cast, session.class) {
-            (Some((id, _, end)), _) if now < *end => {
-                let name = antediluvia_sim::abilities::ability(id).map_or(id.as_str(), |a| a.name);
-                format!("Casting {name}  {:.1}s", end - now)
-            }
-            (_, None) if session.sheet.is_some() => {
-                "No class chosen - type /class warrior | hunter | priest | mage | wanderer | herald | warden | occultist".to_string()
-            }
-            _ => String::new(),
+        // (The cast itself is drawn by castbar.rs.)
+        let line = if session.class.is_none() && session.sheet.is_some() {
+            "No class chosen - type /class warrior | hunter | priest | mage | wanderer | herald | warden | occultist".to_string()
+        } else {
+            String::new()
         };
         *vis = if line.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
         if **text != line {
             **text = line;
         }
-        };
     }
 }
 
