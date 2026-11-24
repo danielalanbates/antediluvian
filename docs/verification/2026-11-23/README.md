@@ -65,3 +65,89 @@ web path) + `beta-server-track` (B05-B08). `PROTOCOL_VERSION` is 16.
 - The builder preview character stands behind the translucent text panel.
 - The builder's ability-icon strip shows one icon only (art exists for 8 of 64 abilities).
 - The scene is dark at the login hour; characters read as near-black.
+
+---
+
+# 2026-11-23 (later) - classic windows in the Bevy client
+
+Code: `crates/client-bevy/src/win/` (one module per window), hooks in
+`main.rs`, `menu.rs`, `ui.rs`, `local.rs`. Commits `a4e890c`, `a9779bb` and
+the docs commit after them. Nothing pushed, deployed or installed.
+
+## Keys
+B bags, C character, L quest log, P spellbook, M world map, O social,
+F notice board / flight master where you stand, Esc closes the top window
+(only with none open does it reach the game menu). **Mount moved from M to
+H** because M is the map. Vendor opens when the Innkeeper or Quartermaster
+answers E. Loot pops on a drop. Windows never read movement keys.
+
+## Scripted opening (windowless)
+`ANTEDILUVIA_AUTOCMD="ui bags;ui only map;ui social:who;ui chat:trade;ui menu;ui close"`.
+Also `ui talk` (E), `ui interact` (F), `ui accept` (first Accept on the open
+board).
+
+## Tests
+| Suite | Result |
+|---|---|
+| `antediluvia-client-bevy` | 98 passed (40 before + 58 new: layout, map projection, minimap, rarity colours, quest lines, markers, vendor, chat tabs, buffs, rested span, banner fade, dev panel, autocmd) |
+| `antediluvia-sim` (`--test-threads=1`) | 127 passed |
+| `antediluvia-server` | 14 passed |
+| `cargo build --release -p antediluvia-client-bevy -p antediluvia-test-client` | builds |
+
+## Windowless runs (4 of 4 used; own server on 127.0.0.1:8797 for A, C, D; B is solo)
+| Shot | Run | What it shows |
+|---|---|---|
+| `win_bags_character_minimap.jpg` | A, networked | Bags with rarity borders and wear %, character sheet (slots, repair state, stats), minimap, quest tracker with real objective, "!" over givers, chat tabs, **stamina bar on a Warrior** (was unverified). Taken before the unit-frame width fix. |
+| `win_vendor_bags.jpg` | A | Vendor opened by talking to the Innkeeper: buy list with gold / lineage locks, sell list, repair line; bags switch to "right-click to sell" |
+| `win_social_who.jpg` | A | Social window, Who tab, filled from the server's `WhoList` |
+| `win_flight.jpg` | A | Flight master window at the inn (no routes known yet). The empty list box seen here was removed afterwards. |
+| `win_board.jpg` | A | Notice board: one quest accepted through the window ("In progress 0/6"), three on offer, tracker updated |
+| `win_zone_banner_solo.jpg` | B, solo | Zone-in banner "Inn of Eden" in the solo driver; full-width HP / stamina bars after the fix |
+| `win_questlog_spellbook_solo.jpg` | B | Quest log and spellbook side by side (all 8 abilities, unlock levels), XP bar with the pale-blue rested stretch, "Rested" icon |
+| `win_death_prompt_solo.jpg` | B | Spirit-release prompt after dying to dire wolves in solo play |
+| `win_map_pin.jpg` | C, networked | World map: terrain picture, inn, capitals, graveyards, flight masters, player arrow, quest "!" pin lifted above the spot |
+| `win_buff_icon.jpg` | C | "Might 11s" buff icon after War Cry; "!" over the board |
+| `win_menu_dev_panel_chat_tab.jpg` | C | Escape menu with PvP toggle and the developer panel; chat on the General tab showing only the `[general]` line that went through the server |
+| `win_loot_empty_bags.jpg` | D | Loot window in its empty state; chat log now keeps its newest line |
+
+## Found and fixed while looking at the shots
+- Unit-frame bars had no definite width: HP / mana shrank to their text and
+  the XP bar was zero wide (it is missing from every earlier shot). Fixed in
+  `ui.rs`; the rested stretch needs it.
+- The Escape menu used an em dash and a middle dot the font does not have
+  (drawn as boxes) and its help text overflowed the panel.
+- The chat log clipped its newest lines when older lines wrapped.
+- Quest log and spellbook opened on top of each other; panels were
+  translucent enough for the lower one to show through.
+
+## Not verified
+- **No mouse or key was used** (not allowed): clicks, right-click use /
+  equip / sell, hover tooltips, the hotkeys themselves and Escape-closes-top
+  are covered by unit tests of the logic only. The button paths that ran for
+  real are the scripted ones: talk, interact, accept, open / close.
+- **Loot window with real drops**: dev `kill` gives no loot, so only the
+  empty state was seen. The notice parser is unit-tested.
+- **Death prompt against the server**: the character had 18 health left when
+  run D ended. Seen in solo only. The Release button was never pressed.
+- Buy, sell, repair, fly, turn in, abandon, friend / raid / channel buttons:
+  never pressed. "?" (ready) markers and map pins: unit-tested, not seen.
+- Other acts' maps, the Ignore / Raid / Channels / Friends tabs with data,
+  flight list with known routes, Quartermaster wares unlocked.
+- The marker z-order change (markers under the HUD) was made after the last
+  run and has not been seen.
+- Windowed play and the wasm build were not run.
+
+## Known limits (by design or still open)
+- Buff row shows own timed self-buffs (from `AbilityUsed`) and sheet
+  conditions (rested, PvP, broken gear, weary). Debuffs enemies apply are not
+  shown: the protocol has no aura list.
+- Loot is a record of drops, not a pick list: the server auto-loots.
+- Names for friend / ignore / raid invite are typed in chat; the windows have
+  no text fields.
+- Windows have fixed places and cannot be dragged.
+- Solo play: unit frame health lags at the moment of death (sheet is pushed
+  on respawn); raids, channels, whispers, friends answer "not available".
+- Chat tabs classify lines by their text; a notice shaped like "Word: text"
+  lands on Say.
+- Action-bar names longer than a tile are still clipped ("Challenging Roar").
+- Name labels still draw over the unit frame (older code).

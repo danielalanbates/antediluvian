@@ -18,7 +18,7 @@ from having a good first hour.
 |---|---|---|
 | Classes / abilities | 8 classes x 8 abilities on a 10-slot bar, stamina/mana, cast bar, cooldowns + talents | 8–9 classes, 15–25 abilities, spellbook, rotations |
 | Quests | 73 authored + 950 generated board quests (chat commands only) | thousands; "!"/"?" markers, quest log, map objectives |
-| UI windows | unit frame, 10-slot bar, cast bar, chat, tracker, 8-class builder, escape menu | bags, character sheet, spellbook, quest log, world map, minimap, vendor, loot, AH, guild roster, friends, keybinds |
+| UI windows | unit frame, 10-slot bar, cast bar, chat tabs, tracker, builder, escape menu + dev panel, bags, character, quest log, spellbook, map, minimap, vendor, loot record, board, flight, social (not draggable; mouse paths untested) | bags, character sheet, spellbook, quest log, world map, minimap, vendor, loot, AH, guild roster, friends, keybinds |
 | Social | guild, party, mail, trade, duel, raids (40), channels, friends/ignore, emotes, who (chat commands) | raid groups, channels, friends/ignore, emotes, who |
 | World | 5 acts, 200 POIs, caves, day/night, water, flight masters, offline rest XP, graveyards, zone banners | flight paths, rest XP, graveyards/spirit, weather, zone-in banners |
 | Items | equip, bank, vendors, craft, rarity tiers, durability + repair (no windows) | bags, rarity colours, durability/repair, loot rolls, set items |
@@ -37,14 +37,14 @@ test-client build. Details, shots and the unverified list:
 
 | Chunk | State |
 |---|---|
-| B01 UI windows I | not started |
-| B02 Quest markers | not started |
+| B01 UI windows I | done: bags, character, quest log, spellbook (`win/`); shot-verified opened by script, mouse and hotkeys untested |
+| B02 Quest markers | done: "!" over givers and boards seen in shots; "?" and grey states unit-tested only |
 | B03 Ability kits | done: bar, keys 1-0, cooldown countdown, cast bar, resource bar. Shot-verified for Occultist only; 56 of 64 abilities have no icon |
-| B04 Map + minimap | not started |
-| B05 Quest scale | server done; client is `/board`, `/accept`, `/turnin` text only (unexercised) |
-| B06 Rarity, durability, repair | server done; client is `/gear`, `/repair` text only; no vendor or loot window |
-| B07 Social | server done; client is slash commands + chat lines (unexercised) |
-| B08 Travel | server done; zone banner wired, `/flights`, `/fly`, `/release` text only |
+| B04 Map + minimap | done: terrain picture, POIs, graveyards, flight masters, capitals, arrow, quest pins; Eden seen, other acts not |
+| B05 Quest scale | server done; client board window: list and Accept seen working (networked and solo); Turn in / Abandon buttons unpressed |
+| B06 Rarity, durability, repair | server done; client: rarity colours, wear, vendor window seen; buy / sell / repair buttons unpressed; loot window seen empty only |
+| B07 Social | server done; client: social window (Who seen), chat tabs (General round trip seen); other tabs unseen with data |
+| B08 Travel | server done; client: zone banner, flight window, rested stretch, spirit-release prompt (solo) seen; Fly and Release unpressed |
 | B09 Classes 5-8 | done in sim and builder; they reuse the four old rigs |
 | B10-B12 | not started |
 
@@ -75,7 +75,9 @@ test-client build. Details, shots and the unverified list:
 ## Known defects (open)
 - Client aborted at startup with a worker-thread stack overflow (nested glTF
   loads); worked around with a 16 MB thread stack (2026-11-23).
-- Stamina bar never seen in a shot; cooldown sweep is low-contrast.
+- Cooldown sweep is low-contrast. (Stamina bar now seen.)
+- Window buttons, right-click, tooltips and hotkeys have never been driven by a real mouse or keyboard (see verification README, 2026-11-23 later section).
+- No aura list on the wire: enemy debuffs cannot be shown.
 - XP curve overflows near level 55 (see server track notes).
 - `batesai.org/membership/` redirects to itself (functions/membership.js).
 - Fresh server character showed 64/100 HP despite godmode (unexplained).
