@@ -19,3 +19,8 @@ futures-util = { workspace = true }
 [[bin]]
 name = "antediluvia-swarm"
 path = "src/swarm.rs"
+
+# beta-server-track: two-connection smoke test of the B05-B08 messages.
+[[bin]]
+name = "antediluvia-track"
+path = "src/track.rs"
