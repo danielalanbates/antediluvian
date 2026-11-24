@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut quest_ready = false;
     let mut talked = false;
     let mut last_talk_frame = 0u64;
+    let mut search_i = 0u32;
 
     while let Some(frame) = read.next().await {
         let Message::Text(txt) = frame? else { continue };
@@ -196,6 +197,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     nearest_enemy
                 };
+                // Nothing to hunt in view: sweep a ring around the inn where
+                // the opening camps spawn (B10 chunk) instead of standing still.
+                if quest_mode && nearest_enemy.is_none() {
+                    let a = search_i as f32 * std::f32::consts::TAU / 8.0;
+                    let goal = (a.cos() * 620.0, a.sin() * 620.0);
+                    let (dx, dy) = (goal.0 - my_pos.0, goal.1 - my_pos.1);
+                    if dx.hypot(dy) < 60.0 {
+                        search_i += 1;
+                    }
+                    write.send(Message::Text(send(&ClientMsg::Move { dx, dy }).into())).await?;
+                }
                 if let Some(en) = nearest_enemy {
                     let (dx, dy) = (en.x - my_pos.0, en.y - my_pos.1);
                     let dist = dx.hypot(dy);

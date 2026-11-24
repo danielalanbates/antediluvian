@@ -1159,7 +1159,7 @@ mod tests {
         {
             let s = r.world.zones.get_mut(&Act::Hermon).unwrap().entities.get_mut(&ent).unwrap().sheet.as_mut().unwrap();
             s.quests_done.push(antediluvia_sim::questgen::act_finale(Act::Hermon).to_string());
-            s.level = 10;
+            s.level = 24; // Hermon board gates are 13/17/21 (B10 curve)
         }
         r.send(1, ClientMsg::QuestAccept { id: quests[0].id.clone() });
         assert!(r.sheet(1).quests.contains_key(&quests[0].id));

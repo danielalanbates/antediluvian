@@ -204,6 +204,10 @@ pub const ITEMS: &[ItemDef] = &[
     // Faction Quartermaster wares (C10).
     ItemDef { id: "lineage_blade",         slot: "weapon", melee: 13, spell: 5,  hp: 0 },
     ItemDef { id: "lineage_mantle",        slot: "back",   melee: 0,  spell: 0,  hp: 40 },
+    // Battlemaster honor wares (B10).
+    ItemDef { id: "relic_bearers_band",    slot: "finger", melee: 4,  spell: 4,  hp: 5 },
+    ItemDef { id: "gladiators_tabard",     slot: "chest",  melee: 2,  spell: 2,  hp: 45 },
+    ItemDef { id: "warbanner_blade",       slot: "weapon", melee: 16, spell: 6,  hp: 0 },
 ];
 
 /// Key items: carried, never equipped or consumed.
@@ -643,8 +647,19 @@ impl World {
         // center, never inside the safe ring around the inn.
         for (tag, n) in act_spawn_table(act) {
             let mut left = *n;
+            // The act's opening-chain targets get their first camp just
+            // outside the safe ring, so a fresh character can find them
+            // (otherwise the 6 Eden serpents could sit 4000 units away).
+            let mut starter = crate::progression::starter_tag(act, tag);
             while left > 0 {
-                let center = self.safe_point(zone.entry, SAFE_RING);
+                let center = if starter {
+                    starter = false;
+                    let a = self.rng.range(0.0, std::f32::consts::TAU);
+                    let r = self.rng.range(SAFE_RING + 120.0, SAFE_RING + 350.0);
+                    zone.entry + Vec2::new(a.cos(), a.sin()) * r
+                } else {
+                    self.safe_point(zone.entry, SAFE_RING)
+                };
                 let group = left.min(6);
                 for _ in 0..group {
                     let off = self.rng.point(150.0);
@@ -769,6 +784,8 @@ impl World {
     /// Spawn a player entity into its zone from a character sheet. Returns the
     /// new entity id.
     pub fn spawn_player(&mut self, owner: u64, mut sheet: CharacterSheet) -> EntityId {
+        // B10 chunk: saves from the old 1.35x curve move onto the 1-60 curve.
+        crate::progression::migrate_sheet(&mut sheet);
         // Saves from before B03 have no stamina pool: start them full.
         if sheet.max_stamina <= 0 {
             sheet.max_stamina = STAMINA_MAX;
@@ -2653,7 +2670,7 @@ impl World {
                 let (hp, mana) = s.class.map(class_base).unwrap_or((0, 0));
                 s.level = level;
                 s.xp = 0;
-                s.max_xp = 100 * level;
+                s.max_xp = crate::progression::xp_to_next(level);
                 s.max_health = 100 + hp + (level as i32 - 1) * 15;
                 s.health = s.max_health;
                 s.max_mana = 50 + mana + (level as i32 - 1) * 8;
@@ -3210,20 +3227,27 @@ fn nearest_of(players: &[(EntityId, Vec2)], from: Vec2) -> Option<(EntityId, Vec
 /// until the bank runs out, WoW-style. Returns true if the player leveled.
 fn award_xp(p: &mut Entity, xp: u32) -> bool {
     let Some(s) = p.sheet.as_mut() else { return false };
+    crate::progression::migrate_sheet(s); // before adding: it clamps xp
     let rested_bonus = xp.min(s.rested_xp);
     s.rested_xp -= rested_bonus;
     s.xp += xp + rested_bonus;
     let mut leveled = false;
-    while s.xp >= s.max_xp {
+    while s.level < crate::progression::MAX_LEVEL && s.xp >= s.max_xp {
         s.xp -= s.max_xp;
         s.level += 1;
-        s.max_xp = (s.max_xp as f32 * 1.35) as u32;
+        s.max_xp = crate::progression::xp_to_next(s.level);
+        if s.max_xp == 0 {
+            s.xp = 0; // level cap: XP stops accruing
+        }
         s.max_health += 15;
         s.max_mana += 8;
         s.health = s.max_health;
         s.mana = s.max_mana;
         s.talent_points += 1;
         leveled = true;
+    }
+    if s.level >= crate::progression::MAX_LEVEL {
+        s.xp = 0;
     }
     if leveled {
         p.max_health = s.max_health;

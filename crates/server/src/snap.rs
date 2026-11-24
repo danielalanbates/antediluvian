@@ -740,6 +740,9 @@ mod tests {
         rig.run(40);
         rig.world.set_intent(Act::Eden, walker, Vec2::ZERO);
         rig.run(8);
+        // run() ends on a sim step with no snapshot after it; the opening
+        // camps (B10 chunk) put live mobs inside this AoI, so catch up first.
+        rig.settle();
         assert!(rig.dec[&conn].get(walker).unwrap().y > 100.0, "moved north");
         rig.assert_matches_sim(me);
 

@@ -37,6 +37,9 @@ struct SheetExt {
     quests: std::collections::BTreeMap<String, u32>,
     #[serde(default)]
     quests_done: Vec<String>,
+    /// Completed board quests, packed (sim::questbits). Absent in old saves.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    quests_gq: String,
     #[serde(default)]
     equipment: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_ext_wakefulness")]
@@ -188,7 +191,7 @@ impl Db {
                         rested_xp: ext.rested_xp,
                         pvp: ext.pvp,
                         quests: ext.quests,
-                        quests_done: ext.quests_done,
+                        quests_done: antediluvia_sim::questbits::unpack(ext.quests_done, &ext.quests_gq),
                         equipment: ext.equipment,
                         wakefulness: ext.wakefulness,
                         last_logout: ext.last_logout,
@@ -233,6 +236,7 @@ impl Db {
     pub fn save(&self, c: &CharacterSheet, apple_id: Option<&str>) -> Result<()> {
         let key = c.name.trim().to_lowercase();
         let inv = c.inventory.join("\u{1f}");
+        let (done_text, done_packed) = antediluvia_sim::questbits::pack(&c.quests_done);
         let ext = serde_json::to_string(&SheetExt {
             class: c.class,
             gold: c.gold,
@@ -243,7 +247,8 @@ impl Db {
             rested_xp: c.rested_xp,
             pvp: c.pvp,
             quests: c.quests.clone(),
-            quests_done: c.quests_done.clone(),
+            quests_done: done_text,
+            quests_gq: done_packed,
             equipment: c.equipment.clone(),
             wakefulness: c.wakefulness,
             last_logout: c.last_logout,
@@ -483,5 +488,40 @@ mod look_tests {
         assert_eq!(back.appearance, [2, 0, 0]);
         let by_id = db.load_by_apple_id("apple-look-test").unwrap().unwrap();
         assert_eq!(by_id.look, s.look);
+    }
+
+    /// B10 chunk: completed board quests are stored packed; an old row with
+    /// text ids loads, and its next save is small. Old-curve XP migrates.
+    #[test]
+    fn board_quests_store_packed_and_old_curve_migrates() {
+        let db = Db::open(":memory:").unwrap();
+        let gen = antediluvia_sim::questgen::generated();
+        let mut done: Vec<String> = vec!["serpents_in_the_garden".into()];
+        done.extend(gen.iter().map(|g| g.def.id.to_string()));
+        let ext = serde_json::json!({"quests_done": done}).to_string();
+        db.raw()
+            .execute(
+                "INSERT INTO accounts (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, apple_id)
+                 VALUES ('veteran', 'Veteran', 'eden', 1.0, 2.0, 20, 5000, 30000, 80, 100, 40, 50, '', ?1, NULL)",
+                [ext.as_str()],
+            )
+            .unwrap();
+        let old_len = ext.len();
+        let s = db.load("veteran").unwrap().unwrap();
+        assert_eq!(s.quests_done.len(), done.len());
+        let mut w = antediluvia_sim::world::World::new(1);
+        let id = w.spawn_player(9, s);
+        let live = w.player_sheet(antediluvia_protocol::Act::Eden, id).unwrap();
+        assert_eq!(live.max_xp, antediluvia_sim::progression::xp_to_next(20));
+        assert_eq!(live.xp, (5000u64 * live.max_xp as u64 / 30000) as u32);
+        db.save(&live, None).unwrap();
+        let new_len: usize = db.raw().query_row("SELECT length(ext) FROM accounts WHERE name_key='veteran'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
+        assert!(new_len * 3 < old_len, "ext {new_len} B vs old {old_len} B");
+        let back = db.load("veteran").unwrap().unwrap();
+        let (mut a, mut b) = (back.quests_done.clone(), done.clone());
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        println!("{} board quests done: ext {old_len} B as text -> {new_len} B packed", gen.len());
     }
 }

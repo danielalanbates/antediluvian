@@ -628,7 +628,10 @@ fn a_dot_can_kill_and_credits_its_caster() {
     let evs = step_n(&mut w, secs(1.5));
     assert!(!w.zones[&A].entities.contains_key(&mob), "the swarm should finish it");
     assert!(evs.iter().any(|e| matches!(e, SimEvent::Combat { kind: EventKind::Die, .. })));
-    assert!(sheet(&w, pid).xp > xp || sheet(&w, pid).level > 60, "kill credit goes to the caster");
+    // Level 60 is the cap (B10 curve): XP no longer accrues there, so the
+    // credit shows as the kill notice to the caster instead.
+    assert_eq!(sheet(&w, pid).xp, xp);
+    assert!(evs.iter().any(|e| matches!(e, SimEvent::Combat { kind: EventKind::Die, .. })), "kill credit goes to the caster");
 }
 
 // ─── Resources ───────────────────────────────────────────────────────────────
