@@ -16,17 +16,37 @@ from having a good first hour.
 ## Status snapshot
 | Area | Today | Classic bar |
 |---|---|---|
-| Classes / abilities | 4 classes x 2 abilities + talents | 8–9 classes, 15–25 abilities, spellbook, rotations |
-| Quests | 77 authored, 3 givers per act | thousands; "!"/"?" markers, quest log, map objectives |
-| UI windows | unit frame, 3-slot bar, chat, tracker, builder | bags, character sheet, spellbook, quest log, world map, minimap, vendor, loot, AH, guild roster, friends, keybinds |
-| Social | guild, party, mail, trade, duel (chat commands) | raid groups, channels, friends/ignore, emotes, who |
-| World | 5 acts, 200 POIs, caves, day/night, water | flight paths, rest XP, graveyards/spirit, weather, zone-in banners |
-| Items | equip, bank, vendors, craft | bags, rarity colours, durability/repair, loot rolls, set items |
+| Classes / abilities | 8 classes x 8 abilities on a 10-slot bar, stamina/mana, cast bar, cooldowns + talents | 8–9 classes, 15–25 abilities, spellbook, rotations |
+| Quests | 73 authored + 950 generated board quests (chat commands only) | thousands; "!"/"?" markers, quest log, map objectives |
+| UI windows | unit frame, 10-slot bar, cast bar, chat, tracker, 8-class builder, escape menu | bags, character sheet, spellbook, quest log, world map, minimap, vendor, loot, AH, guild roster, friends, keybinds |
+| Social | guild, party, mail, trade, duel, raids (40), channels, friends/ignore, emotes, who (chat commands) | raid groups, channels, friends/ignore, emotes, who |
+| World | 5 acts, 200 POIs, caves, day/night, water, flight masters, offline rest XP, graveyards, zone banners | flight paths, rest XP, graveyards/spirit, weather, zone-in banners |
+| Items | equip, bank, vendors, craft, rarity tiers, durability + repair (no windows) | bags, rarity colours, durability/repair, loot rolls, set items |
 | PvP | opt-in flag, capital auto-flag, honor ticks, duels | battleground instances, honor ranks/rewards |
 | Scale | 1000 bots, 150-entity snapshot cap | delta + binary snapshots for hosted 1000-in-zone |
 | Art | low-poly CC0 + procedural props/creatures | authored hero art (asset production, not code) |
 | Login | local UUID; SIWA helper without entitlement | real Sign in with Apple (needs Daniel's dev-portal step) |
 | Web | playable single + live shard, gate-checked deploys | same, auto-updated each safe release |
+
+## Integration status (2026-11-23, branch `beta-b01-b09`, not pushed)
+`beta-b01-b09` = class kits + `origin/main` e192420 + `beta-server-track`,
+`PROTOCOL_VERSION` 16. Sim 127 / server 14 / client 40 tests pass; client and
+test-client build. Details, shots and the unverified list:
+`docs/verification/2026-11-23/README.md`; server-side rules:
+`docs/beta/SERVER_TRACK_2026-11-23.md`.
+
+| Chunk | State |
+|---|---|
+| B01 UI windows I | not started |
+| B02 Quest markers | not started |
+| B03 Ability kits | done: bar, keys 1-0, cooldown countdown, cast bar, resource bar. Shot-verified for Occultist only; 56 of 64 abilities have no icon |
+| B04 Map + minimap | not started |
+| B05 Quest scale | server done; client is `/board`, `/accept`, `/turnin` text only (unexercised) |
+| B06 Rarity, durability, repair | server done; client is `/gear`, `/repair` text only; no vendor or loot window |
+| B07 Social | server done; client is slash commands + chat lines (unexercised) |
+| B08 Travel | server done; zone banner wired, `/flights`, `/fly`, `/release` text only |
+| B09 Classes 5-8 | done in sim and builder; they reuse the four old rigs |
+| B10-B12 | not started |
 
 ## Chunks (do in order; each ships through the web gate + app staging)
 - **B01 UI windows I:** bags (B), character sheet/paperdoll (C), quest log (L),
@@ -53,6 +73,10 @@ from having a good first hour.
 - **B12 Hosted shard redeploy** with current server (live shard is behind).
 
 ## Known defects (open)
+- Client aborted at startup with a worker-thread stack overflow (nested glTF
+  loads); worked around with a 16 MB thread stack (2026-11-23).
+- Stamina bar never seen in a shot; cooldown sweep is low-contrast.
+- XP curve overflows near level 55 (see server track notes).
 - `batesai.org/membership/` redirects to itself (functions/membership.js).
 - Fresh server character showed 64/100 HP despite godmode (unexplained).
 - Headless SwiftShader renders characters translucent (artifact only).

@@ -157,6 +157,15 @@ fn is_ws_url(s: &str) -> bool {
 }
 
 fn main() {
+    // Bevy's glTF loader waits for its textures by ticking the task pool on
+    // the same thread, which can start another glTF load on top of it. With
+    // many models loading at once those nest (five deep in the crash report of
+    // 2026-11-23) and overflow the default 2 MB worker stack. std reads this
+    // variable the first time it spawns a thread, so it must be set here.
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("RUST_MIN_STACK").is_none() {
+        std::env::set_var("RUST_MIN_STACK", "16777216");
+    }
     // Art-review mode: a minimal app that renders nothing but the procedural
     // prop grid. It deliberately shares none of the gameplay systems — those
     // expect a live world and network resources this mode never creates.

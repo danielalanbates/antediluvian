@@ -14,6 +14,8 @@ use antediluvia_sim::abilities::{class_resource, Resource, BAR_SLOTS};
 /// Action-bar tiles: slot 0 is the left-click attack, 1..=10 the class kit.
 const BAR_TILES: usize = BAR_SLOTS + 1;
 const TILE_PX: f32 = 50.0;
+/// Taller than wide: three-line names ("Fires of Hermon") must fit under the key hint.
+const TILE_H: f32 = 60.0;
 const TILE_GAP: f32 = 4.0;
 /// Half the bar's width, to centre it under a 50%-anchored parent.
 const BAR_HALF: f32 = (BAR_TILES as f32 * TILE_PX + (BAR_TILES as f32 - 1.0) * TILE_GAP + 12.0) / 2.0;
@@ -376,7 +378,7 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
         .spawn((
             Node {
                 width: Val::Px(TILE_PX),
-                height: Val::Px(TILE_PX),
+                height: Val::Px(TILE_H),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
