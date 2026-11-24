@@ -116,7 +116,7 @@ pub fn place_action(act: Act, x: f32, y: f32) -> Option<(String, ClientMsg)> {
 
 const POOL: usize = 14;
 /// Marks float this far above the ground.
-const HEIGHT: f32 = 118.0;
+const HEIGHT: f32 = 98.0;
 /// Boards farther than this are not marked.
 const BOARD_RANGE: f32 = 1500.0;
 
@@ -132,6 +132,8 @@ pub(crate) fn spawn(mut commands: Commands) {
             TextFont { font_size: 34.0, ..default() },
             TextColor(GOLD),
             Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), ..default() },
+            // Under the HUD and windows: a marker is part of the world.
+            GlobalZIndex(-1),
             Visibility::Hidden,
             MarkLabel(i),
         ));

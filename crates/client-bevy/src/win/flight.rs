@@ -37,7 +37,8 @@ pub(crate) fn build(p: &mut ChildBuilder, ctx: &Ctx) {
     if dest.is_empty() {
         text(p, "You know no other flight masters. Walk to one to learn its route.", 12.0, TEXT);
     }
-    card(p, |c| {
+    if !dest.is_empty() {
+      card(p, |c| {
         for n in dest.iter().take(14) {
             row(c, |r| {
                 text(r, format!("{} ({})", n.name, pretty(n.act.as_str())), 12.0, TEXT);
@@ -57,7 +58,8 @@ pub(crate) fn build(p: &mut ChildBuilder, ctx: &Ctx) {
                 }
             });
         }
-    });
+      });
+    }
     let unknown = nodes.iter().filter(|n| !n.known).count();
     if unknown > 0 {
         text(p, format!("{unknown} flight masters not yet discovered (see the map, M)."), 11.0, TEXT_DIM);

@@ -280,11 +280,16 @@ pub(crate) fn build(p: &mut ChildBuilder, ctx: &Ctx) {
             }
         }
         dot(m, 0.0, 0.0, 13.0, GOLD, false, format!("{} - vendor, bank, flight master", travel::inn_name(act)));
-        label(m, 0.0, 0.0, travel::inn_name(act), GOLD);
+        // Label below the marker so the player's arrow (usually near the
+        // inn early on) does not sit on the text.
+        label(m, -60.0, 190.0, travel::inn_name(act), GOLD);
         // Quest pins.
         for pin in quest_pins(s, act) {
             let (g, c) = if pin.ready { ("?", Color::srgb(1.0, 0.85, 0.1)) } else { ("!", Color::srgb(1.0, 0.85, 0.1)) };
-            glyph(m, pin.x, pin.y, g, 20.0, c, format!("{}{}", pin.label, if pin.ready { " - hand in here" } else { "" }));
+            // Lifted off the spot (like a pin) so the player's arrow or a
+            // place marker underneath stays visible.
+            let lift = 14.0 / MAP_PX * 2.0 * WORLD_BOUNDS;
+            glyph(m, pin.x, pin.y - lift, g, 22.0, c, format!("{}{}", pin.label, if pin.ready { " - hand in here" } else { "" }));
         }
         // The player: a dot and a nose showing the facing.
         let (x, y, rot) = ctx.st.me.unwrap_or((s.x, s.y, 0.0));
@@ -313,7 +318,7 @@ pub(crate) fn build(p: &mut ChildBuilder, ctx: &Ctx) {
     text(
         p,
         format!(
-            "Green: you   Gold: inn   Tan: discovered place ({} found)   Brown: cave   Blue: flight master   +: graveyard   !/?: quest   Red: enemy capital",
+            "Green you | Gold inn | Tan place ({} found) | Brown cave | Blue flight master\n+ graveyard | ! and ? quests | Red disc enemy capital | hover for names",
             s.discovered.len()
         ),
         10.0,

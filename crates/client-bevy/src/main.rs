@@ -2785,7 +2785,13 @@ struct AutoCmd {
     next_at: f32,
 }
 
-fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>, mut wins: ResMut<win::WinState>) {
+fn dev_autocmd(
+    time: Res<Time>,
+    ac: Option<ResMut<AutoCmd>>,
+    tx: Res<NetTx>,
+    mut wins: ResMut<win::WinState>,
+    session: Res<Session>,
+) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
     if now < ac.next_at {
@@ -2798,7 +2804,7 @@ fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>, mut
         if let Some(arg) = line.strip_prefix("ui ") {
             // "ui bags", "ui only map", "ui close", "ui menu": open windows
             // without a key press (windowless screenshot runs).
-            for m in wins.autocmd(arg) {
+            for m in wins.autocmd(arg, session.act) {
                 tx.send(m);
             }
         } else if line.starts_with('/') {

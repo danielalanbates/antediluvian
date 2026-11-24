@@ -22,13 +22,13 @@ const BOTTOM: f32 = 132.0;
 const MARGIN: f32 = 14.0;
 
 /// Preferred (width, height, column) of a window. Columns: 0 = left edge,
-/// 1 = left of centre, 2 = centred, 3 = right edge.
+/// 1 = left of centre, 2 = centred, 3 = right edge, 4 = right of the quest log.
 fn pref(win: Win) -> (f32, f32, u8) {
     match win {
         Win::Character => (340.0, 560.0, 0),
         Win::Vendor => (340.0, 560.0, 0),
         Win::QuestLog => (400.0, 560.0, 1),
-        Win::Spellbook => (430.0, 560.0, 1),
+        Win::Spellbook => (430.0, 700.0, 4),
         Win::Board => (460.0, 560.0, 1),
         Win::Flight => (360.0, 520.0, 1),
         Win::Map => (604.0, 700.0, 2),
@@ -38,19 +38,26 @@ fn pref(win: Win) -> (f32, f32, u8) {
     }
 }
 
+/// Windows too tall for the band between the unit frame and the action bar.
+pub fn tall(win: Win) -> bool {
+    matches!(win, Win::Map | Win::Spellbook)
+}
+
 /// Where a window sits on a `sw` x `sh` screen. Always fully on screen for
 /// any screen at least 640x480; shrinks rather than overflowing.
 pub fn rect(win: Win, sw: f32, sh: f32) -> Rect {
     let (pw, ph, col) = pref(win);
     let w = pw.min(sw - 2.0 * MARGIN).max(120.0);
-    // The map is tall: it may use the band beside the unit frame as well.
-    let top = if win == Win::Map { 60.0 } else { TOP.min(sh * 0.25) };
+    // The map and spellbook are tall: they sit right of the unit frame and
+    // may use the band beside it as well.
+    let top = if tall(win) { 60.0 } else { TOP.min(sh * 0.25) };
     let avail = (sh - top - BOTTOM.min(sh * 0.2)).max(120.0);
     let h = ph.min(avail);
     let x = match col {
         0 => MARGIN,
         1 => MARGIN + 356.0,
         2 => (sw - w) / 2.0,
+        4 => MARGIN + 356.0 + 414.0,
         _ => sw - w - MARGIN,
     };
     // Bags hug the bottom-right corner like a classic backpack; the social
@@ -134,7 +141,9 @@ mod tests {
         // 1600x900 is the windowless shot size and the default window.
         for w in Win::ALL {
             let r = rect(w, 1600.0, 900.0);
-            if w != Win::Map {
+            if tall(w) {
+                assert!(r.x >= 262.0, "{w:?} covers the unit frame: {r:?}");
+            } else {
                 assert!(r.y >= 190.0, "{w:?} covers the unit frame: {r:?}");
             }
             assert!(r.y + r.h <= 900.0 - 100.0, "{w:?} covers the action bar: {r:?}");
@@ -145,6 +154,9 @@ mod tests {
         // Character sheet and quest log side by side.
         let (c, q) = (rect(Win::Character, 1600.0, 900.0), rect(Win::QuestLog, 1600.0, 900.0));
         assert!(c.x + c.w <= q.x);
+        // ...and the spellbook beside the quest log, clear of the bags.
+        let p = rect(Win::Spellbook, 1600.0, 900.0);
+        assert!(q.x + q.w <= p.x && p.x + p.w <= b.x, "{q:?} {p:?} {b:?}");
     }
 
     #[test]

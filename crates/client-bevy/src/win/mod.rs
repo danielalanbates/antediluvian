@@ -51,8 +51,9 @@ use crate::Session;
 
 // ─── Design tokens (match ui.rs / menu.rs) ───────────────────────────────────
 
-pub(crate) const PANEL: Color = Color::srgba(0.08, 0.08, 0.12, 0.94);
-pub(crate) const INSET: Color = Color::srgba(0.13, 0.13, 0.17, 0.95);
+// Nearly opaque: windows may overlap, and text bleeding through is unreadable.
+pub(crate) const PANEL: Color = Color::srgba(0.08, 0.08, 0.12, 0.985);
+pub(crate) const INSET: Color = Color::srgb(0.13, 0.13, 0.17);
 pub(crate) const TEXT: Color = Color::srgb(0.92, 0.90, 0.85);
 pub(crate) const TEXT_DIM: Color = Color::srgb(0.62, 0.60, 0.55);
 pub(crate) const GOLD: Color = Color::srgb(0.98, 0.90, 0.55);
@@ -312,14 +313,14 @@ impl WinState {
     }
 
     /// `ui <what>` from `ANTEDILUVIA_AUTOCMD`: `ui bags`, `ui only map`,
-    /// `ui close`, `ui menu`, `ui social:who`, `ui chat:trade`.
-    /// Returns the refresh messages the opened window wants sent.
-    pub fn autocmd(&mut self, arg: &str) -> Vec<ClientMsg> {
+    /// `ui close`, `ui menu`, `ui social:who`, `ui chat:trade`, `ui talk`,
+    /// `ui interact`, `ui accept`. Returns the messages to send.
+    pub fn autocmd(&mut self, arg: &str, act: Act) -> Vec<ClientMsg> {
         let arg = arg.trim();
         if let Some(rest) = arg.strip_prefix("only ") {
             self.open.clear();
             self.dirty = true;
-            return self.autocmd(rest);
+            return self.autocmd(rest, act);
         }
         match arg {
             "close" | "none" => {
@@ -330,6 +331,22 @@ impl WinState {
             "menu" => {
                 self.want_menu = true;
                 return Vec::new();
+            }
+            // Scripted stand-ins for the E and F keys and for clicking the
+            // first "Accept" on the open board.
+            "talk" => return vec![ClientMsg::Talk],
+            "interact" => {
+                return self
+                    .me
+                    .and_then(|(x, y, _)| markers::place_action(act, x, y))
+                    .map(|(_, m)| vec![m])
+                    .unwrap_or_default();
+            }
+            "accept" => {
+                let first = self.board.as_ref().and_then(|(_, q)| q.iter().find(|q| q.status == "available"));
+                return first
+                    .map(|q| vec![ClientMsg::QuestAccept { id: q.id.clone() }, ClientMsg::QuestBoard])
+                    .unwrap_or_default();
             }
             _ => {}
         }
@@ -874,18 +891,25 @@ mod tests {
     #[test]
     fn autocmd_opens_closes_and_asks_the_server() {
         let mut st = WinState::default();
-        assert!(st.autocmd("bags").is_empty());
+        let a = Act::Eden;
+        assert!(st.autocmd("bags", a).is_empty());
         assert!(st.is_open(Win::Bags));
-        assert_eq!(st.autocmd("only social:who").len(), 3);
+        assert_eq!(st.autocmd("only social:who", a).len(), 3);
         assert_eq!(st.open, vec![Win::Social]);
         assert_eq!(st.social_tab, SocialTab::Who);
-        assert!(matches!(st.autocmd("board")[..], [ClientMsg::QuestBoard]));
-        st.autocmd("chat:trade");
+        assert!(matches!(st.autocmd("board", a)[..], [ClientMsg::QuestBoard]));
+        st.autocmd("chat:trade", a);
         assert_eq!(st.chat_tab, chattabs::ChatTab::Trade);
-        st.autocmd("menu");
+        st.autocmd("menu", a);
         assert!(st.want_menu);
-        st.autocmd("close");
+        st.autocmd("close", a);
         assert!(st.open.is_empty());
+        // Stand-ins for E, F and the first Accept button.
+        assert!(matches!(st.autocmd("talk", a)[..], [ClientMsg::Talk]));
+        assert!(st.autocmd("interact", a).is_empty(), "no position yet");
+        st.me = Some((0.0, 0.0, 0.0));
+        assert!(matches!(st.autocmd("interact", a)[..], [ClientMsg::FlightList]), "the inn has a flight master");
+        assert!(st.autocmd("accept", a).is_empty(), "no board read");
     }
 
     #[test]

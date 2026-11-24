@@ -219,7 +219,10 @@ fn spawn_player_frame(commands: &mut Commands) {
             flex_direction: FlexDirection::Column,
             padding: UiRect::all(Val::Px(8.0)),
             row_gap: Val::Px(3.0),
-            min_width: Val::Px(220.0),
+            // A definite width: with only `min_width` the bars' "100%" had
+            // nothing to resolve against, so HP/mana shrank to their text
+            // and the XP bar (no text) collapsed to nothing.
+            width: Val::Px(236.0),
             ..default()
         })
         .insert(BackgroundColor(PANEL))
@@ -497,6 +500,9 @@ fn spawn_chat(commands: &mut Commands) {
             chat.spawn((
                 Node {
                     flex_direction: FlexDirection::Column,
+                    // Bottom-anchored: when wrapped lines overflow the box
+                    // the OLDEST text is clipped, never the newest line.
+                    justify_content: JustifyContent::FlexEnd,
                     padding: UiRect::all(Val::Px(6.0)),
                     max_height: Val::Px(160.0),
                     overflow: Overflow::clip(),

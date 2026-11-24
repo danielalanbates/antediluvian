@@ -1,7 +1,7 @@
 //! In-game menu (Escape): character summary, world-PvP opt-in/out, help, and
 //! a developer section for dev-allowlisted accounts (C14).
 //!
-//! Client-side only — every button maps to an existing `ClientMsg` and the
+//! Client-side only - every button maps to an existing `ClientMsg` and the
 //! server re-authorizes each one. The menu is rebuilt fresh on every open so
 //! labels (PvP state, dev section) are never stale.
 
@@ -124,7 +124,7 @@ fn build_menu(commands: &mut Commands, session: &Session) {
             let class = s.class.map(|c| c.as_str()).unwrap_or("classless");
             let lineage = s.faction.as_deref().unwrap_or("undecided");
             (
-                format!("{} — level {} {}", s.name, s.level, class),
+                format!("{} - level {} {}", s.name, s.level, class),
                 format!(
                     "Lineage: {}   Gold: {}   World PvP: {}",
                     lineage,
@@ -187,9 +187,9 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                     &mut *panel,
                     MenuCmd::TogglePvp,
                     if pvp_on {
-                        "World PvP: ON — click to opt out"
+                        "World PvP: ON - click to opt out"
                     } else {
-                        "World PvP: OFF — click to opt in"
+                        "World PvP: OFF - click to opt in"
                     },
                     GOLD,
                     false,
@@ -207,16 +207,18 @@ fn build_menu(commands: &mut Commands, session: &Session) {
 
                 // ── Help ──
                 panel.spawn((
-                    Text::new("— HELP —"),
+                    Text::new("- HELP -"),
                     TextFont { font_size: 14.0, ..default() },
                     TextColor(GOLD),
                 ));
                 panel.spawn((
                     Text::new(
-                        "WASD move · click attack · 1-0 abilities · E talk · F board / flight master · H mount\n\
-                         B bags · C character · L quest log · P spellbook · M map · O social · Esc closes a window\n\
-                         /pvp toggle PvP · /duel NAME duel · /lineage sethite|cainite (10+)\n\
-                         Party: /party NAME (nearby members share XP) · Guild: /ginvite NAME",
+                        "WASD move | click attack | 1-0 abilities | E talk | H mount\n\
+                         F notice board or flight master where you stand\n\
+                         B bags | C character | L quest log | P spellbook\n\
+                         M map | O social | Esc closes the top window\n\
+                         /pvp | /duel NAME | /lineage sethite|cainite (10+)\n\
+                         /party NAME shares XP nearby | /ginvite NAME",
                     ),
                     TextFont { font_size: 12.0, ..default() },
                     TextColor(TEXT),
