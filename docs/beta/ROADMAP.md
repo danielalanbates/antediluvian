@@ -80,6 +80,7 @@ test-client build. Details, shots and the unverified list:
 - Window buttons, right-click, tooltips and hotkeys have never been driven by a real mouse or keyboard (see verification README, 2026-11-23 later section).
 - No aura list on the wire: enemy debuffs cannot be shown.
 - XP curve overflows near level 55 (see server track notes).
+- Flaky sim test: `questgen::tests::cave_ore_collect_and_dweller_quests_complete` failed 2 of 9 runs on 2026-11-23 (assert at questgen.rs:1055, ore count). It picks the ore node by hash-map order, which changes per process. Not fixed.
 - `batesai.org/membership/` redirects to itself (functions/membership.js).
 - Fresh server character showed 64/100 HP despite godmode (unexplained).
 - Headless SwiftShader renders characters translucent (artifact only).
