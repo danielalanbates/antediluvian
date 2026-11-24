@@ -281,6 +281,11 @@ pub enum DevCmd {
     KillTarget,
     Godmode,
     TimeOfDay { t: f32 },
+    /// Grant raw XP (beta testing: level at a controlled pace).
+    GiveXp { amount: u32 },
+    /// Mark a quest done and pay its xp/gold/item rewards (beta testing:
+    /// skip quest chains to test later acts). Prereqs are not checked.
+    QuestComplete { id: String },
 }
 
 // ─── Client → Server ─────────────────────────────────────────────────────────

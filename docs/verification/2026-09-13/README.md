@@ -1,5 +1,10 @@
 # 2026-09-13 — web deploy gate, crash fix, far grass
 
+> Historical note: this was written when the browser client lived at
+> `batesai.org/play`. Daniel moved the deployment target to
+> `batesai.org/antediluvia` on 2026-09-20. The gate procedure still applies —
+> read `/play` below as `/antediluvia`.
+
 ## Web deploy gate (use before every batesai.org/play push)
 1. `scripts/build_web.sh` (≈30–40 min; 21 MB wasm).
 2. Local test server on 8797 (never the live shard — test characters would

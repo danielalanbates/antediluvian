@@ -1,7 +1,7 @@
 # Private dev site — batesai.org/dev (Daniel, 2026-09-14)
 
 **Rule:** no local test servers or local play-testing. Pre-release builds are
-tested only on the private dev site; /play gets a build only after it passes there.
+tested only on the private dev site; /antediluvia gets a build only after it passes there.
 
 | Piece | Where |
 |---|---|

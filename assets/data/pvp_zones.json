@@ -1,7 +1,7 @@
 [
  {
   "act": "eden",
-  "name": "Sethite capital of Eden",
+  "name": "Adamah, the Sethite tillage east of Eden",
   "faction": "sethite",
   "x": -2400.0,
   "y": -2400.0,
@@ -9,7 +9,7 @@
  },
  {
   "act": "eden",
-  "name": "Cainite capital of Eden",
+  "name": "Nod, where Cain dwelt",
   "faction": "cainite",
   "x": 2400.0,
   "y": 2400.0,
@@ -17,7 +17,7 @@
  },
  {
   "act": "hermon",
-  "name": "Sethite capital of Hermon",
+  "name": "Sion, the Sethite watch upon Hermon",
   "faction": "sethite",
   "x": -2400.0,
   "y": -2400.0,
@@ -25,7 +25,7 @@
  },
  {
   "act": "hermon",
-  "name": "Cainite capital of Hermon",
+  "name": "Bashan, stronghold of the Cainite giants",
   "faction": "cainite",
   "x": 2400.0,
   "y": 2400.0,
@@ -33,7 +33,7 @@
  },
  {
   "act": "nephilim",
-  "name": "Sethite capital of Nephilim",
+  "name": "Salem, city of the Sethite king-priests",
   "faction": "sethite",
   "x": -2400.0,
   "y": -2400.0,
@@ -41,7 +41,7 @@
  },
  {
   "act": "nephilim",
-  "name": "Cainite capital of Nephilim",
+  "name": "Gomorrah of the plain, seat of the Cainites",
   "faction": "cainite",
   "x": 2400.0,
   "y": 2400.0,
@@ -49,7 +49,7 @@
  },
  {
   "act": "enoch",
-  "name": "Sethite capital of Enoch",
+  "name": "Jared, the Sethite city of the patriarchs",
   "faction": "sethite",
   "x": -2400.0,
   "y": -2400.0,
@@ -57,7 +57,7 @@
  },
  {
   "act": "enoch",
-  "name": "Cainite capital of Enoch",
+  "name": "Tubal's Forge, armory of the Cainites",
   "faction": "cainite",
   "x": 2400.0,
   "y": 2400.0,
@@ -65,7 +65,7 @@
  },
  {
   "act": "flood",
-  "name": "Sethite capital of Flood",
+  "name": "Ararat, where the Sethite remnant gathers",
   "faction": "sethite",
   "x": -2400.0,
   "y": -2400.0,
@@ -73,7 +73,7 @@
  },
  {
   "act": "flood",
-  "name": "Cainite capital of Flood",
+  "name": "Lamech's Hold, last boast of the Cainites",
   "faction": "cainite",
   "x": 2400.0,
   "y": 2400.0,

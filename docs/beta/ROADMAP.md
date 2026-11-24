@@ -4,7 +4,7 @@
 players, all systems of a classic (pre-2010) MMORPG, beta-test ready, dev menu,
 optional PvP + auto-flag near enemy capitals, full locations + quest data,
 character builder with Apple login, thousands of terrain models, hundreds of mob
-models, hundreds of creation choices. **Keep batesai.org/play always playable;
+models, hundreds of creation choices. **Keep batesai.org/antediluvia always playable;
 only push non-breaking updates** (use the gate in
 `docs/verification/2026-09-13/README.md`).
 

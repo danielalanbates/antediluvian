@@ -559,6 +559,8 @@ fn handle_client_msg(
                 DevCmd::SpawnMob { tag } => world.dev_spawn_mob(act, ent, &tag),
                 DevCmd::KillTarget => world.dev_kill_target(act, ent),
                 DevCmd::Godmode => world.dev_godmode(act, ent),
+                DevCmd::GiveXp { amount } => world.dev_give_xp(act, ent, amount),
+                DevCmd::QuestComplete { id } => world.dev_quest_complete(act, ent, &id),
                 DevCmd::TimeOfDay { t } => {
                     world.time_override = Some(t.rem_euclid(1.0));
                     format!("[dev] time set to {:.2}", t.rem_euclid(1.0))
