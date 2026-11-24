@@ -821,4 +821,50 @@ mod tests {
         )
         .len()
     }
+
+    /// Malformed input never panics and never builds more state than the
+    /// frame's own bytes can describe: every truncation and every one-byte
+    /// corruption of a real keyframe, plus random garbage.
+    #[test]
+    fn malformed_frames_are_refused_without_panic() {
+        let mut w = FrameWriter::begin(true, Act::Eden, 1, 7, 0.5);
+        for i in 0..40 {
+            w.enter_state(&player(i, i as f32 * 3.0, -(i as f32)));
+        }
+        let good = w.finish();
+        for cut in 0..good.len() {
+            let mut d = SnapshotDecoder::new();
+            let _ = d.apply(&good[..cut]);
+            assert!(d.len() <= 40);
+        }
+        for at in 0..good.len() {
+            for flip in [0x01u8, 0x80, 0xFF] {
+                let mut bad = good.clone();
+                bad[at] ^= flip;
+                let mut d = SnapshotDecoder::new();
+                let _ = d.apply(&bad);
+                assert!(d.len() <= bad.len());
+            }
+        }
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut d = SnapshotDecoder::new();
+        for n in 0..2000usize {
+            let mut buf = vec![FRAME_MAGIC];
+            for _ in 0..(n % 300) {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                buf.push(x as u8);
+            }
+            let _ = d.apply(&buf);
+            assert!(d.len() <= buf.len());
+        }
+        // A keyframe cut short leaves the decoder unsynced: deltas wait.
+        let mut d = SnapshotDecoder::new();
+        assert!(d.apply(&good[..good.len() - 1]).is_err());
+        assert!(!d.synced());
+        let delta = FrameWriter::begin(false, Act::Eden, 2, 8, 0.5).finish();
+        assert_eq!(d.apply(&delta), Err(WireError::NotSynced));
+    }
+
 }

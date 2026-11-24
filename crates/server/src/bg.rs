@@ -268,6 +268,29 @@ pub(crate) fn tick(world: &mut World, conns: &mut HashMap<u64, Conn>) {
         for o in gone {
             let _ = m.leave(o);
         }
+        // Players who travelled off the field (zone travel while on it) have
+        // left too: otherwise a carrier could take the relic out of the arena
+        // and lock it, or idle in town and still be paid. They stay where they
+        // went; only their own PvP flag comes back.
+        if m.result.is_none() {
+            let walked: Vec<u64> = m
+                .players
+                .keys()
+                .copied()
+                .filter(|o| crate::conn_entity(conns, *o).is_some_and(|(act, _)| act != ARENA_ACT))
+                .collect();
+            for o in walked {
+                let _ = m.leave(o);
+                if let Some(r) = b.returns.remove(&o) {
+                    if let Some((act, ent)) = crate::conn_entity(conns, o) {
+                        world.set_pvp_flag(act, ent, r.pvp);
+                    }
+                }
+                crate::notice(conns, o, "You left the field; the battleground goes on without you.".into());
+                let info = idle_info(world, conns, o, "idle", 0);
+                send_info(conns, o, info);
+            }
+        }
         let mut views = BTreeMap::new();
         for o in m.players.keys() {
             if let Some((act, ent)) = crate::conn_entity(conns, *o) {
@@ -453,7 +476,9 @@ mod tests {
         r.ticks(2);
         let info = r.last_info(1).unwrap();
         assert_eq!((info.phase.as_str(), info.winner), ("ended", Some(0)));
-        assert_eq!(info.honor, 120 + 25);
+        // A forfeit a few seconds in pays the capture, and almost nothing for
+        // the win (alt-farming guard).
+        assert!((25..=30).contains(&info.honor), "honor {}", info.honor);
         // After the linger the winner is home too.
         r.ticks((bgs::END_LINGER_SECS * TICK_HZ as f32) as usize + 2);
         let (act, pos, pvp, _) = r.at(1);
@@ -491,5 +516,37 @@ mod tests {
         // A disconnect mid-match restores the place before the save.
         before_disconnect(101, &mut r.world, &mut r.conns);
         assert_eq!(r.at(101).0, Act::Eden);
+
+        // Fresh process-wide state for the travel case (same test: shared state).
+        *bg() = Bg::default();
+        travelling_off_the_field_leaves_the_match();
     }
+
+    /// Travelling to another zone mid-match leaves the match: the relic is
+    /// freed, the traveller is not paid, and the match is not left waiting.
+    fn travelling_off_the_field_leaves_the_match() {
+        let mut r = Rig::new();
+        r.login(11, "Enos", Act::Eden, Vec2::new(10.0, 10.0), Some("sethite"));
+        r.login(12, "Irad", Act::Eden, Vec2::new(20.0, 10.0), Some("cainite"));
+        r.send(11, ClientMsg::BgQueue);
+        r.send(12, ClientMsg::BgQueue);
+        r.ticks((bgs::QUEUE_FILL_SECS * TICK_HZ as f32) as usize + 2);
+        assert_eq!(r.at(11).0, ARENA_ACT);
+        let slot = bg().matches.iter().find(|m| m.players.contains_key(&11)).unwrap().slot;
+        r.walk_to(11, bgs::altar(slot));
+        r.ticks(2);
+        assert!(bg().matches.iter().any(|m| m.relic == Relic::Carried(11)));
+        // Enos carries the relic and travels away (as ClientMsg::Travel does).
+        relocate(&mut r.world, &mut r.conns, 11, Act::Hermon, Vec2::ZERO);
+        r.ticks(2);
+        assert_eq!(r.at(11).0, Act::Hermon, "stays where he travelled");
+        assert!(!bg().returns.contains_key(&11));
+        let g = bg();
+        assert!(g.matches.iter().all(|m| !m.players.contains_key(&11)), "still on the roster");
+        drop(g);
+        // Irad alone: the match ends by forfeit and closes after the linger.
+        r.ticks((bgs::END_LINGER_SECS * TICK_HZ as f32) as usize + 4);
+        assert!(bg().matches.is_empty() && bg().returns.is_empty());
+    }
+
 }

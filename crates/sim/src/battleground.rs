@@ -27,6 +27,10 @@ use crate::world::World;
 
 pub const TEAM_MAX: usize = 10;
 pub const MATCH_SECS: f32 = 480.0;
+/// A match must run this long for its win / loss / kill honor to be paid in
+/// full; a shorter one (an alt that queues and walks out at once) pays in
+/// proportion. Captures are always paid: each is a real relic run.
+pub const FULL_HONOR_SECS: f32 = 180.0;
 pub const SCORE_TO_WIN: u32 = 3;
 pub const WAVE_SECS: f32 = 12.0;
 pub const RELIC_RETURN_SECS: f32 = 20.0;
@@ -342,7 +346,12 @@ impl Match {
                     Some(_) => 40,
                     None => 70,
                 };
-                (p.owner, base + 25 * p.caps as i32 + 5 * p.kills.min(20) as i32)
+                // Win/loss/kill honor scales with how long the match ran,
+                // so a forfeit farmed with an alt pays next to nothing.
+                let played = (MATCH_SECS - self.secs_left).max(0.0);
+                let scale = (played / FULL_HONOR_SECS).min(1.0);
+                let earned = ((base + 5 * p.kills.min(20) as i32) as f32 * scale) as i32;
+                (p.owner, earned + 25 * p.caps as i32)
             })
             .collect()
     }
@@ -545,6 +554,7 @@ mod tests {
             m.tick(0.1, &views(&m, &[(1, banner(0, 0), true)]));
         }
         assert_eq!(m.result, Some(Some(0)));
+        m.secs_left = 0.0; // pay as for a full-length match
         let h: BTreeMap<u64, i32> = m.honor_rewards().into_iter().collect();
         assert_eq!(h[&1], 120 + 25 * 3);
         assert_eq!(h[&2], 40);
@@ -610,4 +620,25 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn an_instant_forfeit_pays_almost_no_honor() {
+        let roster = vec![(1u64, "Main".to_string(), 0u8), (2u64, "Alt".to_string(), 1u8)];
+        let mut m = Match::new(1, 0, &roster);
+        let views = BTreeMap::new();
+        m.tick(1.0, &views);
+        m.leave(2);
+        m.tick(0.1, &views);
+        assert_eq!(m.result, Some(Some(0)));
+        let h: BTreeMap<u64, i32> = m.honor_rewards().into_iter().collect();
+        assert!(h[&1] <= 1, "farmed forfeit paid {}", h[&1]);
+        // A match that ran its full course pays the whole win.
+        let mut m = Match::new(2, 0, &roster);
+        m.secs_left = MATCH_SECS - FULL_HONOR_SECS - 1.0;
+        m.leave(2);
+        m.tick(0.1, &views);
+        let h: BTreeMap<u64, i32> = m.honor_rewards().into_iter().collect();
+        assert_eq!(h[&1], 120);
+    }
+
 }
