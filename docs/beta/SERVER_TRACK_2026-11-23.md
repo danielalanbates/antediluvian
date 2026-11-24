@@ -112,6 +112,7 @@ target/release/antediluvia-track ws://127.0.0.1:8797 A        # ends with TRACK-
 | Server suite | 11 passed (0 on `main`) |
 | `antediluvia-track` against a live server on 8797 | `TRACK-E2E-OK` |
 | Sim suite repeated 100× | 3 runs failed, all in two **pre-existing** flaky tests (`main`: 8 of 100) |
+| `ANTEDILUVIA_QUEST=1 antediluvia-client` (Eden chain bot) | **stalls** after accepting the first quest: no serpent inside its view at the inn. Identical stall on `main` built from `e192420` with the same world seed, so not a regression, but the chain was not proven end to end over the wire |
 | `antediluvia-client-bevy` | **not built** (forbidden on this machine); only two catch-all match arms were added |
 
 ## Merge plan with `beta-b01-b09`
@@ -149,5 +150,6 @@ target/release/antediluvia-track ws://127.0.0.1:8797 A        # ends with TRACK-
 - **Durability.** Two copies of one item id share wear; `hp` bonus survives
   breakage; no "your weapon broke" notice.
 - **Flight** is an instant move; a timed flight path is a client/server follow-up.
+- **Quest-chain bot.** `ANTEDILUVIA_QUEST=1` only hunts mobs inside its snapshot radius and idles when none are near the inn; it needs to roam (or the seed needs serpents near the inn) before it can serve as an early-flow gate again.
 - **Pre-existing flake** `class_select_and_cast_damages_target_and_costs_mana`
   (about 2 runs in 100, same on `main`) was left alone.
