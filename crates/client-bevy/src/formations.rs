@@ -368,7 +368,8 @@ pub fn land_mesh(seed: u64, family: u32, act_idx: u64) -> Mesh {
             b.boxy(Vec3::ZERO, r * 3.0, 0.3, r * 3.0, yaw, seed ^ 4, dark);
             b.prism(Vec3::new(0.0, 0.3, 0.0), 8, r, r * 0.95, rng(seed, 5, 0.3, 0.9), 0.0, Vec3::ZERO, 0.05, seed ^ 5, s);
             for i in 0..drums {
-                let along = 1.0 + i as f32 * rng(seed, 6, 0.62, 0.9);
+                // Drums lie end to end, a little apart where they rolled.
+                let along = 0.75 + i as f32 * rng(seed, 6, 0.46, 0.6);
                 let side = rng(seed, 20 + i as u64, -0.3, 0.3);
                 let p = dir * along + Vec3::new(-dir.z, 0.0, dir.x) * side + Vec3::Y * r * 0.9;
                 // A lying drum: an ellipsoid squashed along the fall line.
@@ -377,7 +378,7 @@ pub fn land_mesh(seed: u64, family: u32, act_idx: u64) -> Mesh {
             }
             if h01(seed ^ 7) > 0.4 {
                 // The head, or what the weather left of it.
-                let p = dir * (1.2 + drums as f32 * 0.8);
+                let p = dir * (1.0 + drums as f32 * 0.6);
                 b.blob(p + Vec3::Y * r, Vec3::splat(r * 1.25), 4, 8, 0.12, seed ^ 600, s);
             }
         }
@@ -556,7 +557,7 @@ pub fn spawn_land_sheet(commands: &mut Commands, meshes: &mut Assets<Mesh>, mate
     let envf = |k: &str, d: f32| -> f32 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, envf("ANTEDILUVIA_LANDSHEET_CAMH", 46.0), envf("ANTEDILUVIA_LANDSHEET_CAMD", 50.0))
+        Transform::from_xyz(0.0, envf("ANTEDILUVIA_LANDSHEET_CAMH", 58.0), envf("ANTEDILUVIA_LANDSHEET_CAMD", 54.0))
             .looking_at(Vec3::new(0.0, 0.0, 3.0), Vec3::Y),
     ));
 }

@@ -235,7 +235,7 @@ pub enum Press {
     Create,
 }
 
-const PANEL: Color = Color::srgba(0.07, 0.06, 0.05, 0.93);
+const PANEL: Color = Color::srgba(0.07, 0.06, 0.05, 0.98);
 const EDGE: Color = Color::srgb(0.72, 0.58, 0.30);
 const GOLD: Color = Color::srgb(0.98, 0.90, 0.55);
 const TEXT: Color = Color::srgb(0.93, 0.90, 0.80);
@@ -279,8 +279,9 @@ fn spawn_screen(commands: &mut Commands) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Percent(2.0),
-                top: Val::Percent(2.5),
+                // Covers the (empty) unit frame the pre-login HUD still draws.
+                left: Val::Px(8.0),
+                top: Val::Px(8.0),
                 width: Val::Px(560.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(3.0),

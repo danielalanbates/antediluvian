@@ -45,6 +45,9 @@ pub struct LookAssets {
     graft: Option<Handle<StandardMaterial>>,
 }
 
+/// How much of an eye colour's brightness the eye beads keep.
+pub const EYE_DEPTH: f32 = 0.7;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyPart {
     Head,
@@ -137,7 +140,9 @@ pub fn recolour(part: BodyPart, look: Look, pos: &mut [[f32; 3]], texel: &[Rgb])
             multiplier(c, want)
         } else if part == BodyPart::Head {
             if in_eye(*p, c) {
-                multiplier(c, eye)
+                // The rigs' eyes are solid dark beads; a bright bead reads as
+                // a sticker, so the colour is deepened a little.
+                multiplier(c, [eye[0] * EYE_DEPTH, eye[1] * EYE_DEPTH, eye[2] * EYE_DEPTH])
             } else {
                 let k = (luma(c) / hair_mean).clamp(0.72, 1.25);
                 multiplier(c, [hair[0] * k, hair[1] * k, hair[2] * k])
@@ -375,7 +380,8 @@ mod tests {
         let c = recolour(BodyPart::Head, look, &mut pos, &tex);
         assert!(close(applied(SKIN_TEXEL, c[0]), SKIN[13].1), "skin tone");
         assert!(close(applied(HAIR_TEXEL, c[1]), HAIR_COLOR[10].1), "hair colour");
-        assert!(close(applied(EYE_TEXEL, c[2]), EYES[10].1), "eye colour");
+        let e = EYES[10].1;
+        assert!(close(applied(EYE_TEXEL, c[2]), [e[0] * EYE_DEPTH, e[1] * EYE_DEPTH, e[2] * EYE_DEPTH]), "eye colour");
         // Body: skin stays skin, cloth moves most of the way to the dye.
         let mut pos = vec![[0.0, 1.0, 0.3], [0.2, 0.9, 0.3]];
         let c = recolour(BodyPart::Body, look, &mut pos, &[SKIN_TEXEL, CLOTH_TEXEL]);
