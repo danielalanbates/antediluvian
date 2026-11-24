@@ -995,6 +995,8 @@ fn handle_client_msg(
                 c.send(ServerMsg::Pong);
             }
         }
+        // beta-server-track: B05-B08 messages are wired up in a later commit.
+        _ => {}
     }
 }
 

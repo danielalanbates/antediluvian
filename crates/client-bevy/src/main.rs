@@ -2092,6 +2092,9 @@ fn receive_from_server(
                 combat.send(CombatEvt { kind, src, dst });
             }
             ServerMsg::Pong => {}
+            // beta-server-track (B05-B08): new server messages have no UI
+            // yet; ignore them until the client panels land.
+            _ => {}
         }
     }
 

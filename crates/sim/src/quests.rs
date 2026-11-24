@@ -16,12 +16,18 @@ pub enum Objective {
     /// Hold `count` of `item`, looted 100% from kills of `source` while the
     /// quest is active. Turn-in consumes the items.
     Collect { item: &'static str, count: u32, source: &'static str },
+    // ── beta-server-track (B05): board quests only (see questgen.rs) ──
+    /// Walk into the anchor `place` ("poi:<id>" / "cave:<id>") while active.
+    Explore { place: &'static str },
+    /// Carry `item` (handed over on accept) to the anchor `to` (or "inn").
+    Deliver { item: &'static str, to: &'static str },
 }
 
 impl Objective {
     pub fn count(&self) -> u32 {
         match self {
             Objective::Kill { count, .. } | Objective::Collect { count, .. } => *count,
+            Objective::Explore { .. } | Objective::Deliver { .. } => 1,
         }
     }
 }
@@ -420,7 +426,7 @@ pub fn quest_next_hint(id: &str) -> Option<&'static str> {
 pub const QUEST_CAP: usize = 10;
 
 pub fn quest(id: &str) -> Option<&'static QuestDef> {
-    QUESTS.iter().find(|q| q.id == id)
+    QUESTS.iter().find(|q| q.id == id).or_else(|| crate::questgen::generated_quest(id))
 }
 
 /// Quests a given NPC (by lowercase giver key) offers in an act.
@@ -476,6 +482,7 @@ mod tests {
             let (needs_tag, kills) = match q.objective {
                 Objective::Kill { target, .. } => (target, true),
                 Objective::Collect { source, .. } => (source, false),
+                _ => continue, // board-only objectives never appear in QUESTS
             };
             let spawns = act_spawn_table(q.act).iter().any(|(t, n)| t.starts_with(needs_tag) && *n > 0)
                 || needs_tag == "tree" || needs_tag == "rock" // resource nodes spawn every act

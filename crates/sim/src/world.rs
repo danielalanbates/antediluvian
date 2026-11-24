@@ -275,6 +275,7 @@ fn gear_bonus(sheet: &CharacterSheet) -> (i32, i32) {
     let mut melee = 0;
     let mut spell = 0;
     for item in sheet.equipment.values() {
+        if crate::durability::is_broken(sheet, item) { continue; } // beta-server-track hook (B06)
         if let Some(d) = item_def(item) {
             melee += d.melee;
             spell += d.spell;
@@ -697,6 +698,7 @@ impl World {
         boss.xp_value *= 5;
         boss.aggro_range = 300.0;
         zone.entities.insert(id, boss);
+        crate::questgen::seed_camps(zone, &mut self.next_id); // beta-server-track hook (B05)
         // File every boot entity in the AoI grid now that the zone is populated.
         zone.rebuild_grid();
     }
@@ -1247,6 +1249,7 @@ impl World {
                 if let Some(a) = zone.entities.get_mut(&att) {
                     a.mounted = false;
                     a.combat_timer = COMBAT_LOCK_SECS;
+                    crate::durability::wear_weapon(a, zone.tick); // beta-server-track hook (B06)
                 }
             }
             if let Some(t) = zone.entities.get_mut(&target) {
@@ -1262,6 +1265,7 @@ impl World {
                 if t.godmode {
                     continue; // dev godmode (C14)
                 }
+                crate::durability::wear_armor(t, zone.tick); // beta-server-track hook (B06)
                 t.health -= dmg;
                 if t.health > 0 {
                     events.push(SimEvent::Combat {
@@ -1284,6 +1288,7 @@ impl World {
                             }
                         }
                         t.dead_timer = RESPAWN_SECS;
+                        crate::durability::on_death(t); // beta-server-track hook (B06)
                     }
                     events.push(SimEvent::Combat {
                         act,
@@ -1526,6 +1531,7 @@ impl World {
                                             });
                                         }
                                     }
+                                    _ => {} // beta-server-track (B05): explore/deliver advance in questgen
                                 }
                             }
                             // Loot goes to the killer only.
@@ -1546,6 +1552,7 @@ impl World {
             }
         }
 
+        crate::questgen::tick_explore(zone, events); // beta-server-track hook (B05)
         // AoI grid maintenance: refile entities that crossed a cell boundary
         // this tick. This is a linear scan, but each entity costs only a
         // cell-index computation plus a branch when it stayed put — real work
@@ -3057,7 +3064,11 @@ mod tests {
             let e = z
                 .entities
                 .values()
-                .find(|e| e.kind == EntityKind::Enemy)
+                // beta-server-track: stay clear of caves - a Dweller kill
+                // hands its rare to the whole party by design (P5), which
+                // is not what this test measures.
+                .find(|e| e.kind == EntityKind::Enemy
+                    && crate::caves::caves_for_act(Act::Eden).all(|c| Vec2::new(c.x, c.y).distance(e.pos) > 600.0))
                 .expect("eden has enemies");
             e.pos
         };
@@ -3071,6 +3082,16 @@ mod tests {
         let mut b = new_character("Buddy");
         b.x = foe_pos.x - 60.0;
         b.y = foe_pos.y;
+        // beta-server-track: this test was flaky (about 1 run in 7) for two
+        // reasons, both fixed here. The buddy must survive the fight (a dead
+        // member gets no share), and neither character may pick up POI/cave
+        // discovery XP mid-fight, which is not kill XP and is not shared.
+        b.max_health = 5000;
+        b.health = 5000;
+        let seen: Vec<String> = crate::pois::all_pois().iter().map(|p| p.name.clone())
+            .chain(crate::caves::all_caves().iter().map(|c| c.name.clone())).collect();
+        a.discovered = seen.clone();
+        b.discovered = seen;
         let pa = w.spawn_player(1, a);
         let pb = w.spawn_player(2, b);
         w.set_party(1, Some(99));
@@ -4373,5 +4394,19 @@ pub fn new_character_with(
         reputation: std::collections::BTreeMap::new(),
         quests: std::collections::BTreeMap::new(),
         quests_done: Vec::new(),
+        durability: Default::default(), // beta-server-track (B06)
     }
+}
+
+// ─── beta-server-track hooks (B05-B08) ──────────────────────────────────────
+// Thin crate-visible doors onto the private helpers above, so the new
+// modules (questgen / durability / travel / social) need no edits inside them.
+impl World {
+    pub(crate) fn st_complete_quest(e: &mut Entity, q: &crate::quests::QuestDef) -> String {
+        Self::grant_quest_completion(e, q)
+    }
+}
+
+pub(crate) fn st_make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
+    make_enemy(id, pos, tag, act)
 }
