@@ -745,6 +745,8 @@ const BAR_WIDTH: f32 = 34.0;
 const CHAR_SCALE: f32 = 30.0;
 /// Boss ("alpha") enemies render half again as large.
 const ALPHA_SCALE: f32 = 45.0;
+/// Quaternius character-pack bodies are ~30% taller than the KayKit rigs.
+const HUMANOID_SCALE: f32 = 23.0;
 
 /// How long a corpse stays after death. Long enough for Death_A (~1.2 s) to
 /// finish before the entity is reclaimed; `attack_until` is held past this so
@@ -825,12 +827,30 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
             }
             // Deterministic variety: hash the species tag onto the minion set.
             let h = tag.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-            let (file, attack) = match h % 3 {
-                0 => ("models/enemies/Skeleton_Minion.glb", 2),
-                1 => ("models/enemies/Skeleton_Rogue.glb", 2),
-                _ => ("models/enemies/Skeleton_Mage.glb", 77),
-            };
-            (file, [SKEL[0], SKEL[1], attack, SKEL[2]], CHAR_SCALE)
+            // Quaternius Ultimate Animated Characters (CC0): Death=0 Idle=2
+            // Run=8 SwordSlash=13. Raiders, cultists and the fallen used to
+            // be only three skeletons.
+            const UAC: [usize; 4] = [2, 8, 13, 0];
+            const HUMANOIDS: [&str; 12] = [
+                "models/humanoids/Goblin_Male.glb",
+                "models/humanoids/Goblin_Female.glb",
+                "models/humanoids/Zombie_Male.glb",
+                "models/humanoids/Zombie_Female.glb",
+                "models/humanoids/Viking_Male.glb",
+                "models/humanoids/Viking_Female.glb",
+                "models/humanoids/Ninja_Male.glb",
+                "models/humanoids/Ninja_Female.glb",
+                "models/humanoids/Pirate_Male.glb",
+                "models/humanoids/Pirate_Female.glb",
+                "models/humanoids/Witch.glb",
+                "models/humanoids/Wizard.glb",
+            ];
+            match h % 15 {
+                0 => ("models/enemies/Skeleton_Minion.glb", [SKEL[0], SKEL[1], 2, SKEL[2]], CHAR_SCALE),
+                1 => ("models/enemies/Skeleton_Rogue.glb", [SKEL[0], SKEL[1], 2, SKEL[2]], CHAR_SCALE),
+                2 => ("models/enemies/Skeleton_Mage.glb", [SKEL[0], SKEL[1], 77, SKEL[2]], CHAR_SCALE),
+                n => (HUMANOIDS[(n - 3) as usize], UAC, HUMANOID_SCALE),
+            }
         }
     }
 }
@@ -842,13 +862,26 @@ fn beast_rig(tag: &str) -> Option<(&'static str, [usize; 4], f32)> {
     const HERB: [usize; 4] = [6, 4, 0, 2];
     const PRED: [usize; 4] = [5, 3, 0, 1];
     let has = |ks: &[&str]| ks.iter().any(|k| tag.contains(k));
+    // Quaternius Farm Animals (Death=0 Idle=1 Jump=2 Run=3): the jump reads
+    // as a charge, so it doubles as the attack.
+    const FARM: [usize; 4] = [1, 3, 2, 0];
     Some(if has(&["wolf", "hound", "jackal", "dog"]) {
         ("models/wildlife/Wolf.gltf", PRED, 22.0)
     } else if has(&["cat", "smilodon", "panther", "lion", "fox"]) {
         ("models/wildlife/Fox.gltf", PRED, 24.0)
-    } else if has(&["bear", "mammoth", "mastodon", "behemoth", "bison", "auroch", "bull", "boar"]) {
+    } else if has(&["boar", "hog", "swine", "pig"]) {
+        ("models/beasts/Pig.glb", FARM, 22.0)
+    } else if has(&["auroch", "bison", "bull", "cattle"]) {
+        ("models/beasts/Cow.glb", FARM, 26.0)
+    } else if has(&["horse", "zebra", "onager", "steed"]) {
+        ("models/beasts/Horse.glb", FARM, 20.0)
+    } else if has(&["bear", "mammoth", "mastodon", "behemoth"]) {
         ("models/wildlife/Bull.gltf", HERB, 30.0)
-    } else if has(&["goat", "ibex", "alpaca", "camel"]) {
+    } else if has(&["sheep", "ibex"]) {
+        ("models/beasts/Sheep.glb", FARM, 22.0)
+    } else if has(&["llama", "camel"]) {
+        ("models/beasts/Llama.glb", FARM, 18.0)
+    } else if has(&["goat", "alpaca"]) {
         ("models/wildlife/Alpaca.gltf", HERB, 22.0)
     } else if has(&["deer", "elk", "stag", "antelope"]) {
         ("models/wildlife/Deer.gltf", HERB, 24.0)
@@ -1786,7 +1819,7 @@ fn spawn_visual(
                     // Skeleton rigs are thin humanoids already; the per-axis
                     // body-plan stretch made them look spindly. Keep it for
                     // the animal rigs, uniform for the skeletons.
-                    if !file.contains("Skeleton") {
+                    if !file.contains("Skeleton") && !file.contains("humanoids/") {
                         stretch = species_stretch(tag);
                     }
                     parts = Some(SpeciesParts { seed: species_parts_seed(tag) });
@@ -3285,5 +3318,37 @@ mod collision_tests {
     fn zero_input_stays_zero() {
         let c = wall_at(0.0, 0.0, 50.0);
         assert_eq!(deflect_around_props(Vec2::ZERO, &Vec2::ZERO, &c), Vec2::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod quaternius_rig_tests {
+    /// Animation count of a .glb, read straight from its JSON chunk.
+    fn clip_count(path: &std::path::Path) -> usize {
+        let b = std::fs::read(path).unwrap_or_else(|_| panic!("missing {}", path.display()));
+        let n = u32::from_le_bytes(b[12..16].try_into().unwrap()) as usize;
+        let json = std::str::from_utf8(&b[20..20 + n]).unwrap();
+        let Some(i) = json.find("\"animations\":[") else { return 0 };
+        json[i..].matches("\"channels\"").count()
+    }
+
+    /// Every new-rig clip index must exist, or Bevy silently plays nothing.
+    #[test]
+    fn new_rig_clip_indices_exist() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let mut checked = 0;
+        for tag in ["wild_boar", "aurochs_calf", "sheep", "camel", "horse"] {
+            let (file, clips, _) = super::beast_rig(tag).unwrap();
+            assert!(file.starts_with("models/beasts/"), "{tag} -> {file}");
+            assert!(clip_count(&root.join(file)) > *clips.iter().max().unwrap(), "{file}");
+            checked += 1;
+        }
+        for f in std::fs::read_dir(root.join("models/humanoids")).unwrap().flatten() {
+            if f.path().extension().is_some_and(|e| e == "glb") {
+                assert!(clip_count(&f.path()) > 13, "{}", f.path().display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20);
     }
 }
