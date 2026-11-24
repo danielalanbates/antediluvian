@@ -571,6 +571,9 @@ struct Mirrored {
     /// While `time.elapsed_secs()` is below this, the entity is playing its
     /// death animation — keep the corpse visible even if it left the snapshot.
     dying_until: f32,
+    /// Crowd LOD of another player: `Some(true)` = shared block figure,
+    /// `Some(false)` = full rig. `None` for everything else.
+    lod_cheap: Option<bool>,
 }
 
 #[derive(Resource, Default)]
@@ -699,10 +702,36 @@ struct RenderAssets {
     m_lod: Vec<Handle<StandardMaterial>>,
 }
 
-/// Players farther than this from the local player spawn as capsule
-/// impostors with no rig, animation, or nameplate (C15). Chosen at spawn;
-/// AoI churn re-evaluates naturally as entities come and go.
+/// Players farther than this from the local player are block figures with no
+/// rig, animation, or nameplate (C15).
 const RIG_LOD_RADIUS: f32 = 350.0;
+/// Most other players drawn as full rigs at once. Every rig is a skinned
+/// mesh with its own look meshes, so a crowd standing on one spot must not
+/// turn into hundreds of them; the rest stay block figures however near.
+const MAX_PLAYER_RIGS: usize = 40;
+
+/// Should a player's stand-in change? `cheap` is what it is now, `dist` its
+/// distance from the local player, `rigs` how many other players are full
+/// rigs right now. Returns the new `cheap` when it must be respawned.
+///
+/// The choice used to be made once, when the entity first appeared: a player
+/// who arrived from afar stayed a block figure while standing next to you
+/// (seen in the 200-bot run of 2026-11-23). Promotion and demotion use
+/// different radii so someone pacing along the boundary does not flicker.
+fn lod_swap(cheap: bool, dist: f32, rigs: usize) -> Option<bool> {
+    if cheap && dist < RIG_LOD_RADIUS * 0.8 && rigs < MAX_PLAYER_RIGS {
+        Some(false)
+    } else if !cheap && dist > RIG_LOD_RADIUS * 1.25 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// Stand-in for a player seen for the first time.
+fn lod_initial(dist: f32, rigs: usize) -> bool {
+    dist > RIG_LOD_RADIUS || rigs >= MAX_PLAYER_RIGS
+}
 
 #[derive(Resource)]
 struct OffscreenTarget(Handle<Image>);
@@ -1941,7 +1970,8 @@ fn spawn_visual(
     if is_me {
         commands.entity(root).insert(PlayerTag);
     }
-    Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0 }
+    let lod_cheap = (e.kind == EntityKind::Player && !is_me).then_some(cheap);
+    Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0, lod_cheap }
 }
 
 /// Screen-space name label pinned above a world entity.
@@ -2077,14 +2107,17 @@ fn receive_from_server(
             ServerMsg::LoginRejected { reason } => {
                 if reason.contains("no character on this account") {
                     // First launch on this Apple account: open the builder (C13).
+                    // Not an error to show a new player: no chat line.
                     if session.builder.is_none() {
                         session.builder = Some(Builder::default());
                     }
-                } else if let Some(b) = session.builder.as_mut() {
-                    b.submitted = false;
-                    b.error = Some(reason.clone());
+                } else {
+                    if let Some(b) = session.builder.as_mut() {
+                        b.submitted = false;
+                        b.error = Some(reason.clone());
+                    }
+                    push_chat(&mut session, format!("Login rejected: {reason}"));
                 }
-                push_chat(&mut session, format!("Login rejected: {reason}"));
             }
             ServerMsg::Notice { text } => {
                 if text.starts_with("Discovered:") || text.contains("flagged for PvP") {
@@ -2176,6 +2209,27 @@ fn receive_from_server(
         });
         let mut seen: HashSet<u64> = HashSet::with_capacity(entities.len());
         let mut map_updates: Vec<(u64, Option<Entity>)> = Vec::new();
+        // Crowd LOD is re-judged every snapshot: a stand-in that must change
+        // is dropped here and respawned by the loop below in the same pass.
+        let mut rigs = map.0.values().filter(|m| m.lod_cheap == Some(false)).count();
+        let mut lod_forced: HashMap<u64, bool> = HashMap::new();
+        if let Some((px, py)) = me_pos {
+            for e in entities.iter().filter(|e| e.kind == EntityKind::Player && e.health > 0) {
+                let Some(cheap) = map.0.get(&e.id).and_then(|m| m.lod_cheap) else { continue };
+                let dist = Vec2::new(e.x - px, e.y - py).length();
+                if let Some(want) = lod_swap(cheap, dist, rigs) {
+                    if let Some(m) = map.0.remove(&e.id) {
+                        commands.entity(m.root).despawn_recursive();
+                    }
+                    if want {
+                        rigs -= 1;
+                    } else {
+                        rigs += 1;
+                    }
+                    lod_forced.insert(e.id, want);
+                }
+            }
+        }
         for e in &entities {
             seen.insert(e.id);
             let is_me = Some(e.id) == my_id;
@@ -2248,9 +2302,18 @@ fn receive_from_server(
                 None => {
                     let cheap = e.kind == EntityKind::Player
                         && !is_me
-                        && me_pos.map_or(false, |(px, py)| {
-                            Vec2::new(e.x - px, e.y - py).length() > RIG_LOD_RADIUS
-                        });
+                        && match lod_forced.get(&e.id) {
+                            Some(want) => *want,
+                            None => {
+                                let c = me_pos.map_or(false, |(px, py)| {
+                                    lod_initial(Vec2::new(e.x - px, e.y - py).length(), rigs)
+                                });
+                                if !c {
+                                    rigs += 1;
+                                }
+                                c
+                            }
+                        };
                     let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act, cheap);
                     if e.kind == EntityKind::Player {
                         commands
@@ -3167,6 +3230,44 @@ mod collision_tests {
     fn zero_input_stays_zero() {
         let c = wall_at(0.0, 0.0, 50.0);
         assert_eq!(deflect_around_props(Vec2::ZERO, &Vec2::ZERO, &c), Vec2::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod crowd_lod_tests {
+    use super::*;
+
+    /// Review regression: the stand-in follows the distance, with a gap
+    /// between the two radii, and never exceeds the rig budget.
+    #[test]
+    fn lod_follows_distance_with_hysteresis_and_a_budget() {
+        // A block figure that walks up to you becomes a rig.
+        assert_eq!(lod_swap(true, 50.0, 0), Some(false));
+        // Not while the budget is full.
+        assert_eq!(lod_swap(true, 50.0, MAX_PLAYER_RIGS), None);
+        // A rig that walks away becomes a block figure.
+        assert_eq!(lod_swap(false, RIG_LOD_RADIUS * 2.0, 5), Some(true));
+        // Between the radii nothing changes, whichever it is.
+        for d in [RIG_LOD_RADIUS * 0.85, RIG_LOD_RADIUS, RIG_LOD_RADIUS * 1.2] {
+            assert_eq!(lod_swap(true, d, 0), None, "{d}");
+            assert_eq!(lod_swap(false, d, 0), None, "{d}");
+        }
+        // Already right: no respawn.
+        assert_eq!(lod_swap(false, 10.0, 0), None);
+        assert_eq!(lod_swap(true, 2000.0, 0), None);
+        // First sight.
+        assert!(!lod_initial(100.0, 0));
+        assert!(lod_initial(100.0, MAX_PLAYER_RIGS), "budget full: block figure even when near");
+        assert!(lod_initial(RIG_LOD_RADIUS + 1.0, 0));
+        // 1000 players on one spot: walking the swap rule over all of them
+        // settles at the budget, not at 1000 rigs.
+        let mut rigs = 0;
+        for _ in 0..1000 {
+            if lod_swap(true, 20.0, rigs) == Some(false) {
+                rigs += 1;
+            }
+        }
+        assert_eq!(rigs, MAX_PLAYER_RIGS);
     }
 }
 
