@@ -438,6 +438,7 @@ fn main() {
         .add_event::<CombatEvt>()
         .add_systems(Startup, castbar::spawn_cast_bar)
         .add_systems(Update, castbar::update_cast_bar)
+        .add_systems(Update, crowd::log_crowd)
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
         .add_systems(
             Update,

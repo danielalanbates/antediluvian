@@ -17,7 +17,7 @@
 //! | motion easing         | brisk (10 Hz updates)       | slow glide   |
 
 use antediluvia_protocol::EntityKind;
-use bevy::prelude::Color;
+use bevy::prelude::*;
 
 /// Does this entity get the floating health bar? Mobs always; players only
 /// when drawn as a full rig.
@@ -48,6 +48,32 @@ pub fn ease_rate(cheap: bool) -> f32 {
         5.0
     } else {
         14.0
+    }
+}
+
+/// Every 10 s, next to the fps line: how many other players are on screen
+/// and how they are drawn. This is the measurement behind "1,000 players
+/// visible" in a windowless run, where nobody can count the figures.
+pub fn log_crowd(time: Res<Time>, map: Res<crate::EntityMap>, mut acc: Local<f32>) {
+    *acc += time.delta_secs();
+    if *acc < 10.0 {
+        return;
+    }
+    *acc = 0.0;
+    let (mut rigs, mut blocks) = (0usize, 0usize);
+    for m in map.0.values() {
+        match m.lod_cheap {
+            Some(false) => rigs += 1,
+            Some(true) => blocks += 1,
+            None => {}
+        }
+    }
+    if rigs + blocks > 0 {
+        info!(
+            "crowd: {} other players drawn ({rigs} rigs, {blocks} block figures), {} entities in all",
+            rigs + blocks,
+            map.0.len()
+        );
     }
 }
 

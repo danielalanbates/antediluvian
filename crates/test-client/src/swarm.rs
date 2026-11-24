@@ -3,7 +3,10 @@
 //! Connects N scripted players that gather around their spawn point (the
 //! Eden gate for new characters) and keep walking out and back, so a single
 //! 8 GB machine can host a 1,000-connection crowd test. Usage:
-//!   antediluvia-swarm [N] [ws-url] [aoi] [json|bin] [gather-radius]
+//!   antediluvia-swarm [N] [ws-url] [aoi] [json|bin] [gather-radius] [first] [total]
+//! `first` and `total` let a crowd be grown in steps while one client
+//! watches: `200 .. 0 1000`, then `300 .. 200 1000`, then `500 .. 500 1000`
+//! fill one disc from the centre outwards with bots 0..1000.
 //! `json` (default) is the old text wire with a small AoI; `bin` asks for
 //! binary delta snapshots, the wire the game client uses: run it with the
 //! full AoI (1400) to load the server the way real players would.
@@ -30,6 +33,8 @@ async fn main() {
     let aoi: f32 = args.next().and_then(|a| a.parse().ok()).unwrap_or(150.0);
     let binary = args.next().is_some_and(|a| a.eq_ignore_ascii_case("bin"));
     let gather: f32 = args.next().and_then(|a| a.parse().ok()).unwrap_or(500.0);
+    let first: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(0);
+    let total: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(first + n).max(1);
     let decoders: usize = std::env::var("SWARM_DECODERS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
 
     let connected = Arc::new(AtomicU64::new(0));
@@ -39,7 +44,7 @@ async fn main() {
     let held_n = Arc::new(AtomicU64::new(0));
     let bad_frames = Arc::new(AtomicU64::new(0));
 
-    for i in 0..n {
+    for i in first..first + n {
         let url = url.clone();
         let connected = connected.clone();
         let rx_bytes = rx_bytes.clone();
@@ -65,7 +70,7 @@ async fn main() {
                 .await;
             let _ = sink.send(Message::Text(send(&ClientMsg::SetAoi { radius: aoi }).into())).await;
             connected.fetch_add(1, Ordering::Relaxed);
-            let mut dec = (binary && i < decoders).then(SnapshotDecoder::new);
+            let mut dec = (binary && i - first < decoders).then(SnapshotDecoder::new);
             let mut asked = false;
 
             // Walk out to a place on an even disc around the spawn point
@@ -73,7 +78,7 @@ async fn main() {
             // second, the way back for the next. Bots stay gathered without
             // needing to know where they are.
             let out_angle = i as f32 * 2.399_963;
-            let out_secs = gather * ((i as f32 + 0.5) / n as f32).sqrt() / SPEED;
+            let out_secs = gather * ((i as f32 + 0.5) / total as f32).sqrt() / SPEED;
             let _ = sink
                 .send(Message::Text(send(&ClientMsg::Move { dx: out_angle.cos(), dy: out_angle.sin() }).into()))
                 .await;

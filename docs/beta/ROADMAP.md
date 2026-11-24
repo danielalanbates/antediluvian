@@ -23,7 +23,7 @@ from having a good first hour.
 | World | 5 acts, 200 POIs, caves, day/night, water, flight masters, offline rest XP, graveyards, zone banners | flight paths, rest XP, graveyards/spirit, weather, zone-in banners |
 | Items | equip, bank, vendors, craft, rarity tiers, durability + repair (no windows) | bags, rarity colours, durability/repair, loot rolls, set items |
 | PvP | opt-in flag, capital auto-flag, honor ticks, duels | battleground instances, honor ranks/rewards |
-| Scale | 1000 bots, 150-entity snapshot cap | delta + binary snapshots for hosted 1000-in-zone |
+| Scale | 1,000 players drawn on one screen at 46-56 fps windowless; binary delta snapshots, 22.5 KB/s per client, tick avg 6-15 ms at 1,000 (B11, loopback only) | delta + binary snapshots for hosted 1000-in-zone |
 | Art | low-poly CC0 + procedural props/creatures; test-counted variety: 1473 mob silhouettes over mobs.json, 6956 distinct terrain/prop meshes over 5 acts | authored hero art (asset production, not code) |
 | Login | local UUID; SIWA helper without entitlement; builder with 207 look options, live preview, name rules | real Sign in with Apple (owner steps: `docs/beta/APPLE_SIGN_IN.md`) |
 | Web | playable single + live shard, gate-checked deploys | same, auto-updated each safe release |
@@ -48,7 +48,9 @@ test-client build. Details, shots and the unverified list:
 | B09 Classes 5-8 | done in sim and builder; they reuse the four old rigs |
 | Variety | done: character looks (protocol, db, server clamp, rigs, LOD, builder), creature grafts, 12 landform families; counts and gaps in the verification README. Builder mouse/keyboard untested |
 | Review 2026-11-23 | merge and client reviewed, 10 defects fixed with tests; see `docs/beta/HANDOFF_2026-11-23.md` (sim 132 / server 16 / client 130 tests) |
-| B10-B12 | not started |
+| B10 | not started on this branch by the B11 work |
+| B11 Scale | done 2026-11-24 on `beta-b10-b11`, `PROTOCOL_VERSION` 17: binary delta snapshots from the AoI grid, 10 Hz / 2.5 Hz tiers, 1,200-player cap per client, crowd budget on the client. Measured at 200 / 500 / 1,000 bots: `docs/verification/2026-11-24/README.md`; design: `docs/beta/B11_SCALE.md`. Open: wasm transport never compiled; rare ticks over 50 ms at 1,000 in one run; never run over a real link |
+| B12 | not started (protocol 17 now: shard and web client must be redeployed together) |
 
 ## Chunks (do in order; each ships through the web gate + app staging)
 - **B01 UI windows I:** bags (B), character sheet/paperdoll (C), quest log (L),
@@ -81,6 +83,7 @@ test-client build. Details, shots and the unverified list:
 - Window buttons, right-click, tooltips and hotkeys have never been driven by a real mouse or keyboard (see verification README, 2026-11-23 later section).
 - No aura list on the wire: enemy debuffs cannot be shown.
 - XP curve overflows near level 55 (see server track notes).
+- **Still flaky on 2026-11-24** (failed 1 of 3 full sim runs, sim code unchanged): `questgen::tests::cave_ore_collect_and_dweller_quests_complete`. Older note follows.
 - Sim test `questgen::tests::cave_ore_collect_and_dweller_quests_complete` was flaky (any ore node from a hash map); it now takes the node nearest the cave and passed 12 of 12 runs. Why other nodes yielded a different count is not root-caused.
 - `batesai.org/membership/` redirects to itself (functions/membership.js).
 - Fresh server character showed 64/100 HP despite godmode (unexplained).

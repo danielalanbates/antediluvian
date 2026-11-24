@@ -56,17 +56,58 @@ Telemetry: `ANTEDILUVIA_TELEMETRY_SECS=20` shortens the window; the log line
 - `ANTEDILUVIA_WIRE=json` (native) asks for the old wire, for comparison.
 - `ANTEDILUVIA_AUTOCMD="cam 1150 0.95"` pulls the camera back for a crowd shot.
 
+## Server changes that came out of measuring
+
+- Combat events (`ServerMsg::Event`) went to every client in the act: N
+  listeners for each of N fighters. They now go to clients that hold the
+  source in their 10 Hz tier (binary) or within 450 units (JSON), plus the
+  victim. Events only drive rig animations.
+- Character saves ran for every connection in one tick every 10 s. They are
+  now spread over the 10 s by connection id (5 per tick at 1,000).
+- Periodic keyframes are staggered by connection id, so clients that logged
+  in together are not all re-keyed in the same second.
+
+## Limits and what to do next
+
+- Snapshot pass at 1,000 in one spot: 8-19 ms of the 50 ms tick, about
+  300,000 field updates per pass. Next lever: scan every 8th snapshot, or a
+  position-only fast path that skips the per-update mask.
+- 22.5 KB/s per client at 1,000, all moving. Next lever: far tier at 2 Hz,
+  or signed 1-byte position steps for the near tier.
+- The client rebuilds a whole `Snapshot` (clones every entity) for each
+  frame. It did not show in the frame rate at 1,000; a delta-aware apply
+  in `main.rs` would remove it.
+- Rig budget is first come, nearest at first sight. A nearest-first swap
+  when the budget is full is not written.
+- `MAX_PLAYER_RIGS` stays 40: nothing was measured that would justify more.
+
 ## Measuring
 
 ```
 ANTEDILUVIA_BIND=127.0.0.1:8797 ANTEDILUVIA_DB=target/tmp/b11.sqlite \
 ANTEDILUVIA_DEV_ACCOUNTS=b11dev ANTEDILUVIA_TELEMETRY_SECS=20 target/release/antediluvia-server
+
+# server alone
 target/release/antediluvia-swarm 1000 ws://127.0.0.1:8797 1400 bin 500
-ANTEDILUVIA_SHOTS=<dir> ANTEDILUVIA_SHOT_TIMES=38,62,80 \
-ANTEDILUVIA_AUTOCMD="god;time 0.4;...;cam 1150 0.95" \
+
+# one client watching the crowd grow (start the client after the first line)
+target/release/antediluvia-swarm 200 ws://127.0.0.1:8797 1400 bin 180 0 1000
+target/release/antediluvia-swarm 300 ws://127.0.0.1:8797 1400 bin 180 200 1000
+target/release/antediluvia-swarm 500 ws://127.0.0.1:8797 1400 bin 180 500 1000
+ANTEDILUVIA_NO_PRELOAD=1 ANTEDILUVIA_SHOTS=<dir> ANTEDILUVIA_SHOT_TIMES=45,95,150,168,180 \
+ANTEDILUVIA_AUTOCMD="god;time 0.4;<49 more 'time 0.4'>;cam 800 1.3" \
   target/release/antediluvia-client-bevy b11dev Jared ws://127.0.0.1:8797
 ```
-Swarm arguments: count, url, AoI radius, `json|bin`, gather radius. Bots walk
-out to an even disc around the Eden gate and pace out and back, with the full
-1400 AoI in `bin` mode, so each one costs the server what a real client would.
-The first 20 bots decode every frame and count frames that fail.
+Swarm arguments: count, url, AoI radius, `json|bin`, gather radius, first bot
+number, total bots (the last two place a later batch outside the earlier
+ones). Bots walk out to an even disc around the Eden gate and pace out and
+back, with the full 1400 AoI in `bin` mode, so each one costs the server what
+a real client would. The first 20 bots of a process decode every frame and
+count frames that fail. The server logs `tick telemetry` and `snap telemetry`
+(pass time, bytes per binary client) every window; the client logs `fps:` and
+`crowd: N other players drawn (R rigs, B block figures)` every 10 s.
+
+`ANTEDILUVIA_NO_PRELOAD=1` loads models on first use. On an 8 GB Mac that is
+already swapping, the normal preload peaked at 904 MB and took 1.2 GB of swap
+in 10 s. The camera's far plane is 1,000 units: `cam` values much past
+`800 1.3` cull the far side of the crowd.
