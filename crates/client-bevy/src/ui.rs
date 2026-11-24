@@ -257,7 +257,8 @@ fn spawn_player_frame(commands: &mut Commands) {
             frame
                 .spawn(Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(5.0),
+                    // Tall enough for the rested stretch (win/rested.rs) to read.
+                    height: Val::Px(7.0),
                     margin: UiRect::top(Val::Px(2.0)),
                     ..default()
                 })
@@ -447,7 +448,8 @@ fn spawn_quest_tracker(commands: &mut Commands) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(14.0),
+                // Below the minimap (win/minimap.rs), which owns the corner.
+                top: Val::Px(220.0),
                 right: Val::Px(14.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(8.0)),
@@ -712,6 +714,7 @@ pub fn update_ui_frames(
 #[allow(clippy::type_complexity)]
 pub fn update_ui_panels(
     session: Res<Session>,
+    wins: Res<crate::win::WinState>,
     mut q_quest_root: Query<&mut Visibility, (With<QuestTrackerRoot>, Without<ChatInputBar>)>,
     mut q_quest_text: Query<&mut Text, (With<QuestTrackerText>, Without<ChatLogText>, Without<ChatInputText>)>,
     mut q_chat_log: Query<&mut Text, (With<ChatLogText>, Without<QuestTrackerText>, Without<ChatInputText>)>,
@@ -733,14 +736,14 @@ pub fn update_ui_panels(
                 if !session.party.is_empty() {
                     lines.push_str(&format!("! Party: {}\n", session.party.join(", ")));
                 }
-                for (name, progress) in &cs.quests {
+                for name in cs.quests.keys() {
                     if !lines.is_empty() {
                         lines.push('\n');
                     }
-                    let pretty = prettify_ability(name.strip_prefix("fa_").unwrap_or(name));
                     // Theme-pillar quests (C08) carry their pillar as a prefix.
                     let theme = if name.starts_with("fa_") { "[Forbidden Arts] " } else { "" };
-                    lines.push_str(&format!("* {theme}{} - {}/target", pretty, progress));
+                    // Title, objective and real progress (win/questlog.rs).
+                    lines.push_str(&format!("* {theme}{}", crate::win::questlog::tracker_line(name, cs)));
                 }
                 **t = lines;
             }
@@ -749,9 +752,8 @@ pub fn update_ui_panels(
 
     // ── Chat log ─────────────────────────────────────────────────────────
     if let Ok(mut t) = q_chat_log.get_single_mut() {
-        // Show last ~8 lines.
-        let start = session.chat_log.len().saturating_sub(8);
-        let visible: Vec<&str> = session.chat_log.iter().skip(start).map(|s| s.as_str()).collect();
+        // Show the last 8 lines of the selected chat tab (win/chattabs.rs).
+        let visible = crate::win::chattabs::visible(&session.chat_log, wins.chat_tab, 8);
         let joined = visible.join("\n");
         if **t != joined {
             **t = joined;
@@ -777,23 +779,6 @@ pub fn update_ui_panels(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Turn `"heroic_strike"` into `"Heroic Strike"`.
-fn prettify_ability(raw: &str) -> String {
-    raw.split('_')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + c.as_str()
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 /// Fill the target frame from `Session.target`; hide it when nothing is near.
 pub fn update_target_frame(

@@ -11,7 +11,7 @@ use crate::net::NetTx;
 use crate::Session;
 
 fn log(session: &mut Session, line: String) {
-    if session.chat_log.len() >= 24 {
+    if session.chat_log.len() >= crate::CHAT_KEEP {
         session.chat_log.pop_front();
     }
     session.chat_log.push_back(line);

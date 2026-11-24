@@ -46,6 +46,7 @@ mod terrain_material;
 mod ui;
 mod variety;
 mod vfx;
+mod win;
 
 use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
 use audio::{ambient_system, init_audio_assets, one_shot, AudioAssets, Pool};
@@ -373,6 +374,7 @@ fn main() {
         .add_plugins(plugins)
         .add_plugins(shots::ShotsPlugin)
         .add_plugins(perf::PerfPlugin)
+        .add_plugins(win::WinPlugin)
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .init_resource::<lighting::EnvMaps>()
         .add_systems(Update, (lighting::apply_env_map, lighting::drift_ripples))
@@ -480,7 +482,7 @@ struct ServerEnt(u64);
 pub(crate) struct PlayerTag;
 
 #[derive(Component)]
-struct MainCamera;
+pub(crate) struct MainCamera;
 
 // (HudText / ActionBarText markers replaced by ui.rs components.)
 
@@ -2054,9 +2056,13 @@ fn prettify_tag(tag: &str) -> String {
         .join(" ")
 }
 
-/// Push a line into the rolling chat log, keeping at most 24 entries.
+/// Lines of chat history kept (the chat tabs filter this, so it has to hold
+/// more than one screen).
+pub(crate) const CHAT_KEEP: usize = 200;
+
+/// Push a line into the rolling chat log, keeping at most `CHAT_KEEP` entries.
 fn push_chat(session: &mut Session, line: String) {
-    if session.chat_log.len() >= 24 {
+    if session.chat_log.len() >= CHAT_KEEP {
         session.chat_log.pop_front();
     }
     session.chat_log.push_back(line);
@@ -2078,6 +2084,7 @@ fn receive_from_server(
     terrain_q: Query<Entity, With<Terrain>>,
     loadouts: Query<&Loadout>,
     ground: Res<GroundDetail>,
+    mut wins: ResMut<win::WinState>,
 ) {
     // Rebuild the terrain when the character's act changes (login or travel).
     let set_act = |commands: &mut Commands,
@@ -2133,6 +2140,7 @@ fn receive_from_server(
                 if text.starts_with("Discovered:") || text.contains("flagged for PvP") {
                     session.banner = Some((text.clone(), 5.0));
                 }
+                wins.on_notice(&text); // loot and vendor windows
                 push_chat(&mut session, text);
             }
             ServerMsg::Chat { from, text } => push_chat(&mut session, format!("{from}: {text}")),
@@ -2182,17 +2190,19 @@ fn receive_from_server(
                 if !was_cast {
                     session.gcd = (now, now + 1.0);
                 }
+                wins.on_ability(&ability, now); // buff icons
                 session.ability_cd.insert(ability, (now, now + cooldown));
             }
             ServerMsg::Pong => {}
-            // beta-server-track (B05-B08): text-level display until the
-            // dedicated windows land.
-            other => track_ui::on_server_msg(other, &mut session),
+            // beta-server-track (B05-B08): windows where there is one,
+            // chat text for the rest.
+            other => win::on_server_msg(other, &mut session, &mut wins),
         }
     }
 
     if let Some(entities) = latest {
         let my_id = session.my_id;
+        wins.radar(&entities, my_id); // minimap, markers, death prompt
         // Target frame: nearest living enemy within engage range.
         let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
         let nearest = me_pos.and_then(|(mx, my)| {
@@ -2397,7 +2407,8 @@ fn send_input(
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
     }
-    if keys.just_pressed(KeyCode::KeyM) {
+    // Mount moved from M to H when M became the world map (classic binding).
+    if keys.just_pressed(KeyCode::KeyH) {
         tx.send(ClientMsg::Mount);
     }
     // Tame the current target (C07): needs a lasso and a weakened tameable
@@ -2774,7 +2785,7 @@ struct AutoCmd {
     next_at: f32,
 }
 
-fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>) {
+fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>, mut wins: ResMut<win::WinState>) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
     if now < ac.next_at {
@@ -2784,7 +2795,13 @@ fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>) {
         info!("[autocmd] {line}");
         // A leading '/' means "type this into chat"; anything else is a dev
         // console line. Lets a scripted run drive party/bank/mail/trade too.
-        if line.starts_with('/') {
+        if let Some(arg) = line.strip_prefix("ui ") {
+            // "ui bags", "ui only map", "ui close", "ui menu": open windows
+            // without a key press (windowless screenshot runs).
+            for m in wins.autocmd(arg) {
+                tx.send(m);
+            }
+        } else if line.starts_with('/') {
             dispatch_chat_line(&line, &tx);
         } else {
             dispatch_dev_line(&line, &tx);
@@ -2799,6 +2816,7 @@ fn chat_input(
     mut kb_events: EventReader<KeyboardInput>,
     mut session: ResMut<Session>,
     tx: Res<NetTx>,
+    wins: Res<win::WinState>,
 ) {
     if session.builder.is_some() || session.dev_input.is_some() {
         return; // builder (C13) or dev console (C14) owns the keyboard
@@ -2808,7 +2826,8 @@ fn chat_input(
             // Send the message if non-empty, then close chat.
             let text = session.chat_input.trim().to_string();
             if !text.is_empty() {
-                dispatch_chat_line(&text, &tx);
+                // On a channel tab, plain text goes to that channel.
+                dispatch_chat_line(&win::chattabs::route(&text, wins.chat_tab), &tx);
             }
             session.chat_input.clear();
             session.chat_active = false;
@@ -3140,9 +3159,11 @@ fn mouse_click_attack(
     session: Res<Session>,
     menu_open: Res<menu::MenuOpen>,
     tx: Res<NetTx>,
+    wins: Res<win::WinState>,
 ) {
-    // The character builder, menu, and chat own the input while they're up.
-    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active || menu_open.0 {
+    // The character builder, menu, and chat own the input while they're up;
+    // so does a window under the pointer (a click on a button is not a swing).
+    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active || menu_open.0 || wins.pointer_busy {
         motion.clear();
         return;
     }
