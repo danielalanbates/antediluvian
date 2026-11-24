@@ -83,7 +83,10 @@ pub fn current(sheet: &CharacterSheet, item: &str) -> u32 {
 
 /// A durable item worn down to nothing: its bonuses stop counting.
 pub fn is_broken(sheet: &CharacterSheet, item: &str) -> bool {
-    max_durability(item) > 0 && current(sheet, item) == 0
+    // Review: this runs for every worn item of every player on every sim
+    // tick (via `gear_bonus`), so the map probe comes first - a pristine
+    // item (no entry) never reaches the item-table scans below.
+    sheet.durability.get(item).is_some_and(|d| *d == 0) && max_durability(item) > 0
 }
 
 /// Take `pts` off an item (never below zero). Returns the points actually lost.

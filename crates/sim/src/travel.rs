@@ -95,6 +95,14 @@ pub fn flight_nodes() -> &'static [FlightNodeDef] {
                     .iter()
                     .filter(|p| !used.contains(&p.id))
                     .filter(|p| pois.iter().filter(|o| o.name == p.name).count() == 1)
+                    // Review fix: discovery is recorded by NAME with no act,
+                    // so a node name must be unique across every act's POIs
+                    // and caves, or visiting a namesake elsewhere would
+                    // "discover" a flight master the character never reached.
+                    .filter(|p| {
+                        crate::pois::all_pois().iter().filter(|o| o.name == p.name).count() == 1
+                            && !crate::caves::all_caves().iter().any(|c| c.name == p.name)
+                    })
                     .min_by(|a, b| Vec2::new(a.x, a.y).distance(q).total_cmp(&Vec2::new(b.x, b.y).distance(q)));
                 if let Some(p) = pick {
                     used.push(p.id);
@@ -290,6 +298,11 @@ impl World {
             return Err("You cannot take flight while in combat.".into());
         }
         let here = node_at(act, e.pos).ok_or("There is no flight master here. Find one at an inn or a major landmark.")?;
+        // Review fix: everything that can refuse the flight is checked
+        // before the fare is taken (this used to fail after charging).
+        if dest.act != act && e.owner.is_none() {
+            return Err("no owner".into());
+        }
         let s = e.sheet.as_mut().ok_or("no sheet")?;
         if here.inn && !node_known(s, here) {
             s.discovered.push(here.name.to_string());
@@ -616,5 +629,58 @@ mod tests {
         let r = region_at(poi.act, poi.pos, Some("sethite"));
         assert_eq!(r.key, poi.key);
         assert!(!r.pvp);
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    /// Discovery is by name, so a flight master's name may not be shared
+    /// with any other POI or cave in ANY act.
+    #[test]
+    fn flight_master_names_are_unique_across_every_act() {
+        for n in flight_nodes().iter().filter(|n| !n.inn) {
+            assert_eq!(crate::pois::all_pois().iter().filter(|p| p.name == n.name).count(), 1, "{}", n.name);
+            assert!(!crate::caves::all_caves().iter().any(|c| c.name == n.name), "{}", n.name);
+        }
+        let mut names: Vec<&str> = flight_nodes().iter().map(|n| n.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), flight_nodes().len());
+    }
+
+    /// A refused flight costs nothing and moves nobody, whatever the reason.
+    #[test]
+    fn every_refused_flight_is_free() {
+        let mut w = World::new(9);
+        let mut s = crate::world::new_character("Miser");
+        s.x = 0.0;
+        s.y = 0.0;
+        s.gold = 500;
+        s.max_health = 1_000_000;
+        s.health = 1_000_000;
+        s.discovered.push(inn_name(Act::Eden).to_string());
+        s.discovered.push(inn_name(Act::Flood).to_string());
+        let id = w.spawn_player(4, s);
+        let sunk = w.gold_sunk;
+        let e = w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&id).unwrap();
+        e.combat_timer = 3.0;
+        assert!(w.flight_take(Act::Eden, id, "inn_flood").is_err(), "in combat");
+        let e = w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&id).unwrap();
+        e.combat_timer = 0.0;
+        e.owner = None;
+        assert!(w.flight_take(Act::Eden, id, "inn_flood").is_err(), "an unowned entity cannot change acts");
+        assert!(w.flight_take(Act::Eden, id, "inn_eden").is_err(), "already there");
+        assert!(w.flight_take(Act::Eden, id, &"x".repeat(100_000)).is_err(), "unknown node");
+        assert_eq!(w.player_sheet(Act::Eden, id).unwrap().gold, 500, "no refusal may charge");
+        assert_eq!(w.gold_sunk, sunk);
+        assert!(w.player_pos(Act::Eden, id).unwrap().length() < 1.0);
+        // And the same character, owned again, does pay exactly once.
+        w.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&id).unwrap().owner = Some(4);
+        let f = w.flight_take(Act::Eden, id, "inn_flood").unwrap();
+        assert_eq!(w.player_sheet(Act::Flood, f.entity).unwrap().gold, 500 - f.cost);
+        assert!(w.zones[&Act::Eden].entities.get(&id).is_none(), "no copy left behind");
+        assert_eq!(w.gold_sunk, sunk + f.cost as u64);
     }
 }

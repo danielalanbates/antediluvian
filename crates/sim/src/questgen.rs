@@ -303,7 +303,12 @@ fn build() -> Table {
                         "The seams of {} still bear {res_name}. Break the ore nodes and bring 4 measures to this board {closing}.",
                         an.name
                     ),
-                    Objective::Collect { item: res, count: 4, source: leak(format!("ore_{res}")) },
+                    // Review fix: the quest item is a quest-only sample, never
+                    // the real ore. The sim's collect rule hands the item to
+                    // EVERY group member in range on each node broken, so
+                    // with the real (sellable) ore a 40-strong raid holding
+                    // this quest minted 40 extra ore per node.
+                    Objective::Collect { item: leak(format!("{slug}_ore")), count: 4, source: leak(format!("ore_{res}")) },
                     1.1, None,
                 );
                 push(
@@ -871,6 +876,10 @@ mod tests {
                         let live = enemy_tags.iter().chain(node_tags.iter()).filter(|t| t.starts_with(source)).count();
                         assert!(live >= 1, "{}: no source {source} in {act:?}", g.def.id);
                         assert!(count >= 1 && !item.is_empty());
+                        assert!(
+                            crate::economy::vendor_price(item).is_none() && crate::world::item_def(item).is_none(),
+                            "{}: quest item {item} must be quest-only (unsellable, unwearable)", g.def.id
+                        );
                     }
                     Objective::Explore { place } => {
                         let t = anchor_by_key(place).unwrap_or_else(|| panic!("{}: unknown place {place}", g.def.id));
@@ -1037,8 +1046,18 @@ mod tests {
                 w.step();
             }
         }
+        // Review regression: the quest never mints the real, sellable ore.
+        // Only the node's own yield (2 per node) is in the bags.
+        let real = source.strip_prefix("ore_").unwrap();
+        assert_ne!(item, real);
+        let s = sheet(&w, Act::Eden, pid);
+        let real_n = s.inventory.iter().filter(|i| i.as_str() == real).count() as u32;
+        assert_eq!(real_n, 2 * count, "{count} nodes broken must yield exactly {} {real}", 2 * count);
+        teleport(&mut w, Act::Eden, pid, Vec2::ZERO);
+        assert!(w.sell(Act::Eden, pid, item).is_err(), "quest samples are worthless to the innkeeper");
         teleport(&mut w, Act::Eden, pid, an.pos);
         w.board_turn_in(Act::Eden, pid, ore.def.id).unwrap();
+        assert_eq!(sheet(&w, Act::Eden, pid).inventory.iter().filter(|i| i.as_str() == item).count(), 0, "samples consumed");
         // The dweller bounty at the same cave.
         let boss = generated().iter().find(|g| g.anchor == ore.anchor && g.def.id.ends_with("_boss")).unwrap();
         let Objective::Kill { target, .. } = boss.def.objective else { panic!() };

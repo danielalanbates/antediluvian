@@ -98,8 +98,8 @@ unchanged (already 15 on `main`).
 ```sh
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" \
   RUSTUP_TOOLCHAIN=stable-aarch64-apple-darwin CARGO_BUILD_JOBS=2
-cargo test --release -p antediluvia-sim -- --test-threads=1   # 92 tests
-cargo test --release -p antediluvia-server                    # 11 tests
+cargo test --release -p antediluvia-sim -- --test-threads=1   # 96 tests after review (92 before)
+cargo test --release -p antediluvia-server                    # 14 tests after review (11 before)
 cargo build --release -p antediluvia-test-client
 # live check (temp DB, never port 8787):
 ANTEDILUVIA_BIND=127.0.0.1:8797 ANTEDILUVIA_DB=/tmp/t.sqlite target/release/antediluvia-server &
@@ -108,9 +108,9 @@ target/release/antediluvia-track ws://127.0.0.1:8797 A        # ends with TRACK-
 
 | Check | Result on 2026-11-23 |
 |---|---|
-| Sim suite | 92 passed (52 on `main`) |
-| Server suite | 11 passed (0 on `main`) |
-| `antediluvia-track` against a live server on 8797 | `TRACK-E2E-OK` |
+| Sim suite | 96 passed after review; 92 before (52 on `main`) |
+| Server suite | 14 passed after review; 11 before (0 on `main`) |
+| `antediluvia-track` against a live server on 8797 | `TRACK-E2E-OK`; after review also `TRACK-E2E-DEV-OK` (board quest accept + paid flight) |
 | Sim suite repeated 100× | 3 runs failed, all in two **pre-existing** flaky tests (`main`: 8 of 100) |
 | `ANTEDILUVIA_QUEST=1 antediluvia-client` (Eden chain bot) | **stalls** after accepting the first quest: no serpent inside its view at the inn. Identical stall on `main` built from `e192420` with the same world seed, so not a regression, but the chain was not proven end to end over the wire |
 | `antediluvia-client-bevy` | **not built** (forbidden on this machine); only two catch-all match arms were added |
@@ -145,11 +145,77 @@ target/release/antediluvia-track ws://127.0.0.1:8797 A        # ends with TRACK-
 - **More hostiles.** Camps add about 70–80 enemies per act; the 1,000-bot
   swarm was not re-run.
 - **Raid rules.** No raid XP penalty, no raid-only quests, no loot rolls.
-- **Chat.** No rate limiting; guild chat ignores the ignore list; friend
-  names are stored as typed, not in canonical case.
+- **Chat.** The new messages are rate limited (see Review findings); the
+  older `Chat`, `GuildChat`, `PartyInvite`, `Duel`, `TradeGive` and `MailSend`
+  in `main.rs` are not, and none of those except zone `Chat` honour the ignore
+  list. Friend names are stored as typed, not in canonical case.
 - **Durability.** Two copies of one item id share wear; `hp` bonus survives
   breakage; no "your weapon broke" notice.
 - **Flight** is an instant move; a timed flight path is a client/server follow-up.
 - **Quest-chain bot.** `ANTEDILUVIA_QUEST=1` only hunts mobs inside its snapshot radius and idles when none are near the inn; it needs to roam (or the seed needs serpents near the inn) before it can serve as an early-flow gate again.
 - **Pre-existing flake** `class_select_and_cast_damages_target_and_costs_mana`
   (about 2 runs in 100, same on `main`) was left alone.
+
+## Review findings (adversarial review, 2026-11-23)
+
+Reviewed `git diff main...beta-server-track` (20 files). Fixes are in one
+commit on top of `7a36e81`. "Verified" means a test that fails without the
+fix, unless stated otherwise.
+
+| # | Severity | Finding | Fix | Verified by |
+|---|---|---|---|---|
+| 1 | High (economy) | Cave "ore collect" board quests used the **real, sellable ore** as the quest item. The sim hands a collect item to every group member in range per node broken while they hold fewer than 4, so a 40-raid minted up to 40 extra ore per node, and a solo player who never turned in got +1 per node for ever | Quest item is now a quest-only sample (`gq_<act>_c<id>_ore`), unsellable and unwearable | `cave_ore_collect_and_dweller_quests_complete` (exact real-ore yield, sample refused by the innkeeper, consumed on turn-in); `every_objective_is_completable_in_its_act` now asserts every Collect item has no vendor price and no item def |
+| 2 | High (DoS) | No rate limit on any new message. One client could fan a channel line out to every listener, scan all connections (`Who`, `Emote`) or force an SQLite write per `FriendAdd`/`FriendRemove`, as fast as it could send frames, all on the game-loop thread | `social::FloodGate`: 48 points per connection per 100 ticks (5 s); chat, whisper, emote, who and friend/ignore writes cost 4, raid invite 2, the rest 1. One warning per window, then silent drops | sim `flood_gate_caps_a_window_and_refills`; server `chat_flood_is_throttled_per_connection_and_refills` (200 lines sent, 12 delivered, 1 warning, no DB row, other connection unaffected, refills) |
+| 3 | Medium (DoS) | Name, id, channel and filter fields were used at any length: echoed back in notices, lowercased, passed to SQLite. `who_matches` re-lowercased the whole filter once per online character (a 2 MB filter x 1,000 players per request) | Every identifier field is clipped to 48 chars before handling (`clip_msg`); `who_list` clips the filter to 32 chars | server `oversized_and_hostile_fields_are_clipped_not_echoed` (2 MB fields, replies under 400 bytes, nothing written); sim `hostile_strings_are_clipped_and_cleaned` |
+| 4 | Medium (spoofing) | Emote targets were free text (24 chars, control characters allowed), so a line break or a bracketed fake system tag could be put in text shown to nearby players | `social::clean_name`: letters, digits, space, apostrophe, hyphen only | same two tests as #3 |
+| 5 | Medium (gold loss) | `flight_take` took the fare and then could still fail (`no owner` on a cross-act flight), losing gold with no flight | The check runs before the fare is taken | `every_refused_flight_is_free` |
+| 6 | Medium (latent) | Flight-master discovery rides the name-only `discovered` list, but node names were only checked unique within one act. 23 POI names repeat in the data; a namesake in another act would have marked an unvisited flight master as known. No current node collides (checked against the data), so this was luck, not design | Node picking now requires a name unique across all POIs and caves in every act | `flight_master_names_are_unique_across_every_act` |
+| 7 | Low (panic) | `RaidBook::invite` / `kick` indexed `self.raids[&group]`; a mismatch between the two internal maps would panic the game loop | `get()` with an error return | `hostile_strings_are_clipped_and_cleaned` (last block) |
+| 8 | Low (per-tick cost) | `durability::is_broken` runs for every worn item of every player each sim tick (through `gear_bonus`) and scanned the item table two or three times even for pristine gear | Map probe first; the table is only touched for an item recorded at 0 | Covered by the existing durability tests (behaviour unchanged); not benchmarked |
+| 9 | Low (per-tick cost) | The banner pass rebuilt a region (230-anchor scan plus three `String`s and a faction clone) for every player four times a second, moving or not | Last position cached per connection; unmoved players are skipped, faction borrowed not cloned | `standing_still_costs_no_banner_work_and_moving_still_banners`; not benchmarked |
+| 10 | Low (test) | `friends_and_ignore_persist...` asserted `!online && a \|\| b`, which passed for an online friend | Split into two asserts | Reads correctly; still passes |
+
+Checked and found sound (no change): old databases open (`durability` is
+`serde(default)` in the ext JSON, `social_list` is `CREATE TABLE IF NOT
+EXISTS`, both tested); `PROTOCOL_VERSION` untouched and every new wire field
+optional or in a new variant; generated quests cannot reach `talk()` (giver
+`board`, and `quests_for` only reads the authored table); board quests pay
+once (re-accept and second turn-in refused); delivery parcels cannot be
+duplicated into value (unsellable, abandon removes them); repair and flight
+only remove gold; messages from connections that are not logged in are
+ignored; the sim additions use no fs, time or threads.
+
+Found and **not** fixed (need an owner decision or touch shared code):
+
+- **Sheet size.** `quests_done` is a `Vec<String>` and the whole sheet is sent
+  as `Stats` after every per-player sim event. A character who clears several
+  hundred board quests carries roughly 25 bytes per quest on every one of
+  those sends (about 24 KB with all 950 done). Needs a compact completion
+  store, which is a sheet change on both branches.
+- **Group collect/Dweller loot scales with group size** (existing rule, now
+  reachable at 40): every member in range with the quest gets the collect
+  item, and every member present gets the Dweller's rare. Authored collect
+  quests whose item is a real material have the same shape as finding #1.
+- **Legacy party has no size cap** (existing), so the 40 cap only binds
+  groups created through `RaidCreate`.
+- **Durability follows the owner, not the item.** A worn piece traded to
+  another character is pristine for them (one free cycle per item id per
+  pair of players).
+- **Release spirit** skips the `Died` event, so a character whose home inn is
+  in another act stays in the act where they fell (intended, but untested
+  over the wire).
+- **`flight_take`, `release_spirit`** move the entity without refiling the
+  AoI grid; the grid catches up on the next sim tick (50 ms), as it does for
+  the existing inn respawn.
+- The flood gate's clock is the sim tick, sampled every 5 ticks; zone `Chat`
+  in `main.rs` is outside it.
+
+Integration check run for this review (real server on 127.0.0.1:8797, temp
+DB, two WebSocket clients, `ANTEDILUVIA_TRACK_DEV=1`): channel chat received
+by the second client, whisper, friend add (row confirmed in SQLite), who,
+emote, ignore, raid of two, then with dev commands: flight refused before
+discovery, landmark discovered, board listed, **generated quest accepted**
+(`gq_eden_p381_kill` present in `Stats`), **paid flight** inn to landmark
+(9 gold, charged once), board shows the quest `active` on landing. Output
+ended `TRACK-E2E-OK` / `TRACK-E2E-DEV-OK`; server stopped, port free, no
+panic in the log. The Bevy client was still not built.

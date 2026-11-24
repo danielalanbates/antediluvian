@@ -16,7 +16,7 @@ use crate::db::Db;
 use crate::social_db::{KIND_FRIEND, KIND_IGNORE};
 use crate::Conn;
 use antediluvia_protocol::{Act, ClientMsg, FriendEntry, ServerMsg, WhoEntry};
-use antediluvia_sim::social::{self, ChannelBook, Departure, RaidBook, SocialList};
+use antediluvia_sim::social::{self, ChannelBook, Departure, Flood, FloodGate, RaidBook, SocialList};
 use antediluvia_sim::travel;
 use antediluvia_sim::world::World;
 use std::collections::HashMap;
@@ -26,6 +26,59 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 const EMOTE_RANGE: f32 = 1400.0;
 /// Housekeeping cadence in sim ticks (4 times a second).
 const TICK_EVERY: u64 = 5;
+/// Longest name / id / channel field taken off the wire (review fix: these
+/// used to be echoed back, lowercased and handed to SQLite at any length).
+const FIELD_MAX: usize = 48;
+
+fn clip(s: &mut String) {
+    if let Some((i, _)) = s.char_indices().nth(FIELD_MAX) {
+        s.truncate(i);
+    }
+}
+
+/// Clip every free-text identifier in a track message. Chat bodies are
+/// left alone: `social::clean_chat` caps those.
+fn clip_msg(mut msg: ClientMsg) -> ClientMsg {
+    match &mut msg {
+        ClientMsg::QuestAccept { id } | ClientMsg::QuestTurnIn { id } | ClientMsg::QuestAbandon { id } => clip(id),
+        ClientMsg::RaidInvite { player }
+        | ClientMsg::RaidKick { player }
+        | ClientMsg::FriendAdd { player }
+        | ClientMsg::FriendRemove { player }
+        | ClientMsg::IgnoreAdd { player }
+        | ClientMsg::IgnoreRemove { player } => clip(player),
+        ClientMsg::ChannelJoin { channel } | ClientMsg::ChannelLeave { channel } | ClientMsg::ChannelSay { channel, .. } => clip(channel),
+        ClientMsg::Whisper { to, .. } => clip(to),
+        ClientMsg::Emote { emote, target } => {
+            clip(emote);
+            if let Some(t) = target {
+                clip(t);
+            }
+        }
+        ClientMsg::Who { filter: Some(f) } => clip(f),
+        ClientMsg::FlightTake { node } => clip(node),
+        _ => {}
+    }
+    msg
+}
+
+/// Flood-budget cost of a message: anything that fans out to other
+/// connections, scans every connection, or writes to the database is dear.
+fn flood_cost(msg: &ClientMsg) -> u32 {
+    match msg {
+        ClientMsg::ChannelSay { .. }
+        | ClientMsg::RaidChat { .. }
+        | ClientMsg::Whisper { .. }
+        | ClientMsg::Emote { .. }
+        | ClientMsg::Who { .. }
+        | ClientMsg::FriendAdd { .. }
+        | ClientMsg::FriendRemove { .. }
+        | ClientMsg::IgnoreAdd { .. }
+        | ClientMsg::IgnoreRemove { .. } => social::FLOOD_COST_CHAT,
+        ClientMsg::RaidInvite { .. } => 2,
+        _ => 1,
+    }
+}
 
 #[derive(Default)]
 struct State {
@@ -34,8 +87,13 @@ struct State {
     lists: HashMap<u64, SocialList>,
     /// conn id -> character name, for every connection we have set up.
     seen: HashMap<u64, String>,
-    /// conn id -> (act, region key) of the last banner sent.
-    region: HashMap<u64, (Act, String)>,
+    /// conn id -> (act, region key, position) at the last banner check.
+    region: HashMap<u64, (Act, String, (f32, f32))>,
+    /// Per-connection message budget (review fix: chat fan-out and DB
+    /// writes were unthrottled).
+    flood: FloodGate,
+    /// Latest sim tick seen by `tick` (the flood gate's clock).
+    now: u64,
     /// lowercase character name -> rested XP banked at this login.
     pending_rest: HashMap<String, u32>,
 }
@@ -205,6 +263,7 @@ pub(crate) fn tick(ticks: u64, world: &mut World, conns: &mut HashMap<u64, Conn>
     }
     let mut guard = state();
     let st = &mut *guard;
+    st.now = ticks;
 
     // New logins.
     let fresh: Vec<u64> = conns.iter().filter(|(id, c)| c.logged_in && !st.seen.contains_key(id)).map(|(id, _)| *id).collect();
@@ -219,6 +278,7 @@ pub(crate) fn tick(ticks: u64, world: &mut World, conns: &mut HashMap<u64, Conn>
         st.lists.remove(&id);
         st.channels.drop_member(id);
         st.region.remove(&id);
+        st.flood.forget(id);
         st.drop_from_raid(id, world, conns);
         for (other, l) in &st.lists {
             if l.is_friend(&name) {
@@ -261,16 +321,26 @@ pub(crate) fn tick(ticks: u64, world: &mut World, conns: &mut HashMap<u64, Conn>
     for (id, c) in conns.iter() {
         let (true, Some(ent)) = (c.logged_in, c.entity) else { continue };
         let Some(pos) = world.player_pos(c.act, ent) else { continue };
-        let faction = world.sheet_of(c.act, ent).and_then(|s| s.faction.clone());
-        let r = travel::region_at(c.act, pos, faction.as_deref());
-        let last = st.region.get(id);
-        if last.is_some_and(|(a, k)| *a == c.act && *k == r.key) {
+        let at = (pos.x, pos.y);
+        // Review fix: a character who has not moved cannot have changed
+        // region, so skip the lookup (230 anchors + three Strings per player,
+        // four times a second) for everyone standing still.
+        if st.region.get(id).is_some_and(|(a, _, p)| *a == c.act && *p == at) {
             continue;
         }
+        let faction = world.sheet_of(c.act, ent).and_then(|s| s.faction.as_deref());
+        let r = travel::region_at(c.act, pos, faction);
+        if let Some((a, k, p)) = st.region.get_mut(id) {
+            if *a == c.act && *k == r.key {
+                *p = at;
+                continue;
+            }
+        }
+        let last = st.region.get(id);
         // Stepping back out of a POI into the same act's open country is
         // not an arrival; everything else is.
-        let quiet = r.key.starts_with("act:") && last.is_some_and(|(a, _)| *a == c.act);
-        st.region.insert(*id, (c.act, r.key.clone()));
+        let quiet = r.key.starts_with("act:") && last.is_some_and(|(a, _, _)| *a == c.act);
+        st.region.insert(*id, (c.act, r.key.clone(), at));
         if !quiet {
             c.send(ServerMsg::ZoneBanner {
                 act: c.act,
@@ -288,8 +358,14 @@ pub(crate) fn tick(ticks: u64, world: &mut World, conns: &mut HashMap<u64, Conn>
 /// arm of `handle_client_msg`.
 pub(crate) fn handle_client(id: u64, msg: ClientMsg, world: &mut World, conns: &mut HashMap<u64, Conn>, db: &Db) {
     let Some((act, ent)) = crate::conn_entity(conns, id) else { return };
+    let msg = clip_msg(msg);
     let mut guard = state();
     let st = &mut *guard;
+    match st.flood.charge(id, st.now, flood_cost(&msg)) {
+        Flood::Pass => {}
+        Flood::Warn => return crate::notice(conns, id, "You are sending messages too quickly. Wait a few seconds.".into()),
+        Flood::Drop => return,
+    }
     st.ensure(id, conns, db);
     let me = name_of(conns, id);
     let say = |conns: &HashMap<u64, Conn>, r: Result<String, String>| match r {
@@ -518,7 +594,9 @@ pub(crate) fn handle_client(id: u64, msg: ClientMsg, world: &mut World, conns: &
 
         // ── B07 emotes & who ────────────────────────────────────────────
         ClientMsg::Emote { emote, target } => {
-            let target: Option<String> = target.map(|t| t.trim().chars().take(24).collect());
+            // Review fix: only name-shaped targets (no control characters,
+            // brackets or line breaks in text shown to other players).
+            let target: Option<String> = target.as_deref().and_then(social::clean_name);
             let Some(text) = social::emote_text(&emote, &me, target.as_deref()) else {
                 let known: Vec<&str> = social::EMOTES.iter().map(|(e, _, _)| *e).collect();
                 return crate::notice(conns, id, format!("Unknown emote. Try: {}.", known.join(", ")));
@@ -674,6 +752,12 @@ mod tests {
             self.ticks += TICK_EVERY;
         }
 
+        /// Let a whole flood window go by (refills every message budget).
+        fn pass_window(&mut self) {
+            self.ticks += social::FLOOD_WINDOW_TICKS;
+            self.tick();
+        }
+
         /// Everything queued for a connection since the last drain.
         fn drain(&mut self, id: u64) -> Vec<ServerMsg> {
             let mut out = Vec::new();
@@ -745,7 +829,10 @@ mod tests {
         let msgs = r.drain(1);
         let (friends, ignored) = msgs.iter().find_map(|m| if let ServerMsg::Friends { friends, ignored } = m { Some((friends.clone(), ignored.clone())) } else { None }).unwrap();
         assert_eq!(friends.len(), 1);
-        assert!(!friends[0].online && friends[0].name == "abel" || friends[0].name == "Abel");
+        // Review fix: this used to read `!online && a || b`, which passed for
+        // an online friend named "Abel".
+        assert!(!friends[0].online, "Abel logged out, so he must show offline");
+        assert!(friends[0].name.eq_ignore_ascii_case("abel"));
         assert_eq!(ignored, vec!["Lamech"]);
         // Friend logs back in: Cain is told.
         r.login(4, "Abel", Act::Flood, Vec2::ZERO);
@@ -935,10 +1022,14 @@ mod tests {
         r.send(1, ClientMsg::RaidCreate);
         let group = r.conns[&1].party.unwrap();
         for id in 2..=40u64 {
+            if id % 10 == 0 {
+                r.pass_window(); // 39 invites are more than one flood window allows
+            }
             r.send(1, ClientMsg::RaidInvite { player: format!("P{id}") });
             r.send(id, ClientMsg::RaidAccept);
             assert_eq!(r.conns[&id].party, Some(group), "P{id} seated");
         }
+        r.pass_window();
         r.drain(1);
         r.send(1, ClientMsg::RaidInvite { player: "P41".into() });
         assert!(r.notices(1).iter().any(|t| t.contains("full")));
@@ -1119,5 +1210,108 @@ mod tests {
         r.login(1, "Sleeper", Act::Eden, Vec2::ZERO);
         r.tick();
         assert!(r.notices(1).iter().any(|t| t.contains("You feel rested (+400")));
+    }
+
+    // ── Review regression tests ─────────────────────────────────────────
+
+    #[test]
+    fn chat_flood_is_throttled_per_connection_and_refills() {
+        let _g = serial();
+        let mut r = Rig::new();
+        r.login(1, "Cain", Act::Eden, Vec2::ZERO);
+        r.login(2, "Abel", Act::Eden, Vec2::new(30.0, 0.0));
+        r.tick();
+        r.drain(1);
+        r.drain(2);
+        let allowed = (social::FLOOD_BUDGET / social::FLOOD_COST_CHAT) as usize;
+        for i in 0..200 {
+            r.send(1, ClientMsg::ChannelSay { channel: "general".into(), text: format!("spam {i}") });
+        }
+        assert_eq!(channel_lines(&r.drain(2)).len(), allowed, "a spammer reaches listeners only up to the budget");
+        let mine = r.drain(1);
+        assert_eq!(channel_lines(&mine).len(), allowed);
+        let warned = mine.iter().filter(|m| matches!(m, ServerMsg::Notice { text } if text.contains("too quickly"))).count();
+        assert_eq!(warned, 1, "one warning per window, not one per dropped line");
+        // Every other chat-shaped path shares the budget, and so do DB writes.
+        r.send(1, ClientMsg::Whisper { to: "Abel".into(), text: "psst".into() });
+        r.send(1, ClientMsg::Emote { emote: "wave".into(), target: None });
+        r.send(1, ClientMsg::FriendAdd { player: "Abel".into() });
+        assert!(r.drain(2).is_empty());
+        assert_eq!(r.db.social_load("Cain").unwrap(), (vec![], vec![]), "a throttled friend add writes nothing");
+        // The other connection is unaffected, and the window refills.
+        r.send(2, ClientMsg::ChannelSay { channel: "general".into(), text: "quiet please".into() });
+        assert_eq!(channel_lines(&r.drain(1)).len(), 1);
+        r.drain(2);
+        r.pass_window();
+        r.send(1, ClientMsg::ChannelSay { channel: "general".into(), text: "sorry".into() });
+        assert_eq!(channel_lines(&r.drain(2)).len(), 1);
+    }
+
+    #[test]
+    fn oversized_and_hostile_fields_are_clipped_not_echoed() {
+        let _g = serial();
+        let mut r = Rig::new();
+        r.login(1, "Cain", Act::Eden, Vec2::ZERO);
+        r.login(2, "Abel", Act::Eden, Vec2::new(30.0, 0.0));
+        r.tick();
+        r.drain(1);
+        r.drain(2);
+        let big = "A".repeat(2_000_000);
+        for m in [
+            ClientMsg::FriendAdd { player: big.clone() },
+            ClientMsg::IgnoreAdd { player: big.clone() },
+            ClientMsg::RaidInvite { player: big.clone() },
+            ClientMsg::Whisper { to: big.clone(), text: "hi".into() },
+            ClientMsg::QuestAccept { id: big.clone() },
+            ClientMsg::QuestAbandon { id: big.clone() },
+            ClientMsg::FlightTake { node: big.clone() },
+            ClientMsg::ChannelJoin { channel: big.clone() },
+            ClientMsg::Who { filter: Some(big.clone()) },
+        ] {
+            r.send(1, m);
+        }
+        let out = r.drain(1);
+        assert!(out.len() >= 8, "every request is answered: {}", out.len());
+        for m in out.iter().filter(|m| !matches!(m, ServerMsg::Stats { .. })) {
+            let n = serde_json::to_string(m).unwrap().len();
+            assert!(n < 400, "a reply echoed {n} bytes of hostile input");
+        }
+        assert_eq!(r.db.social_load("Cain").unwrap(), (vec![], vec![]));
+        // Chat bodies are capped by clean_chat; the channel name by clip.
+        r.pass_window();
+        r.send(1, ClientMsg::ChannelSay { channel: "general".into(), text: big.clone() });
+        let got = channel_lines(&r.drain(2));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].2.chars().count(), social::CHAT_MAX);
+        // An emote target cannot inject a second line or a fake system tag.
+        r.send(1, ClientMsg::Emote { emote: "wave".into(), target: Some("Abel.\n[System] Abel wins".into()) });
+        let got = r.drain(2);
+        assert!(matches!(&got[..], [ServerMsg::Emote { text, .. }] if !text.contains('\n') && !text.contains('[')), "{got:?}");
+        r.drain(1);
+        // Messages from a connection that is not logged in are ignored outright.
+        r.conns.get_mut(&2).unwrap().logged_in = false;
+        r.send(2, ClientMsg::ChannelSay { channel: "general".into(), text: "ghost".into() });
+        r.send(2, ClientMsg::Repair);
+        assert!(r.drain(1).is_empty() && r.drain(2).is_empty());
+    }
+
+    #[test]
+    fn standing_still_costs_no_banner_work_and_moving_still_banners() {
+        let _g = serial();
+        let mut r = Rig::new();
+        r.login(1, "Irad", Act::Eden, Vec2::ZERO);
+        r.tick();
+        assert_eq!(r.drain(1).iter().filter(|m| matches!(m, ServerMsg::ZoneBanner { .. })).count(), 1);
+        assert_eq!(state().region.get(&1).map(|(_, k, p)| (k.clone(), *p)), Some(("inn:eden".to_string(), (0.0, 0.0))));
+        // Moving inside the same region updates the cached position, silently.
+        let ent = r.conns[&1].entity.unwrap();
+        r.world.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&ent).unwrap().pos = Vec2::new(40.0, 0.0);
+        r.tick();
+        assert!(r.drain(1).is_empty());
+        assert_eq!(state().region.get(&1).map(|(_, _, p)| *p), Some((40.0, 0.0)));
+        // Leaving for a capital still banners.
+        r.world.zones.get_mut(&Act::Eden).unwrap().entities.get_mut(&ent).unwrap().pos = Vec2::new(2400.0, 2400.0);
+        r.tick();
+        assert_eq!(r.drain(1).iter().filter(|m| matches!(m, ServerMsg::ZoneBanner { pvp: true, .. })).count(), 1);
     }
 }

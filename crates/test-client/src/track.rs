@@ -8,8 +8,13 @@
 //!
 //! Usage: antediluvia-track [ws-url] [name-suffix]
 //!   default url: ws://127.0.0.1:8797
+//!
+//! With ANTEDILUVIA_TRACK_DEV=1 (and the server started with
+//! ANTEDILUVIA_DEV_ACCOUNTS=track_Tubal<suffix>) it goes on to use dev
+//! commands to open the story gate, then accepts a generated board quest
+//! and takes a paid flight, printing `TRACK-E2E-DEV-OK`.
 
-use antediluvia_protocol::{ClientMsg, ServerMsg, PROTOCOL_VERSION};
+use antediluvia_protocol::{ClientMsg, DevCmd, ServerMsg, PROTOCOL_VERSION};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -52,6 +57,56 @@ async fn login(url: &str, name: &str) -> Result<Ws, Box<dyn std::error::Error>> 
     expect(&mut ws, "welcome", |m| matches!(m, ServerMsg::Welcome { .. })).await?;
     expect(&mut ws, "zone banner", |m| matches!(m, ServerMsg::ZoneBanner { .. })).await?;
     Ok(ws)
+}
+
+async fn dev(ws: &mut Ws, cmd: DevCmd) -> Result<(), Box<dyn std::error::Error>> {
+    send(ws, ClientMsg::Dev { cmd }).await?;
+    expect(ws, "dev command", |m| matches!(m, ServerMsg::Notice { text } if text.starts_with("[dev]") || text.contains("done"))).await?;
+    Ok(())
+}
+
+/// Review addition: a generated quest accept and a paid flight over the wire.
+async fn dev_leg(a: &mut Ws) -> Result<(), Box<dyn std::error::Error>> {
+    dev(a, DevCmd::Godmode).await?;
+    dev(a, DevCmd::SetLevel { level: 5 }).await?;
+    dev(a, DevCmd::QuestComplete { id: "the_flaming_sword".into() }).await?;
+    // The inn's flight master lists the routes and becomes known.
+    dev(a, DevCmd::Teleport { x: 0.0, y: 0.0 }).await?;
+    send(a, ClientMsg::FlightList).await?;
+    let ServerMsg::FlightPaths { nodes, .. } =
+        expect(a, "flight paths at the inn", |m| matches!(m, ServerMsg::FlightPaths { here: Some(h), .. } if h == "inn_eden")).await?
+    else { unreachable!() };
+    let node = nodes.iter().find(|n| n.id.starts_with("fp_") && n.act == antediluvia_protocol::Act::Eden).ok_or("no Eden landmark node")?.clone();
+    if node.known || node.cost == 0 {
+        return Err("a fresh character must not know the landmark, and the fare must be quoted".into());
+    }
+    send(a, ClientMsg::FlightTake { node: node.id.clone() }).await?;
+    expect(a, "flight refused before discovery", |m| matches!(m, ServerMsg::Notice { text } if text.contains("not discovered"))).await?;
+    // Walk there (dev teleport): discovery, then the board at the landmark.
+    dev(a, DevCmd::Teleport { x: node.x, y: node.y }).await?;
+    expect(a, "landmark discovered", |m| matches!(m, ServerMsg::Notice { text } if text.starts_with("Discovered:"))).await?;
+    send(a, ClientMsg::QuestBoard).await?;
+    let ServerMsg::QuestBoard { quests, .. } =
+        expect(a, "quest board", |m| matches!(m, ServerMsg::QuestBoard { quests, .. } if quests.len() == 4)).await?
+    else { unreachable!() };
+    let q = quests.iter().find(|q| q.status == "available").ok_or("no available board quest")?.clone();
+    send(a, ClientMsg::QuestAccept { id: q.id.clone() }).await?;
+    let ServerMsg::Stats { character } =
+        expect(a, "generated quest accepted", |m| matches!(m, ServerMsg::Stats { character } if character.quests.contains_key(&q.id))).await?
+    else { unreachable!() };
+    let gold = character.gold;
+    if gold < node.cost {
+        return Err(format!("only {gold} gold for a {} gold fare", node.cost).into());
+    }
+    // Back at the inn, pay for the flight out.
+    dev(a, DevCmd::Teleport { x: 0.0, y: 0.0 }).await?;
+    send(a, ClientMsg::FlightTake { node: node.id.clone() }).await?;
+    expect(a, "flight taken", |m| matches!(m, ServerMsg::Notice { text } if text.starts_with("You fly to"))).await?;
+    let want = gold - node.cost;
+    expect(a, "fare charged once", |m| matches!(m, ServerMsg::Stats { character } if character.gold == want && character.quests.contains_key(&q.id))).await?;
+    send(a, ClientMsg::QuestBoard).await?;
+    expect(a, "landed at the landmark board", |m| matches!(m, ServerMsg::QuestBoard { quests, .. } if quests.iter().any(|b| b.id == q.id && b.status == "active"))).await?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -100,6 +155,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     send(&mut a, ClientMsg::Repair).await?;
     expect(&mut a, "repair needs the inn", |m| matches!(m, ServerMsg::Notice { text } if text.contains("only at the inn"))).await?;
     println!("TRACK-E2E-OK");
+    if std::env::var("ANTEDILUVIA_TRACK_DEV").is_ok() {
+        dev_leg(&mut a).await?;
+        println!("TRACK-E2E-DEV-OK");
+    }
     let _ = a.close(None).await;
     let _ = b.close(None).await;
     Ok(())

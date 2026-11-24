@@ -25,6 +25,14 @@ pub const FRIEND_CAP: usize = 100;
 pub const IGNORE_CAP: usize = 100;
 pub const WHO_CAP: usize = 50;
 pub const CHAT_MAX: usize = 240;
+/// Longest `/who` filter that is looked at.
+pub const WHO_FILTER_MAX: usize = 32;
+/// Flood control: each connection may spend `FLOOD_BUDGET` points per
+/// `FLOOD_WINDOW_TICKS` sim ticks (5 s at 20 Hz). A chat line costs
+/// `FLOOD_COST_CHAT`, so that is 12 lines per window.
+pub const FLOOD_WINDOW_TICKS: u64 = 100;
+pub const FLOOD_BUDGET: u32 = 48;
+pub const FLOOD_COST_CHAT: u32 = 4;
 
 pub fn is_raid(group: u64) -> bool {
     group & RAID_BIT != 0
@@ -95,7 +103,7 @@ impl RaidBook {
     /// Leader invites `to`. The seat is only taken on accept.
     pub fn invite(&mut self, from: u64, to: u64) -> Result<u64, String> {
         let group = self.raid_of(from).ok_or("You are not in a raid. Create one first.")?;
-        let raid = &self.raids[&group];
+        let raid = self.raids.get(&group).ok_or("That raid has disbanded.")?;
         if raid.leader != from {
             return Err("Only the raid leader can invite.".into());
         }
@@ -162,7 +170,7 @@ impl RaidBook {
     /// Leader removes a member.
     pub fn kick(&mut self, leader: u64, who: u64) -> Result<Departure, String> {
         let group = self.raid_of(leader).ok_or("You are not in a raid.")?;
-        if self.raids[&group].leader != leader {
+        if self.raids.get(&group).map(|r| r.leader) != Some(leader) {
             return Err("Only the raid leader can remove members.".into());
         }
         if leader == who {
@@ -384,7 +392,11 @@ pub fn who_matches(e: &WhoEntry, filter: &str) -> bool {
 }
 
 /// Filter, sort by name, cap. Returns (rows, total matches before the cap).
+/// The filter is clipped to `WHO_FILTER_MAX` characters first: it arrives
+/// straight off the wire and is re-examined for every online character.
 pub fn who_list(all: Vec<WhoEntry>, filter: &str) -> (Vec<WhoEntry>, u32) {
+    let filter: String = filter.trim().chars().take(WHO_FILTER_MAX).collect();
+    let filter = filter.as_str();
     let mut hits: Vec<WhoEntry> = all.into_iter().filter(|e| who_matches(e, filter)).collect();
     hits.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let total = hits.len() as u32;
@@ -645,5 +657,104 @@ mod tests {
         assert_eq!(clean_chat("  hello\u{7} world \n").as_deref(), Some("hello world"));
         assert!(clean_chat(" \t\n").is_none());
         assert_eq!(clean_chat(&"x".repeat(1000)).unwrap().len(), CHAT_MAX);
+    }
+}
+
+// ─── Review additions (beta-server-track review) ─────────────────────────────
+
+/// A character-name-shaped string from untrusted input (emote targets):
+/// letters, digits, space, apostrophe and hyphen only, at most 24 characters.
+/// Anything else is dropped so a target can never smuggle control characters
+/// or a fake system line into the text other players are shown.
+pub fn clean_name(text: &str) -> Option<String> {
+    let t: String = text.chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '\'' | '-')).take(24).collect();
+    let t = t.trim().to_string();
+    (!t.is_empty()).then_some(t)
+}
+
+/// Outcome of charging a message against a connection's flood budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flood {
+    /// Within budget: handle the message.
+    Pass,
+    /// Over budget, first time this window: drop it and tell the sender.
+    Warn,
+    /// Over budget and already warned: drop it silently.
+    Drop,
+}
+
+/// Per-connection message budget. Without it one client could make the
+/// server fan a chat line out to every listener as fast as it can type
+/// frames (O(listeners) work per message), or queue a database write per
+/// friend-list toggle.
+#[derive(Default)]
+pub struct FloodGate {
+    /// who -> (window start tick, points spent, warned).
+    spent: HashMap<u64, (u64, u32, bool)>,
+}
+
+impl FloodGate {
+    pub fn charge(&mut self, who: u64, now_tick: u64, cost: u32) -> Flood {
+        let e = self.spent.entry(who).or_insert((now_tick, 0, false));
+        if now_tick < e.0 || now_tick - e.0 >= FLOOD_WINDOW_TICKS {
+            *e = (now_tick, 0, false);
+        }
+        if e.1.saturating_add(cost) > FLOOD_BUDGET {
+            let first = !e.2;
+            e.2 = true;
+            return if first { Flood::Warn } else { Flood::Drop };
+        }
+        e.1 += cost;
+        Flood::Pass
+    }
+
+    pub fn forget(&mut self, who: u64) {
+        self.spent.remove(&who);
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use antediluvia_protocol::Act;
+
+    #[test]
+    fn flood_gate_caps_a_window_and_refills() {
+        let mut g = FloodGate::default();
+        let lines = FLOOD_BUDGET / FLOOD_COST_CHAT;
+        for _ in 0..lines {
+            assert_eq!(g.charge(1, 10, FLOOD_COST_CHAT), Flood::Pass);
+        }
+        assert_eq!(g.charge(1, 10, FLOOD_COST_CHAT), Flood::Warn, "the first refusal is announced");
+        assert_eq!(g.charge(1, 50, FLOOD_COST_CHAT), Flood::Drop, "later ones are silent");
+        assert_eq!(g.charge(2, 50, FLOOD_COST_CHAT), Flood::Pass, "budgets are per connection");
+        assert_eq!(g.charge(1, 10 + FLOOD_WINDOW_TICKS, FLOOD_COST_CHAT), Flood::Pass, "a new window refills");
+        // A cost larger than the whole budget can never pass, and cannot overflow.
+        assert_eq!(g.charge(3, 0, u32::MAX), Flood::Warn);
+        g.forget(1);
+        assert_eq!(g.charge(1, 10 + FLOOD_WINDOW_TICKS, FLOOD_BUDGET), Flood::Pass);
+    }
+
+    #[test]
+    fn hostile_strings_are_clipped_and_cleaned() {
+        // A megabyte-long filter is clipped before it is matched per player.
+        let all: Vec<WhoEntry> = (0..200)
+            .map(|i| WhoEntry { name: format!("P{i}"), level: 1, class: None, act: Act::Eden, guild: None })
+            .collect();
+        let huge = "p".repeat(1_000_000);
+        let (rows, total) = who_list(all.clone(), &huge);
+        assert!(rows.is_empty() && total == 0);
+        let (rows, total) = who_list(all, &format!("  P19{}", " ".repeat(100_000)));
+        assert_eq!((total, rows.len()), (11, 11), "P19 and P190..P199");
+        // Emote targets cannot carry line breaks or bracketed fake notices.
+        assert_eq!(clean_name("Abel\n[System] You win"), Some("AbelSystem You win".into()));
+        assert_eq!(clean_name(" \u{7}\n "), None);
+        assert_eq!(clean_name("Tubal-Cain's kin and many many more words").unwrap().chars().count(), 24);
+        // A raid book whose index and table disagree refuses instead of panicking.
+        let mut b = RaidBook::default();
+        let g = b.create(1).unwrap();
+        b.raids.remove(&g);
+        assert!(b.invite(1, 2).is_err());
+        assert!(b.kick(1, 2).is_err());
     }
 }
