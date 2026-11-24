@@ -92,7 +92,8 @@ fn pvp_is_opt_in_and_needs_both_sides_flagged() {
     // Opting back out stops it again.
     assert_eq!(w.toggle_pvp(Act::Eden, b), Some(false));
     swing(&mut w, Act::Eden, a, 40);
-    assert_eq!(hp(&w, Act::Eden, b), hurt, "toggle off restores immunity");
+    // (>=, not ==: out-of-range health now regenerates between blows.)
+    assert!(hp(&w, Act::Eden, b) >= hurt, "toggle off restores immunity");
     // Toggling a player that does not exist is a no-op.
     assert_eq!(w.toggle_pvp(Act::Eden, 999_999), None);
 }
