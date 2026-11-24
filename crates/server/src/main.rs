@@ -266,6 +266,14 @@ fn handle_client_msg(
             let mut newborn = false;
             let mut sheet = match db.load_by_apple_id(&apple_id) {
                 Ok(Some(mut s)) => {
+                    // Characters saved before the look field keep their old
+                    // skin and hair picks; a stored look is re-clamped in case
+                    // the option tables shrank.
+                    s.look = if s.look == 0 && (s.appearance[1] != 0 || s.appearance[2] != 0) {
+                        antediluvia_protocol::Look::from_legacy(s.appearance).pack()
+                    } else {
+                        antediluvia_protocol::Look::sanitize(s.look)
+                    };
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
                     if let Some(last) = s.last_logout {
                         let diff = now.saturating_sub(last);
@@ -280,20 +288,34 @@ fn handle_client_msg(
                     // No character on this account: the builder must create
                     // one (C13). The legacy character_name path still works
                     // for headless test tooling.
-                    let (name, class, faction, appearance) = match (create, character_name) {
+                    let (name, class, faction, appearance, look) = match (create, character_name) {
                         (Some(c), _) => {
                             if let Some(f) = &c.faction {
                                 if !antediluvia_sim::world::FACTIONS.contains(&f.as_str()) {
                                     return reject(conns, "unknown lineage");
                                 }
                             }
-                            (c.name, Some(c.class), c.faction, [
+                            // Builder names follow the shared name rules and
+                            // are stored in their normalised form.
+                            let name = match antediluvia_sim::names::validate_name(&c.name) {
+                                Ok(n) => n,
+                                Err(why) => return reject(conns, why),
+                            };
+                            // The look is clamped here, whatever the client sent.
+                            (name, Some(c.class), c.faction, [
                                 c.appearance[0].min(3),
                                 c.appearance[1].min(15), // 16 skins (Alpha-2 A3)
                                 c.appearance[2].min(11), // 12 hair colors/styles
-                            ])
+                            ], antediluvia_protocol::Look::sanitize(c.look))
                         }
-                        (None, Some(n)) => (n, None, None, [0, 0, 0]),
+                        // Characters made without the builder (bots, test
+                        // tooling) get a stable look from their name, so a
+                        // crowd of them is not a crowd of clones.
+                        (None, Some(n)) => {
+                            let seed = antediluvia_protocol::Look::seed_for_name(&n);
+                            let look = antediluvia_protocol::Look::random(seed).pack();
+                            (n, None, None, [(seed % 4) as u32, 0, 0], look)
+                        }
                         (None, None) => {
                             return reject(conns, "no character on this account - run the character builder");
                         }
@@ -306,7 +328,8 @@ fn handle_client_msg(
                         return reject(conns, "character name already taken");
                     }
                     newborn = true;
-                    let s = antediluvia_sim::world::new_character_with(&name, class, faction, appearance);
+                    let mut s = antediluvia_sim::world::new_character_with(&name, class, faction, appearance);
+                    s.look = look;
                     if let Err(e) = db.save(&s, Some(&apple_id)) {
                         tracing::error!("db save new: {e}");
                         return reject(conns, "server error creating character");

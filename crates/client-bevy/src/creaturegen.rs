@@ -340,6 +340,7 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
     }
 
     // ── Head ─────────────────────────────────────────────────────────────
+    let (head_at, head_r);
     {
         let mut b = Builder::default();
         let hr = body_r * (0.62 + h01(seed ^ 0x21) * 0.45);
@@ -432,6 +433,8 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             xf: Transform::from_xyz(0.0, head_y, head_z),
             mesh: b.finish(),
         });
+        head_at = Vec3::new(0.0, head_y, head_z);
+        head_r = hr;
         // Neck: the head used to be placed a neck-length away with nothing
         // built in between, so long-necked seeds had a visibly floating head.
         // A tapering bead chain from the front of the torso to the skull.
@@ -565,6 +568,14 @@ pub fn creature_parts(seed: u64, plan: u32) -> Vec<Part> {
             });
         }
     }
+
+    // ── Grafts: horns, sails, plates and the rest (see `beastgrafts`) ─────
+    parts.extend(crate::beastgrafts::graft_parts(
+        seed,
+        plan,
+        &crate::beastgrafts::Dims { body_len, body_r, hip_y, head_at, head_r },
+        c,
+    ));
 
     parts
 }

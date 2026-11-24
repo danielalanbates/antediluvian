@@ -25,6 +25,10 @@ mod creaturegen;
 mod dressing;
 mod shots;
 mod face;
+mod formations;
+mod beastgrafts;
+mod mobmodels;
+mod look;
 mod equipment;
 mod grass;
 // Embedded single-player. Native-only: it owns an OS thread and paces itself
@@ -57,9 +61,8 @@ use antediluvia_protocol::{
 use terrain::{build_terrain_mesh, terrain_height};
 use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
 use variety::{
-    apply_tints, attach_hair_style, attach_species_parts, formation_color, formation_mesh,
-    hair_hue, skin_hue, species_parts_seed, species_stretch, species_variation, HairStyle,
-    SpeciesParts, TintCache, TintRig, HAIR_CHOICES, SKIN_CHOICES,
+    apply_tints, attach_species_parts, formation_color, species_parts_seed, species_stretch,
+    species_variation, SpeciesParts, TintCache, TintRig,
 };
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
@@ -198,10 +201,18 @@ fn main() {
     // With ANTEDILUVIA_BEASTSHEET_OUT=<png> it renders off-screen (no window,
     // no focus change) and writes the image — safe to run while someone is
     // using the machine.
-    let offscreen = std::env::var("ANTEDILUVIA_BEASTSHEET_OUT")
-        .map(|o| (o, false))
-        .or_else(|_| std::env::var("ANTEDILUVIA_CHARSHEET_OUT").map(|o| (o, true)));
-    if let Ok((out, chars)) = offscreen {
+    // The same off-screen path serves every review sheet: generated beasts,
+    // character looks, procedural props, landforms and real bestiary species.
+    let offscreen = [
+        ("ANTEDILUVIA_BEASTSHEET_OUT", 0u8),
+        ("ANTEDILUVIA_CHARSHEET_OUT", 1),
+        ("ANTEDILUVIA_PROPSHEET_OUT", 2),
+        ("ANTEDILUVIA_LANDSHEET_OUT", 3),
+        ("ANTEDILUVIA_SPECIESSHEET_OUT", 4),
+    ]
+    .iter()
+    .find_map(|(k, kind)| std::env::var(k).ok().map(|o| (o, *kind)));
+    if let Some((out, sheet)) = offscreen {
         use bevy::render::camera::RenderTarget;
         use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
         use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -220,7 +231,10 @@ fn main() {
             .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
             .insert_resource(TintCache::default())
             .insert_resource(face::RestyledFaces::default())
-            .add_systems(Update, (apply_tints, attach_hair_style, face::restyle_faces))
+            .insert_resource(look::apply::LookAssets::default())
+            .add_systems(PreStartup, init_equip_assets)
+            .add_systems(PreUpdate, (apply_loadouts, look::apply::apply_looks))
+            .add_systems(Update, (apply_tints, face::restyle_faces))
             .add_systems(
                 Startup,
                 move |mut c: Commands,
@@ -228,10 +242,12 @@ fn main() {
                  mut mat: ResMut<Assets<StandardMaterial>>,
                  mut images: ResMut<Assets<Image>>,
                  server: Res<AssetServer>| {
-                    if chars {
-                        spawn_character_sheet(&mut c, &mut m, &mut mat, &server);
-                    } else {
-                        creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                    match sheet {
+                        1 => spawn_character_sheet(&mut c, &mut m, &mut mat, &server),
+                        2 => propgen::spawn_contact_sheet(&mut c, &mut m, &mut mat),
+                        3 => formations::spawn_land_sheet(&mut c, &mut m, &mut mat),
+                        4 => mobmodels::spawn_species_sheet(&mut c, &mut m, &mut mat),
+                        _ => creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat),
                     }
                     let size = Extent3d { width: 1600, height: 900, ..default() };
                     let mut img = Image::new_fill(
@@ -397,6 +413,7 @@ fn main() {
         .insert_resource(TintCache::default())
         .insert_resource(creaturegen::ProcBodyCache::default())
         .insert_resource(face::RestyledFaces::default())
+        .insert_resource(look::apply::LookAssets::default())
         .add_systems(Update, (face::restyle_faces, update_name_labels, grass::update_far_grass))
         .insert_resource(grass::FarGrass::default())
         // Systems that graft children onto (or insert into) rig entities found
@@ -406,7 +423,7 @@ fn main() {
         // before Update runs, so they only ever touch live entities.
         .add_systems(
             PreUpdate,
-            (apply_loadouts, apply_tints, attach_species_parts, creaturegen::build_proc_bodies, attach_hair_style),
+            (apply_loadouts, apply_tints, attach_species_parts, creaturegen::build_proc_bodies, look::apply::apply_looks),
         )
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
@@ -434,7 +451,7 @@ fn main() {
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
-                builder_screen,
+                look::builder::builder_screen.after(orbit_camera),
                 dev_console,
                 dev_autocmd,
                 menu::menu_toggle,
@@ -599,28 +616,7 @@ pub struct Session {
     pub cast: Option<(String, f32, f32)>,
 }
 
-/// Character-builder working state (C13).
-pub struct Builder {
-    pub name: String,
-    pub class: Class,
-    pub faction: Option<String>,
-    pub appearance: [u32; 3],
-    pub submitted: bool,
-    pub error: Option<String>,
-}
-
-impl Default for Builder {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            class: Class::Warrior,
-            faction: None,
-            appearance: [0, 0, 0],
-            submitted: false,
-            error: None,
-        }
-    }
-}
+pub use look::builder::Builder;
 
 impl Default for Session {
     fn default() -> Self {
@@ -707,13 +703,6 @@ fn spawn_character_sheet(
     materials: &mut Assets<StandardMaterial>,
     server: &AssetServer,
 ) {
-    const BODIES: [&str; 5] = [
-        "models/characters/Knight.glb",
-        "models/characters/Barbarian.glb",
-        "models/characters/Rogue.glb",
-        "models/characters/Mage.glb",
-        "models/characters/Rogue_Hooded.glb",
-    ];
     let envf = |k: &str, d: f32| -> f32 {
         std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
     };
@@ -736,21 +725,10 @@ fn spawn_character_sheet(
             ));
         }
     }
-    for (i, f) in BODIES.iter().enumerate() {
-        if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_ok() {
-            break;
-        }
-        let mut ec = commands.spawn((
-            SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(*f))),
-            Transform::from_xyz((i as f32 - 2.0) * spacing, 0.0, 0.0),
-        ));
-        if std::env::var("ANTEDILUVIA_CHARSHEET_RAW").is_err() {
-            let (hue, light) = skin_hue(i as u32 * 3);
-            ec.insert((
-                TintRig { hue, light, hair_hue: Some(hair_hue(i as u32)) },
-                HairStyle { style: i as u32, hue: hair_hue(i as u32) },
-            ));
-        }
+    if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_err() {
+        // Player looks: the same rigs, colours, faces and grafts as in game.
+        look::spawn_look_sheet(commands, meshes, materials, server);
+        return;
     }
     let ground = meshes.add(Plane3d::default().mesh().size(40.0, 40.0));
     let gmat = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.33, 0.26), ..default() });
@@ -759,14 +737,14 @@ fn spawn_character_sheet(
         DirectionalLight { illuminance: 14_000.0, shadows_enabled: true, ..default() },
         Transform::from_xyz(4.0, 8.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    let (h, d, look) = (
+    let (h, d, look_y) = (
         envf("ANTEDILUVIA_CHARSHEET_CAMH", 2.0),
         envf("ANTEDILUVIA_CHARSHEET_CAMD", 5.5),
         envf("ANTEDILUVIA_CHARSHEET_LOOKY", 1.5),
     );
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, h, d).looking_at(Vec3::new(0.0, look, 0.0), Vec3::Y),
+        Transform::from_xyz(0.0, h, d).looking_at(Vec3::new(0.0, look_y, 0.0), Vec3::Y),
     ));
 }
 
@@ -1444,104 +1422,53 @@ fn spawn_act_scenery(
         commands.entity(e).insert((Terrain, DECOR_RANGE));
     }
 
-    // Procedural formations (Alpha-2 A1): 1,200 per act across eight
-    // families, every one a unique deformed mesh — thousands of distinct
-    // terrain models world-wide. A4 finding: every third site clusters near
-    // a POI so the variety is visible where players actually walk — but
-    // POI_CLEARANCE below keeps them off the site itself.
-    for i in 0..1200u64 {
-        let seed = act_idx * 1_000_003 + i * 7919;
-        let (x, z) = if i % 3 == 0 && !poi_sites.is_empty() {
-            let (px, pz) = poi_sites[(seed / 3 % poi_sites.len() as u64) as usize];
-            (
-                px + (hash01(seed * 4 + 11) - 0.5) * 900.0,
-                pz + (hash01(seed * 4 + 12) - 0.5) * 900.0,
-            )
-        } else {
-            (
-                (hash01(seed * 4 + 11) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-                (hash01(seed * 4 + 12) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-            )
-        };
-        if (x * x + z * z).sqrt() < 320.0 {
-            continue; // keep the inn clearing open
-        }
-        // Landmark clearance: formations ring a POI but never stand on it.
-        // Without this the set-dressing (and hero landmarks especially) end
-        // up buried inside 40-unit rock spires.
-        if poi_sites
-            .iter()
-            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
-        {
-            continue;
-        }
-        let size = 14.0 + hash01(seed * 4 + 13) * 46.0;
-        let y = terrain_height(act, x, z);
-        commands.spawn((
-            Mesh3d(meshes.add(formation_mesh(seed))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: formation_color(seed),
-                perceptual_roughness: 0.95,
-                ..default()
-            })),
-            terrain_material::RockSkin((seed % terrain_material::ROCK_TINTS.len() as u64) as usize),
-            Transform::from_xyz(x, y, z)
-                .with_scale(Vec3::splat(size))
-                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
-            Terrain,
-            DECOR_RANGE,
-        ));
-    }
-
-    // Procedural landmark props: 600 per act across 20 families, every one a
-    // unique mesh (propgen). The GLB kits give us good props but a FINITE set
-    // — the same barrel in every act is the loudest asset-pack tell we have.
-    // These cost one draw call each like a GLB and share ONE material, since
-    // all their colour lives in vertex attributes.
+    // Procedural scatter: 1,200 formation sites (deformed-dome rocks and the
+    // landform families of `formations.rs`) and 600 landmark props per act,
+    // every one a unique mesh. The site list lives in `formations::act_sites`
+    // so the distinct-model test walks exactly what is spawned here. Landforms
+    // and props carry their colour in vertex attributes and share ONE
+    // material; each site is one mesh and one draw.
     let prop_mat = materials.add(StandardMaterial {
         base_color: Color::WHITE,
         perceptual_roughness: 0.9,
         ..default()
     });
-    for i in 0..600u64 {
-        let seed = act_idx * 7_700_017 + i * 6421 + 31;
-        // Two thirds cluster near POIs — the A4 finding was that scattered
-        // variety is invisible because players walk the roads and landmarks.
-        let (x, z) = if i % 3 != 0 && !poi_sites.is_empty() {
-            let (px, pz) = poi_sites[(seed / 7 % poi_sites.len() as u64) as usize];
-            (
-                px + (hash01(seed * 4 + 21) - 0.5) * 1100.0,
-                pz + (hash01(seed * 4 + 22) - 0.5) * 1100.0,
-            )
-        } else {
-            (
-                (hash01(seed * 4 + 21) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-                (hash01(seed * 4 + 22) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-            )
-        };
-        if (x * x + z * z).sqrt() < 320.0 {
-            continue; // keep the inn clearing open
-        }
-        if poi_sites
-            .iter()
-            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
-        {
-            continue;
-        }
-        // Props are authored at roughly 10-30 units tall, so the world scale
-        // is a modest multiplier rather than the 14-60x formations use.
-        let size = 1.6 + hash01(seed * 4 + 23) * 2.2;
+    for site in formations::act_sites(act_idx, &poi_sites, antediluvia_protocol::WORLD_BOUNDS, POI_CLEARANCE) {
+        let (x, z, seed, size) = (site.x, site.z, site.seed, site.size);
         let y = terrain_height(act, x, z);
-        commands.spawn((
-            Mesh3d(meshes.add(propgen::prop_mesh(seed))),
-            MeshMaterial3d(prop_mat.clone()),
-            Transform::from_xyz(x, y, z)
-                .with_scale(Vec3::splat(size))
-                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 24) * 6.283)),
-            SolidProp { radius: (size * 4.0).clamp(8.0, 45.0) },
-            Terrain,
-            DECOR_RANGE,
-        ));
+        let xf = Transform::from_xyz(x, y, z)
+            .with_scale(Vec3::splat(size))
+            .with_rotation(Quat::from_rotation_y(site.yaw));
+        let mesh = Mesh3d(meshes.add(formations::site_mesh(&site)));
+        match site.kind {
+            formations::SiteKind::Rock => {
+                commands.spawn((
+                    mesh,
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: formation_color(seed),
+                        perceptual_roughness: 0.95,
+                        ..default()
+                    })),
+                    terrain_material::RockSkin((seed % terrain_material::ROCK_TINTS.len() as u64) as usize),
+                    xf,
+                    Terrain,
+                    DECOR_RANGE,
+                ));
+            }
+            formations::SiteKind::Land(_) => {
+                commands.spawn((mesh, MeshMaterial3d(prop_mat.clone()), xf, Terrain, DECOR_RANGE));
+            }
+            formations::SiteKind::Prop => {
+                commands.spawn((
+                    mesh,
+                    MeshMaterial3d(prop_mat.clone()),
+                    xf,
+                    SolidProp { radius: (size * 4.0).clamp(8.0, 45.0) },
+                    Terrain,
+                    DECOR_RANGE,
+                ));
+            }
+        }
     }
 
     // Cave mouths (C09): two big flanking rocks and a leaning capstone make
@@ -1769,11 +1696,11 @@ fn setup(
         // featureless pills. Same draw-call budget, but now a head/torso/legs
         // silhouette in the SAME 16-tone skin palette the real rigs use, so a
         // crowd reads as a crowd of people instead of cloned markers.
-        m_lod: (0..variety::SKIN_CHOICES)
-            .map(|i| {
-                let (hue, light) = variety::skin_hue(i);
+        m_lod: look::SKIN
+            .iter()
+            .map(|(_, c)| {
                 materials.add(StandardMaterial {
-                    base_color: Color::hsl(hue, 0.35, (0.42 * light).clamp(0.12, 0.78)),
+                    base_color: Color::srgb(c[0], c[1], c[2]),
                     perceptual_roughness: 0.9,
                     ..default()
                 })
@@ -1810,15 +1737,17 @@ fn spawn_visual(
         // C15 crowd LOD: distant players are one shared capsule, no rig,
         // no animation graph, no nameplate.
         EntityKind::Player if cheap => {
+            let lod_look = antediluvia_protocol::Look::unpack(e.look.unwrap_or(0));
+            let lod_scale = look::body_scale(lod_look);
             let mut m = Entity::PLACEHOLDER;
             commands.entity(root).with_children(|p| {
                 m = p
                     .spawn((
                         Mesh3d(assets.lod_capsule.clone()),
-                        MeshMaterial3d(
-                            assets.m_lod[e.id as usize % assets.m_lod.len()].clone(),
-                        ),
-                        Transform::from_xyz(0.0, 30.0, 0.0).with_rotation(rot),
+                        MeshMaterial3d(assets.m_lod[lod_look.skin as usize % assets.m_lod.len()].clone()),
+                        // Skin tone, build and height survive at range: one
+                        // shared mesh, one of 20 shared materials, a scale.
+                        Transform::from_xyz(0.0, 30.0 * lod_scale.y, 0.0).with_rotation(rot).with_scale(lod_scale),
                     ))
                     .id();
             });
@@ -1883,12 +1812,15 @@ fn spawn_visual(
                     parts = Some(SpeciesParts { seed: species_parts_seed(tag) });
                     Some(TintRig { hue, light, hair_hue: None })
                 }
-                EntityKind::Player => e.appearance.map(|a| {
-                    let (hue, light) = skin_hue(a[1]);
-                    TintRig { hue, light, hair_hue: Some(hair_hue(a[2])) }
-                }),
                 _ => None,
             };
+            // Players wear their look: build and height scale the rig here,
+            // colours, face, hair and mantle are applied by `look::apply`.
+            let player_look = (e.kind == EntityKind::Player)
+                .then(|| antediluvia_protocol::Look::unpack(e.look.unwrap_or(0)));
+            if let Some(l) = player_look {
+                stretch = look::body_scale(l);
+            }
             let clips = RigClips {
                 idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
                 run: asset_server.load(GltfAssetLabel::Animation(i_run).from_asset(file)),
@@ -1921,11 +1853,8 @@ fn spawn_visual(
             if let Some(p) = parts {
                 commands.entity(rig).insert(p);
             }
-            // A3: players also grow their chosen hairstyle geometry.
-            if e.kind == EntityKind::Player {
-                if let Some(a) = e.appearance {
-                    commands.entity(rig).insert(HairStyle { style: a[2], hue: hair_hue(a[2]) });
-                }
+            if let Some(l) = player_look {
+                commands.entity(rig).insert(look::apply::LookRig { look: l });
             }
             commands.entity(root).insert(Mover {
                 rig,
@@ -2433,254 +2362,6 @@ fn send_input(
     // (Classless in-world F1–F4 pick removed — class is chosen in the
     // character builder now, C13.)
 }
-
-/// Marker for builder UI root and rotating preview rig (C13).
-#[derive(Component)]
-struct BuilderUi;
-/// Ability-icon slot in the builder (0/1 = the class's two abilities).
-#[derive(Component)]
-struct BuilderAbilityIcon(u8);
-#[derive(Component)]
-struct BuilderPreview {
-    look: [u32; 3],
-}
-
-/// Character-builder screen (C13): name typing, F1–F4 class, F5 lineage,
-/// Left/Right body model, Up/Down skin, F6 hair, Enter to create. Keeps a
-/// rotating rig preview in the empty pre-login world.
-#[allow(clippy::too_many_arguments)]
-fn builder_screen(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut kb_events: EventReader<KeyboardInput>,
-    mut session: ResMut<Session>,
-    tx: Res<NetTx>,
-    time: Res<Time>,
-    asset_server: Res<AssetServer>,
-    ui_root: Query<Entity, With<BuilderUi>>,
-    mut ui_text: Query<&mut Text, With<BuilderUi>>,
-    mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode, &mut Visibility)>,
-    mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
-) {
-    let apple_id = session.apple_id.clone();
-    let Some(b) = session.builder.as_mut() else {
-        // Builder closed: clear any leftovers (screen + preview).
-        for e in &ui_root {
-            commands.entity(e).despawn_recursive();
-        }
-        for (e, _, _) in &preview {
-            commands.entity(e).despawn_recursive();
-        }
-        kb_events.clear();
-        return;
-    };
-
-    // ── Input ────────────────────────────────────────────────────────────
-    for ev in kb_events.read() {
-        if !ev.state.is_pressed() {
-            continue;
-        }
-        if let bevy::input::keyboard::Key::Character(ref c) = ev.logical_key {
-            if b.name.len() < 24 && c.chars().all(|ch| ch.is_alphanumeric()) {
-                b.name.push_str(c);
-            }
-        } else if ev.logical_key == bevy::input::keyboard::Key::Backspace {
-            b.name.pop();
-        }
-    }
-    for (key, class) in [
-        (KeyCode::F1, Class::Warrior),
-        (KeyCode::F2, Class::Hunter),
-        (KeyCode::F3, Class::Priest),
-        (KeyCode::F4, Class::Mage),
-    ] {
-        if keys.just_pressed(key) {
-            b.class = class;
-        }
-    }
-    // Tab walks all eight classes (B09); Shift+Tab walks back.
-    if keys.just_pressed(KeyCode::Tab) {
-        let n = Class::ALL.len();
-        let i = Class::ALL.iter().position(|c| *c == b.class).unwrap_or(0);
-        let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        b.class = Class::ALL[if back { (i + n - 1) % n } else { (i + 1) % n }];
-    }
-    if keys.just_pressed(KeyCode::F5) {
-        b.faction = match b.faction.as_deref() {
-            None => Some("sethite".into()),
-            Some("sethite") => Some("cainite".into()),
-            _ => None,
-        };
-    }
-    if keys.just_pressed(KeyCode::ArrowRight) {
-        b.appearance[0] = (b.appearance[0] + 1) % 4;
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) {
-        b.appearance[0] = (b.appearance[0] + 3) % 4;
-    }
-    if keys.just_pressed(KeyCode::ArrowUp) {
-        b.appearance[1] = (b.appearance[1] + 1) % SKIN_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) {
-        b.appearance[1] = (b.appearance[1] + SKIN_CHOICES - 1) % SKIN_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::F6) {
-        b.appearance[2] = (b.appearance[2] + 1) % HAIR_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
-        b.submitted = true;
-        b.error = None;
-        tx.send(ClientMsg::Login {
-            proto: antediluvia_protocol::PROTOCOL_VERSION,
-            apple_id,
-            character_name: None,
-            create: Some(antediluvia_protocol::CharacterCreate {
-                name: b.name.trim().to_string(),
-                class: b.class,
-                faction: b.faction.clone(),
-                appearance: b.appearance,
-            }),
-        });
-    }
-
-    // ── Screen text ──────────────────────────────────────────────────────
-    let body_names = ["Knight", "Barbarian", "Rogue", "Mage"];
-    let text = format!(
-        "CREATE YOUR CHARACTER\n\n\
-         Name            {}_\n\
-         Class   Tab     {}\n\
-         {}\n\
-         Lineage F5      {}\n\n\
-         Body    Left/Right  {}  ({}/4)\n\
-         Skin    Up/Down     tone {} of {}\n\
-         Hair    F6          style {} of {}\n\n\
-         {} distinct looks before gear\n\n\
-         {}\n\
-         Press ENTER to walk the earth",
-        b.name,
-        {
-            let i = Class::ALL.iter().position(|c| *c == b.class).unwrap_or(0);
-            let (name, _) = antediluvia_sim::abilities::class_blurb(b.class);
-            format!("{name}  ({}/{})", i + 1, Class::ALL.len())
-        },
-        {
-            let (_, pitch) = antediluvia_sim::abilities::class_blurb(b.class);
-            let kit = class_bar(b.class);
-            let names = |r: std::ops::Range<usize>| {
-                kit[r.start.min(kit.len())..r.end.min(kit.len())]
-                    .iter()
-                    .map(|a| a.name)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            format!("        {pitch}\n        {},\n        {}", names(0..4), names(4..10))
-        },
-        b.faction.as_deref().unwrap_or("undecided (choose at level 10)"),
-        body_names[b.appearance[0] as usize % 4],
-        b.appearance[0] % 4 + 1,
-        b.appearance[1] % SKIN_CHOICES + 1,
-        SKIN_CHOICES,
-        b.appearance[2] % HAIR_CHOICES + 1,
-        HAIR_CHOICES,
-        4 * SKIN_CHOICES * HAIR_CHOICES,
-        match (&b.error, b.submitted) {
-            (Some(e), _) => format!("!! {e}"),
-            (None, true) => "Creating...".into(),
-            _ => String::new(),
-        },
-    );
-    if let Ok(mut t) = ui_text.get_single_mut() {
-        **t = text;
-    } else if ui_root.is_empty() {
-        commands.spawn((
-            Text::new(text),
-            TextFont { font_size: 20.0, ..default() },
-            TextColor(Color::srgb(0.95, 0.9, 0.75)),
-            // Framed parchment-dark panel: bare text over the 3D world was
-            // unreadable against grass and props.
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(6.0),
-                top: Val::Percent(12.0),
-                padding: UiRect::all(Val::Px(26.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.06, 0.05, 0.04, 0.86)),
-            BorderColor(Color::srgb(0.72, 0.58, 0.30)),
-            BorderRadius::all(Val::Px(8.0)),
-            BuilderUi,
-        ));
-        // Ability-icon strip (Blender-rendered): the chosen class's two
-        // abilities, refreshed when F1–F4 changes the class.
-        commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Percent(6.0),
-                    top: Val::Percent(80.0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(10.0),
-                    ..default()
-                },
-                BuilderUi,
-            ))
-            .with_children(|row| {
-                for slot in 0u8..2 {
-                    row.spawn((
-                        ImageNode::default(),
-                        Node { width: Val::Px(64.0), height: Val::Px(64.0), ..default() },
-                        BuilderAbilityIcon(slot),
-                    ));
-                }
-            });
-    }
-    // Keep the icon strip in sync with the selected class.
-    let kit = class_bar(b.class);
-    for (icon, mut img, mut vis) in ui_icons.iter_mut() {
-        // Only abilities with rendered art get a tile (no art yet for B03+).
-        match kit.get(icon.0 as usize).and_then(|a| ui::ability_icon(a.id)) {
-            Some(path) => {
-                let handle = asset_server.load(path);
-                if img.image != handle {
-                    img.image = handle;
-                }
-                *vis = Visibility::Inherited;
-            }
-            None => *vis = Visibility::Hidden,
-        }
-    }
-
-    // ── Rotating preview rig ─────────────────────────────────────────────
-    let want = b.appearance;
-    let mut have = false;
-    for (e, p, mut t) in &mut preview {
-        if p.look != want {
-            commands.entity(e).despawn_recursive();
-        } else {
-            have = true;
-            t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 0.8);
-        }
-    }
-    if !have {
-        let file = [
-            "models/characters/Knight.glb",
-            "models/characters/Barbarian.glb",
-            "models/characters/Rogue.glb",
-            "models/characters/Mage.glb",
-        ][want[0] as usize % 4];
-        let (hue, light) = skin_hue(want[1]);
-        commands.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))),
-            Transform::from_translation(Vec3::new(0.0, 0.0, 0.0))
-                .with_scale(Vec3::splat(CHAR_SCALE)),
-            BuilderPreview { look: want },
-            TintRig { hue, light, hair_hue: Some(hair_hue(want[2])) },
-            HairStyle { style: want[2], hue: hair_hue(want[2]) },
-        ));
-    }
-}
-
 /// Dev console (C14): backquote toggles a one-line command input on dev
 /// accounts. Commands: tp X Y | give ITEM [N] | level N | heal | spawn TAG |
 /// kill | god | xp N | questdone ID | time T | travel ACT. Server re-checks authorization.
@@ -2790,7 +2471,7 @@ fn dev_autocmd(
     ac: Option<ResMut<AutoCmd>>,
     tx: Res<NetTx>,
     mut wins: ResMut<win::WinState>,
-    session: Res<Session>,
+    mut session: ResMut<Session>,
 ) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
@@ -2801,7 +2482,13 @@ fn dev_autocmd(
         info!("[autocmd] {line}");
         // A leading '/' means "type this into chat"; anything else is a dev
         // console line. Lets a scripted run drive party/bank/mail/trade too.
-        if let Some(arg) = line.strip_prefix("ui ") {
+        if let Some(arg) = line.strip_prefix("look ") {
+            // "look random", "look name Enoch", "look create": drive the
+            // character builder in a windowless run.
+            if let Some(b) = session.builder.as_mut() {
+                look::builder::autocmd(b, arg);
+            }
+        } else if let Some(arg) = line.strip_prefix("ui ") {
             // "ui bags", "ui only map", "ui close", "ui menu": open windows
             // without a key press (windowless screenshot runs).
             for m in wins.autocmd(arg, session.act) {

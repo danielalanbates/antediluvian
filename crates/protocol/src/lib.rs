@@ -157,6 +157,10 @@ pub struct EntityState {
     /// Builder appearance [body, skin, hair] (players; C13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<[u32; 3]>,
+    /// Packed character look (players): see `look::Look`. One number, so a
+    /// crowd of players costs little in every snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<u64>,
     /// Riding a mount (players; C06).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mounted: bool,
@@ -240,6 +244,10 @@ pub struct CharacterSheet {
     /// Appearance indices from the character builder (C13): [body, skin, hair].
     #[serde(default)]
     pub appearance: [u32; 3],
+    /// Packed character look (`look::Look`): face, hair, skin, build, height,
+    /// markings, eyes, mantle and dye. Clamped by the server on creation.
+    #[serde(default)]
+    pub look: u64,
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,
@@ -270,6 +278,9 @@ pub struct CharacterCreate {
     /// Appearance indices: [body rig, skin tint, hair tint].
     #[serde(default)]
     pub appearance: [u32; 3],
+    /// Packed `look::Look`. The server clamps it; never trusted as sent.
+    #[serde(default)]
+    pub look: u64,
 }
 
 /// Developer commands (C14) — server-gated on a dev-account allowlist; the
@@ -532,3 +543,5 @@ pub enum ServerMsg {
 // ── beta-server-track payload types ─────────────────────────────────────────
 mod track;
 pub use track::*;
+pub mod look;
+pub use look::Look;

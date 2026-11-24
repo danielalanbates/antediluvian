@@ -60,6 +60,8 @@ struct SheetExt {
     #[serde(default)]
     appearance: [u32; 3],
     #[serde(default)]
+    look: u64,
+    #[serde(default)]
     stamina: i32,
     #[serde(default)]
     max_stamina: i32,
@@ -198,6 +200,7 @@ impl Db {
                         faction: ext.faction,
                         reputation: ext.reputation,
                         appearance: ext.appearance,
+                        look: ext.look,
                         stamina: ext.stamina,
                         max_stamina: ext.max_stamina,
                         durability: ext.durability, // beta-server-track (B06)
@@ -252,6 +255,7 @@ impl Db {
             faction: c.faction.clone(),
             reputation: c.reputation.clone(),
             appearance: c.appearance,
+            look: c.look,
             stamina: c.stamina,
             max_stamina: c.max_stamina,
             durability: c.durability.clone(), // beta-server-track (B06)
@@ -425,5 +429,26 @@ fn parse_act(s: &str) -> Act {
 impl Db {
     pub(crate) fn raw(&self) -> &Connection {
         &self.conn
+    }
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    /// Three-place rule for the look: protocol field, SheetExt, load + save.
+    #[test]
+    fn look_survives_save_and_load() {
+        let db = Db::open(":memory:").unwrap();
+        let mut s = antediluvia_sim::world::new_character("Lookkeeper");
+        s.look = antediluvia_protocol::Look::random(77).pack();
+        s.appearance = [2, 0, 0];
+        assert_ne!(s.look, 0);
+        db.save(&s, Some("apple-look-test")).unwrap();
+        let back = db.load("lookkeeper").unwrap().expect("saved character loads");
+        assert_eq!(back.look, s.look);
+        assert_eq!(back.appearance, [2, 0, 0]);
+        let by_id = db.load_by_apple_id("apple-look-test").unwrap().unwrap();
+        assert_eq!(by_id.look, s.look);
     }
 }

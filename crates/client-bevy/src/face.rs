@@ -29,6 +29,25 @@ pub const NOSE_GROW: f32 = 1.55;
 #[derive(Resource, Default)]
 pub struct RestyledFaces(HashSet<AssetId<Mesh>>);
 
+impl RestyledFaces {
+    /// Restyle a head mesh now if it has not been done yet (the look system
+    /// copies head meshes and must copy the restyled one).
+    pub fn ensure(&mut self, meshes: &mut Assets<Mesh>, id: AssetId<Mesh>, node: &str) {
+        if self.0.contains(&id) {
+            return;
+        }
+        if let Some(mesh) = meshes.get_mut(id) {
+            restyle_head(mesh, head_is_bearded(node));
+            self.0.insert(id);
+        }
+    }
+
+    /// Record a mesh that was copied from an already-restyled head.
+    pub fn mark(&mut self, id: AssetId<Mesh>) {
+        self.0.insert(id);
+    }
+}
+
 /// Cheek surface depth at (x, y), fitted to the chin row (y 1.29: z .395 at
 /// centre, .352 at x .16) and the under-eye row (y 1.50: .444 / .385 at .22).
 fn cheek_z(x: f32, y: f32) -> f32 {

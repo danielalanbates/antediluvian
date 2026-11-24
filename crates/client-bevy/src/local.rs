@@ -40,16 +40,21 @@ pub fn start_local(
 
             // Build the character from the builder payload (or a default so the
             // world is always playable), spawn it, and welcome the client.
-            let (name, class, faction, appearance) = match create {
+            let (name, class, faction, appearance, look) = match create {
                 Some(c) => (
-                    if c.name.trim().is_empty() { display_name.clone() } else { c.name },
+                    antediluvia_sim::names::validate_name(&c.name).unwrap_or_else(|_| display_name.clone()),
                     Some(c.class),
                     c.faction,
                     [c.appearance[0].min(3), c.appearance[1].min(15), c.appearance[2].min(11)],
+                    antediluvia_protocol::Look::sanitize(c.look),
                 ),
-                None => (display_name.clone(), None, None, [0, 0, 0]),
+                None => {
+                    let seed = antediluvia_protocol::Look::seed_for_name(&display_name);
+                    (display_name.clone(), None, None, [(seed % 4) as u32, 0, 0], antediluvia_protocol::Look::random(seed).pack())
+                }
             };
-            let sheet = new_character_with(&name, class, faction, appearance);
+            let mut sheet = new_character_with(&name, class, faction, appearance);
+            sheet.look = look;
             let mut act = sheet.act;
             let mut me: EntityId = world.spawn_player(1, sheet.clone());
 

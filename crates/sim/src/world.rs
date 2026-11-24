@@ -465,6 +465,7 @@ impl Entity {
                 .and_then(|s| s.equipment.get("back").cloned()),
             faction: self.sheet.as_ref().and_then(|s| s.faction.clone()),
             appearance: self.sheet.as_ref().map(|s| s.appearance),
+            look: self.sheet.as_ref().map(|s| s.look),
             mounted: self.mounted,
             mount_species: if self.mounted {
                 self.sheet.as_ref().and_then(|s| {
@@ -4688,6 +4689,7 @@ pub fn new_character_with(
         class,
         faction,
         appearance,
+        look: 0,
         inventory: vec!["hearthstone".to_string()],
         equipment,
         act: Act::Eden,

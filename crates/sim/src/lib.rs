@@ -5,6 +5,7 @@ pub mod aoi;
 pub mod caves;
 pub mod economy;
 pub mod mobs;
+pub mod names;
 pub mod pois;
 pub mod quests;
 pub mod world;
