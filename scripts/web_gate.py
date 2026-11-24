@@ -17,13 +17,17 @@ ap.add_argument("--ws", default="ws://127.0.0.1:8797")
 ap.add_argument("--secs", type=int, default=200)
 ap.add_argument("--out", required=True)
 ap.add_argument("--log", required=True)
+ap.add_argument("--url", help="gate a deployed page instead of the local bundle, e.g. https://batesai.org/dev/play/ (its own ws)")
+ap.add_argument("--key-file", help="with --url: file holding the /dev key; opened as /dev/?key=... to get the cookie (never printed)")
 ap.add_argument("--server-log", required=True, help="local server log; its login line marks entry into the world")
 a = ap.parse_args()
-if "159.54.191.177" in a.ws or ":8787" in a.ws:
+if not a.url and ("159.54.191.177" in a.ws or ":8787" in a.ws):
     sys.exit("refusing: live shard")
+if a.url and "/dev/" not in a.url:
+    sys.exit("refusing: only /dev pages may be gated remotely")
 
 name = "Gate" + "".join(random.choice("abcdefghijklmnop") for _ in range(5)).capitalize()
-url = f"http://127.0.0.1:{a.http}/?server={a.ws}&name={name}"
+url = f"{a.url}?name={name}" if a.url else f"http://127.0.0.1:{a.http}/?server={a.ws}&name={name}"
 lines, errors = [], []
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 PANIC = re.compile(r"panicked|RuntimeError|unreachable", re.I)
@@ -39,6 +43,12 @@ with sync_playwright() as p:
         if "Using exceptions for control flow" not in s:
             errors.append(s)
     pg.on("pageerror", perr)
+    if a.key_file:
+        from urllib.parse import urlsplit
+        u = urlsplit(a.url)
+        key = open(a.key_file).read().strip()
+        pg.goto(f"{u.scheme}://{u.netloc}/dev/?key={key}", wait_until="load", timeout=60000)
+        del key
     print("open", url, flush=True)
     pg.goto(url, wait_until="load", timeout=120000)
     t0 = time.time()
