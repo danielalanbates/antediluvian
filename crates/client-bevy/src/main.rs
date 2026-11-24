@@ -563,6 +563,13 @@ pub struct Session {
     pub dev_input: Option<String>,
     /// Current party roster (P1); empty = not in a party.
     pub party: Vec<String>,
+    /// Ability cooldowns as told by the server (B03): id -> (start, end) in
+    /// client seconds. Drives the action-bar sweep.
+    pub ability_cd: std::collections::HashMap<String, (f32, f32)>,
+    /// Global cooldown window (start, end).
+    pub gcd: (f32, f32),
+    /// Cast in progress: (ability id, start, end).
+    pub cast: Option<(String, f32, f32)>,
 }
 
 /// Character-builder working state (C13).
@@ -608,6 +615,9 @@ impl Default for Session {
             banner: None,
             builder: None,
             party: Vec::new(),
+            ability_cd: std::collections::HashMap::new(),
+            gcd: (0.0, 0.0),
+            cast: None,
         }
     }
 }
@@ -768,6 +778,12 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
                 Some("hunter") => ("models/characters/Rogue.glb", 1),
                 Some("priest") => ("models/characters/Knight.glb", 62),
                 Some("mage") => ("models/characters/Mage.glb", 62),
+                // B09 classes reuse the four adventurer rigs until they get
+                // art of their own (attack clip: 1 = slice, 8 = chop, 62 = cast).
+                Some("wanderer") => ("models/characters/Rogue.glb", 1),
+                Some("herald") => ("models/characters/Knight.glb", 8),
+                Some("warden") => ("models/characters/Mage.glb", 62),
+                Some("occultist") => ("models/characters/Mage.glb", 62),
                 _ => ("models/characters/Knight.glb", 1),
             };
             // Builder appearance (C13): body index overrides the rig model.
@@ -915,14 +931,29 @@ fn proc_body_plan(e: &EntityState) -> Option<u32> {
     }
 }
 
-/// The two ability keys per class (action-bar slots 1 and 2).
-pub fn class_abilities(class: Class) -> [&'static str; 2] {
-    match class {
-        Class::Warrior => ["heroic_strike", "whirlwind"],
-        Class::Hunter => ["aimed_shot", "multi_shot"],
-        Class::Priest => ["smite", "heal"],
-        Class::Mage => ["firebolt", "frost_nova"],
-    }
+/// A class's abilities in action-bar order (keys 1-9 then 0), read from the
+/// sim's data table so the bar can never drift from what the server accepts.
+pub fn class_bar(class: Class) -> Vec<&'static antediluvia_sim::abilities::Ability> {
+    antediluvia_sim::abilities::kit(class)
+}
+
+/// Keys for action-bar slots 1..=10.
+const BAR_KEYS: [KeyCode; antediluvia_sim::abilities::BAR_SLOTS] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+    KeyCode::Digit0,
+];
+
+/// Parse a class name as typed (`/class warden`).
+fn class_from_str(s: &str) -> Option<Class> {
+    Class::ALL.into_iter().find(|c| c.as_str() == s.trim().to_lowercase())
 }
 
 // ─── Props / scenery ─────────────────────────────────────────────────────────
@@ -2112,6 +2143,22 @@ fn receive_from_server(
                 }
                 combat.send(CombatEvt { kind, src, dst });
             }
+            ServerMsg::CastStart { ability, secs } => {
+                let now = time.elapsed_secs();
+                session.cast = (secs > 0.0).then(|| (ability, now, now + secs));
+                if secs > 0.0 {
+                    session.gcd = (now, now + 1.0);
+                }
+            }
+            ServerMsg::AbilityUsed { ability, cooldown } => {
+                let now = time.elapsed_secs();
+                // A cast-time ability already ran its global cooldown.
+                let was_cast = session.cast.take().is_some_and(|(id, _, _)| id == ability);
+                if !was_cast {
+                    session.gcd = (now, now + 1.0);
+                }
+                session.ability_cd.insert(ability, (now, now + cooldown));
+            }
             ServerMsg::Pong => {}
         }
     }
@@ -2263,7 +2310,6 @@ fn send_input(
     orbit: Res<Orbit>,
     session: Res<Session>,
     time: Res<Time>,
-    mut cooldowns: ResMut<Cooldowns>,
     mut last_dir: Local<(i8, i8)>,
     mut last_yaw: Local<f32>,
     colliders: Res<PropColliders>,
@@ -2332,15 +2378,14 @@ fn send_input(
             tx.send(ClientMsg::Tame { target });
         }
     }
+    // Action bar (B03): keys 1-9 and 0 cast the class kit in slot order.
+    // The server decides; its `AbilityUsed` reply starts the cooldown sweep.
     if let Some(class) = session.class {
-        let [a, b] = class_abilities(class);
-        if keys.just_pressed(KeyCode::Digit1) {
-            tx.send(ClientMsg::Cast { ability: a.into() });
-            cooldowns.trigger(1, now);
-        }
-        if keys.just_pressed(KeyCode::Digit2) {
-            tx.send(ClientMsg::Cast { ability: b.into() });
-            cooldowns.trigger(2, now);
+        let bar = class_bar(class);
+        for (key, ab) in BAR_KEYS.iter().zip(bar.iter()) {
+            if keys.just_pressed(*key) {
+                tx.send(ClientMsg::Cast { ability: ab.id.into() });
+            }
         }
     }
     // (Classless in-world F1–F4 pick removed — class is chosen in the
@@ -2372,7 +2417,7 @@ fn builder_screen(
     asset_server: Res<AssetServer>,
     ui_root: Query<Entity, With<BuilderUi>>,
     mut ui_text: Query<&mut Text, With<BuilderUi>>,
-    mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode)>,
+    mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode, &mut Visibility)>,
     mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
 ) {
     let apple_id = session.apple_id.clone();
@@ -2410,6 +2455,13 @@ fn builder_screen(
         if keys.just_pressed(key) {
             b.class = class;
         }
+    }
+    // Tab walks all eight classes (B09); Shift+Tab walks back.
+    if keys.just_pressed(KeyCode::Tab) {
+        let n = Class::ALL.len();
+        let i = Class::ALL.iter().position(|c| *c == b.class).unwrap_or(0);
+        let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        b.class = Class::ALL[if back { (i + n - 1) % n } else { (i + 1) % n }];
     }
     if keys.just_pressed(KeyCode::F5) {
         b.faction = match b.faction.as_deref() {
@@ -2454,7 +2506,8 @@ fn builder_screen(
     let text = format!(
         "CREATE YOUR CHARACTER\n\n\
          Name            {}_\n\
-         Class   F1-F4   {}  ({})\n\
+         Class   Tab     {}\n\
+         {}\n\
          Lineage F5      {}\n\n\
          Body    Left/Right  {}  ({}/4)\n\
          Skin    Up/Down     tone {} of {}\n\
@@ -2463,12 +2516,22 @@ fn builder_screen(
          {}\n\
          Press ENTER to walk the earth",
         b.name,
-        b.class.as_str(),
-        match b.class {
-            Class::Warrior => "Savage Strike / War Cry",
-            Class::Hunter => "Piercing Shot / Trap",
-            Class::Priest => "Mend / Smite",
-            Class::Mage => "Firebolt / Frost Nova",
+        {
+            let i = Class::ALL.iter().position(|c| *c == b.class).unwrap_or(0);
+            let (name, _) = antediluvia_sim::abilities::class_blurb(b.class);
+            format!("{name}  ({}/{})", i + 1, Class::ALL.len())
+        },
+        {
+            let (_, pitch) = antediluvia_sim::abilities::class_blurb(b.class);
+            let kit = class_bar(b.class);
+            let names = |r: std::ops::Range<usize>| {
+                kit[r.start.min(kit.len())..r.end.min(kit.len())]
+                    .iter()
+                    .map(|a| a.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("        {pitch}\n        {},\n        {}", names(0..4), names(4..10))
         },
         b.faction.as_deref().unwrap_or("undecided (choose at level 10)"),
         body_names[b.appearance[0] as usize % 4],
@@ -2513,7 +2576,7 @@ fn builder_screen(
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Percent(6.0),
-                    top: Val::Percent(74.0),
+                    top: Val::Percent(80.0),
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(10.0),
                     ..default()
@@ -2531,12 +2594,18 @@ fn builder_screen(
             });
     }
     // Keep the icon strip in sync with the selected class.
-    let [a0, a1] = class_abilities(b.class);
-    for (icon, mut img) in ui_icons.iter_mut() {
-        let name = if icon.0 == 0 { a0 } else { a1 };
-        let handle = asset_server.load(format!("sprites/icons/{name}.png"));
-        if img.image != handle {
-            img.image = handle;
+    let kit = class_bar(b.class);
+    for (icon, mut img, mut vis) in ui_icons.iter_mut() {
+        // Only abilities with rendered art get a tile (no art yet for B03+).
+        match kit.get(icon.0 as usize).and_then(|a| ui::ability_icon(a.id)) {
+            Some(path) => {
+                let handle = asset_server.load(path);
+                if img.image != handle {
+                    img.image = handle;
+                }
+                *vis = Visibility::Inherited;
+            }
+            None => *vis = Visibility::Hidden,
         }
     }
 
@@ -2758,7 +2827,15 @@ pub fn dispatch_chat_line(text: &str, tx: &NetTx) {
     {
         {
                 // Slash commands (P1): party management from the chat box.
-                if let Some(name) = text.strip_prefix("/party ") {
+                if let Some(id) = text.strip_prefix("/cast ") {
+                    // /cast <ability_id> - same as pressing its bar key (B03).
+                    tx.send(ClientMsg::Cast { ability: id.trim().to_string() });
+                } else if let Some(name) = text.strip_prefix("/class ") {
+                    // /class <name> - one-time pick for a classless character.
+                    if let Some(class) = class_from_str(name) {
+                        tx.send(ClientMsg::SelectClass { class });
+                    }
+                } else if let Some(name) = text.strip_prefix("/party ") {
                     tx.send(ClientMsg::PartyInvite { player: name.trim().to_string() });
                 } else if text == "/paccept" {
                     tx.send(ClientMsg::PartyAccept);

@@ -89,6 +89,14 @@ pub fn start_local(
                             dirty = true;
                         }
                         SimEvent::Info { text, .. } => send(ServerMsg::Notice { text }),
+                        SimEvent::CastStart { ability, secs, .. } => {
+                            send(ServerMsg::CastStart { ability: ability.to_string(), secs });
+                        }
+                        SimEvent::AbilityUsed { ability, cooldown, .. } => {
+                            send(ServerMsg::AbilityUsed { ability: ability.to_string(), cooldown });
+                            dirty = true;
+                        }
+                        SimEvent::Vitals { .. } => dirty = true,
                         SimEvent::Combat { act: a, kind, src, dst } => {
                             send(ServerMsg::Event { act: a, kind, src, dst });
                         }

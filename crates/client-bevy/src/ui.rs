@@ -8,7 +8,33 @@
 use bevy::prelude::*;
 
 
-use super::{class_abilities, Session};
+use super::{class_bar, Session};
+use antediluvia_sim::abilities::{class_resource, Resource, BAR_SLOTS};
+
+/// Action-bar tiles: slot 0 is the left-click attack, 1..=10 the class kit.
+const BAR_TILES: usize = BAR_SLOTS + 1;
+const TILE_PX: f32 = 50.0;
+const TILE_GAP: f32 = 4.0;
+/// Half the bar's width, to centre it under a 50%-anchored parent.
+const BAR_HALF: f32 = (BAR_TILES as f32 * TILE_PX + (BAR_TILES as f32 - 1.0) * TILE_GAP + 12.0) / 2.0;
+const STAMINA_COLOR: Color = Color::srgb(0.85, 0.70, 0.18);
+
+/// Asset path of an ability's rendered icon, for the abilities that have art.
+/// (The B03/B09 abilities have none yet; their tiles show the name instead.)
+pub fn ability_icon(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "attack" => "sprites/icons/attack.png",
+        "heroic_strike" => "sprites/icons/heroic_strike.png",
+        "whirlwind" => "sprites/icons/whirlwind.png",
+        "aimed_shot" => "sprites/icons/aimed_shot.png",
+        "multi_shot" => "sprites/icons/multi_shot.png",
+        "smite" => "sprites/icons/smite.png",
+        "heal" => "sprites/icons/heal.png",
+        "firebolt" => "sprites/icons/firebolt.png",
+        "frost_nova" => "sprites/icons/frost_nova.png",
+        _ => return None,
+    })
+}
 
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
@@ -30,7 +56,7 @@ const FONT_STAT: f32 = 15.0;
 const FONT_LABEL: f32 = 13.0;
 const FONT_CHAT: f32 = 12.0;
 const FONT_KEY: f32 = 11.0;
-const FONT_SLOT: f32 = 14.0;
+const FONT_SLOT: f32 = 10.0;
 
 // ─── Marker components ──────────────────────────────────────────────────────
 
@@ -309,33 +335,33 @@ fn spawn_action_bar(commands: &mut Commands) {
             anchor
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(6.0),
+                    column_gap: Val::Px(TILE_GAP),
                     padding: UiRect::all(Val::Px(6.0)),
-                    // Pull back by ~half the expected width so the bar centres.
-                    margin: UiRect::left(Val::Px(-120.0)),
+                    // Pull back by half the bar's width so it centres.
+                    margin: UiRect::left(Val::Px(-BAR_HALF)),
                     ..default()
                 })
                 .insert(BackgroundColor(PANEL))
                 .with_children(|bar| {
-                    for slot in 0u8..3 {
+                    for slot in 0..BAR_TILES as u8 {
                         let key_label = match slot {
-                            0 => "Click", // Space is jump now; attack is left-click
-                            1 => "1",
-                            _ => "2",
+                            0 => "Click".to_string(), // attack is left-click
+                            10 => "0".to_string(),
+                            n => n.to_string(),
                         };
-                        spawn_action_slot(bar, slot, key_label);
+                        spawn_action_slot(bar, slot, &key_label);
                     }
                 });
 
             // Class-selection prompt (shown when no class chosen).
             anchor.spawn((
-                Text::new("F1 warrior | F2 hunter | F3 priest | F4 mage"),
+                Text::new(""),
                 TextFont { font_size: FONT_LABEL, ..default() },
                 TextColor(GOLD_ACCENT),
                 Node {
                     margin: UiRect {
                         top: Val::Px(6.0),
-                        left: Val::Px(-120.0),
+                        left: Val::Px(-BAR_HALF),
                         ..default()
                     },
                     ..default()
@@ -349,12 +375,13 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
     parent
         .spawn((
             Node {
-                width: Val::Px(56.0),
-                height: Val::Px(56.0),
+                width: Val::Px(TILE_PX),
+                height: Val::Px(TILE_PX),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Px(4.0)),
+                padding: UiRect::all(Val::Px(2.0)),
+                overflow: Overflow::clip(),
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
@@ -384,25 +411,24 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
                 TextColor(TEXT_DIM),
             ));
             // Ability name (centre).
-            let default_name = match slot {
-                0 => "Atk/Jump",
-                1 => "-",
-                _ => "-",
-            };
+            let default_name = if slot == 0 { "Attack" } else { "" };
             s.spawn((
                 Text::new(default_name),
                 TextFont { font_size: FONT_SLOT, ..default() },
                 TextColor(TEXT_COLOR),
+                TextLayout::new_with_justify(JustifyText::Center),
+                Node { max_width: Val::Px(TILE_PX - 4.0), ..default() },
                 ActionBarLabel(slot),
             ));
-            // Cooldown overlay (hidden by default).
+            // Cooldown sweep (hidden by default): anchored to the bottom, its
+            // height is the fraction of the cooldown still to run.
             s.spawn((
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Percent(100.0),
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
-                    top: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
                     ..default()
                 },
                 BackgroundColor(COOLDOWN_OVERLAY),
@@ -516,15 +542,15 @@ pub fn update_ui_frames(
     mut q_level: Query<&mut Text, (With<PlayerLevelText>, Without<PlayerNameText>, Without<HpText>, Without<MpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
     mut q_hp_fill: Query<&mut Node, (With<HpFill>, Without<MpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
     mut q_hp_text: Query<&mut Text, (With<HpText>, Without<PlayerNameText>, Without<PlayerLevelText>, Without<MpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
-    mut q_mp_fill: Query<&mut Node, (With<MpFill>, Without<HpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
+    mut q_mp_fill: Query<(&mut Node, &mut BackgroundColor), (With<MpFill>, Without<HpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
     mut q_mp_text: Query<&mut Text, (With<MpText>, Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
     mut q_xp_fill: Query<&mut Node, (With<XpFill>, Without<HpFill>, Without<MpFill>, Without<ActionBarCooldown>)>,
     mut q_action_labels: Query<(&ActionBarLabel, &mut Text), (Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<MpText>, Without<ClassSelectText>)>,
     asset_server: Res<AssetServer>,
-    mut icon_cache: Local<[String; 3]>,
+    mut icon_cache: Local<[String; BAR_TILES]>,
     mut q_icons: Query<(&ActionBarIcon, &mut ImageNode, &mut Visibility), (Without<ActionBarCooldown>, Without<QuestTrackerRoot>, Without<ClassSelectText>, Without<ChatInputBar>)>,
-    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility), (Without<QuestTrackerRoot>, Without<ActionBarIcon>)>,
-    mut q_class_select: Query<&mut Visibility, (With<ClassSelectText>, Without<ActionBarCooldown>, Without<ActionBarIcon>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
+    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility, &mut Node), (Without<QuestTrackerRoot>, Without<ActionBarIcon>, Without<HpFill>, Without<MpFill>, Without<XpFill>)>,
+    mut q_class_select: Query<(&mut Visibility, &mut Text), (With<ClassSelectText>, Without<ActionBarCooldown>, Without<ActionBarIcon>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
 ) {
     let now = time.elapsed_secs();
     let sheet = session.sheet.as_ref();
@@ -564,17 +590,22 @@ pub fn update_ui_frames(
             **t = format!("{} / {}", cs.health.max(0), cs.max_health);
         }
 
-        // MP bar.
-        let mp_frac = if cs.max_mana > 0 {
-            (cs.mana.max(0) as f32 / cs.max_mana as f32).clamp(0.0, 1.0)
+        // Resource bar: mana, or stamina for the classes that spend it.
+        let stamina = cs.class.is_some_and(|c| class_resource(c) == Resource::Stamina);
+        let (cur, max, label, color) = if stamina {
+            (cs.stamina, cs.max_stamina, "Stamina", STAMINA_COLOR)
         } else {
-            0.0
+            (cs.mana, cs.max_mana, "Mana", MP_COLOR)
         };
-        if let Ok(mut n) = q_mp_fill.get_single_mut() {
+        let mp_frac = if max > 0 { (cur.max(0) as f32 / max as f32).clamp(0.0, 1.0) } else { 0.0 };
+        if let Ok((mut n, mut bg)) = q_mp_fill.get_single_mut() {
             n.width = Val::Percent(mp_frac * 100.0);
+            if bg.0 != color {
+                bg.0 = color;
+            }
         }
         if let Ok(mut t) = q_mp_text.get_single_mut() {
-            **t = format!("{} / {}", cs.mana.max(0), cs.max_mana);
+            **t = format!("{label} {} / {}", cur.max(0), max);
         }
 
         // XP bar.
@@ -588,55 +619,94 @@ pub fn update_ui_frames(
         }
     }
 
-    // ── Action bar labels ────────────────────────────────────────────────
-    let abilities: Option<[&str; 2]> = session.class.map(class_abilities);
+    // ── Action bar (B03): 10 class slots after the attack tile ────────────
+    let bar = session.class.map(class_bar).unwrap_or_default();
+    let level = sheet.map_or(1, |c| c.level);
+    // Fraction of a (start, end) window still to run.
+    let left = |(start, end): (f32, f32)| -> f32 {
+        if now >= end || end <= start { 0.0 } else { ((end - now) / (end - start)).clamp(0.0, 1.0) }
+    };
     for (label, mut text) in q_action_labels.iter_mut() {
-        let name = match label.0 {
-            0 => "Attack",
-            1 => abilities.map_or("-", |a| a[0]),
-            2 => abilities.map_or("-", |a| a[1]),
-            _ => "-",
+        let pretty = match label.0 {
+            0 => "Attack".to_string(),
+            n => match bar.get(n as usize - 1) {
+                None => String::new(),
+                Some(ab) if level < ab.min_level => format!("Lv {}", ab.min_level),
+                Some(ab) => match session.ability_cd.get(ab.id) {
+                    // Long cooldowns count down in seconds.
+                    Some((_, end)) if *end - now > 1.5 => format!("{:.0}s", *end - now),
+                    _ => ab.name.to_string(),
+                },
+            },
         };
-        // Prettify: replace underscores, title-case first letter.
-        let pretty = prettify_ability(name);
         if **text != pretty {
             **text = pretty;
         }
     }
 
-    // Ability icons: load once per ability change (asset server caches paths).
+    // Ability icons, for the abilities that have rendered art.
     for (icon, mut img, mut vis) in q_icons.iter_mut() {
-        let name = match icon.0 {
-            0 => "attack",
-            1 => abilities.map_or("", |a| a[0]),
-            2 => abilities.map_or("", |a| a[1]),
-            _ => "",
+        let path = match icon.0 {
+            0 => ability_icon("attack"),
+            n => bar
+                .get(n as usize - 1)
+                .filter(|ab| level >= ab.min_level)
+                .and_then(|ab| ability_icon(ab.id)),
         };
-        let cache = &mut icon_cache[icon.0.min(2) as usize];
-        if name.is_empty() {
-            *vis = Visibility::Hidden;
-        } else if cache != name {
-            *cache = name.to_string();
-            img.image = asset_server.load(format!("sprites/icons/{name}.png"));
-            *vis = Visibility::Inherited;
+        let cache = &mut icon_cache[(icon.0 as usize).min(BAR_TILES - 1)];
+        match path {
+            None => {
+                cache.clear();
+                *vis = Visibility::Hidden;
+            }
+            Some(p) => {
+                if cache != p {
+                    *cache = p.to_string();
+                    img.image = asset_server.load(p);
+                }
+                *vis = Visibility::Inherited;
+            }
         }
     }
 
-    // Cooldown overlays.
-    for (cd, mut vis) in q_cd_overlay.iter_mut() {
-        *vis = if cooldowns.on_cd(cd.0, now) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
+    // Cooldown sweeps: the dark overlay drains downward as the ability (or
+    // the global cooldown) recovers. Level-locked slots stay fully dark.
+    for (cd, mut vis, mut node) in q_cd_overlay.iter_mut() {
+        let frac = match cd.0 {
+            0 => if cooldowns.on_cd(0, now) { 1.0 } else { 0.0 },
+            n => match bar.get(n as usize - 1) {
+                None => 0.0,
+                Some(ab) if level < ab.min_level => 1.0,
+                Some(ab) => session
+                    .ability_cd
+                    .get(ab.id)
+                    .map_or(0.0, |w| left(*w))
+                    .max(left(session.gcd)),
+            },
         };
+        let want = Val::Percent(frac * 100.0);
+        if node.height != want {
+            node.height = want;
+        }
+        *vis = if frac > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
     }
 
-    // Class-select prompt visibility.
-    if let Ok(mut vis) = q_class_select.get_single_mut() {
-        *vis = if session.class.is_none() {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
+    // Hint line under the bar: cast in progress, or the classless prompt.
+    if let Ok((mut vis, mut text)) = q_class_select.get_single_mut() {
+        let line = match (&session.cast, session.class) {
+            (Some((id, _, end)), _) if now < *end => {
+                let name = antediluvia_sim::abilities::ability(id).map_or(id.as_str(), |a| a.name);
+                format!("Casting {name}  {:.1}s", end - now)
+            }
+            (_, None) if session.sheet.is_some() => {
+                "No class chosen - type /class warrior | hunter | priest | mage | wanderer | herald | warden | occultist".to_string()
+            }
+            _ => String::new(),
+        };
+        *vis = if line.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+        if **text != line {
+            **text = line;
+        }
         };
     }
 }

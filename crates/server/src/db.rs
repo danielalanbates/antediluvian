@@ -59,6 +59,10 @@ struct SheetExt {
     reputation: std::collections::BTreeMap<String, i32>,
     #[serde(default)]
     appearance: [u32; 3],
+    #[serde(default)]
+    stamina: i32,
+    #[serde(default)]
+    max_stamina: i32,
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -191,6 +195,8 @@ impl Db {
                         faction: ext.faction,
                         reputation: ext.reputation,
                         appearance: ext.appearance,
+                        stamina: ext.stamina,
+                        max_stamina: ext.max_stamina,
                     })
                 },
             )
@@ -242,6 +248,8 @@ impl Db {
             faction: c.faction.clone(),
             reputation: c.reputation.clone(),
             appearance: c.appearance,
+            stamina: c.stamina,
+            max_stamina: c.max_stamina,
         })?;
         self.conn.execute(
             "INSERT INTO accounts

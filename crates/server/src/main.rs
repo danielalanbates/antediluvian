@@ -1107,6 +1107,9 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
             SimEvent::Died { owner, .. } => *owner,
             SimEvent::Loot { owner, .. } => *owner,
             SimEvent::Info { owner, .. } => *owner,
+            SimEvent::CastStart { owner, .. } => *owner,
+            SimEvent::AbilityUsed { owner, .. } => *owner,
+            SimEvent::Vitals { owner } => *owner,
             SimEvent::Combat { .. } => unreachable!(),
         };
         let Some(c) = conns.get(&owner) else { continue };
@@ -1121,6 +1124,15 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
             SimEvent::Info { text, .. } => {
                 c.send(ServerMsg::Notice { text });
             }
+            SimEvent::CastStart { ability, secs, .. } => {
+                // Cast bar only; the sheet has not changed yet.
+                c.send(ServerMsg::CastStart { ability: ability.to_string(), secs });
+                continue;
+            }
+            SimEvent::AbilityUsed { ability, cooldown, .. } => {
+                c.send(ServerMsg::AbilityUsed { ability: ability.to_string(), cooldown });
+            }
+            SimEvent::Vitals { .. } => {} // just the refreshed stat block below
             SimEvent::Combat { .. } => unreachable!(),
         }
         if let Some(ent) = c.entity {

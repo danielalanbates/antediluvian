@@ -231,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("[ah] #{} {} — {}g (seller {})", l.id, l.item, l.price, l.seller);
                 }
             }
+            ServerMsg::CastStart { .. } | ServerMsg::AbilityUsed { .. } => {}
             ServerMsg::Pong => {}
         }
     }

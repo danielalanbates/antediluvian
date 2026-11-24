@@ -13,7 +13,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -36,16 +36,37 @@ pub enum Class {
     Hunter,
     Priest,
     Mage,
+    /// Knife-fighter of the land of Nod (B09).
+    Wanderer,
+    /// Armored preacher of righteousness (B09).
+    Herald,
+    /// Keeper of the ground (B09).
+    Warden,
+    /// Student of the Watchers' forbidden lore (B09).
+    Occultist,
 }
 
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Warrior, Class::Hunter, Class::Priest, Class::Mage];
+    pub const ALL: [Class; 8] = [
+        Class::Warrior,
+        Class::Hunter,
+        Class::Priest,
+        Class::Mage,
+        Class::Wanderer,
+        Class::Herald,
+        Class::Warden,
+        Class::Occultist,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Class::Warrior => "warrior",
             Class::Hunter => "hunter",
             Class::Priest => "priest",
             Class::Mage => "mage",
+            Class::Wanderer => "wanderer",
+            Class::Herald => "herald",
+            Class::Warden => "warden",
+            Class::Occultist => "occultist",
         }
     }
 }
@@ -160,6 +181,12 @@ pub struct CharacterSheet {
     pub max_health: i32,
     pub mana: i32,
     pub max_mana: i32,
+    /// Stamina pool (B03): spent by warrior/hunter/wanderer abilities. Old
+    /// saves load as 0/0 and are topped up to a full pool on spawn.
+    #[serde(default)]
+    pub stamina: i32,
+    #[serde(default)]
+    pub max_stamina: i32,
     pub inventory: Vec<String>,
     // ── WoW-style systems (all defaulted so v1 saves still load) ──
     /// Chosen class; `None` until the player picks one.
@@ -285,7 +312,7 @@ pub enum ClientMsg {
     SelectClass { class: Class },
     /// Cast a class ability by id (e.g. "heroic_strike"). Targeting is
     /// server-side: offensive abilities hit what's in front / in range,
-    /// heals target self.
+    /// friendly ones land on the caster (or the nearby party).
     Cast { ability: String },
     /// Spend one talent point on a talent id (e.g. "warrior_power").
     LearnTalent { talent: String },
@@ -395,5 +422,11 @@ pub enum ServerMsg {
     /// A combat event in the player's zone: `src` swung/cast/was hit/died.
     /// Drives remote-entity animations; safe to ignore.
     Event { act: Act, kind: EventKind, src: EntityId, dst: Option<EntityId> },
+    /// The player began a cast-time ability (B03): show a cast bar for `secs`.
+    /// `secs == 0.0` means the cast in progress was interrupted.
+    CastStart { ability: String, secs: f32 },
+    /// One of the player's abilities fired (B03): start its `cooldown` sweep
+    /// (and the global cooldown) on the action bar.
+    AbilityUsed { ability: String, cooldown: f32 },
     Pong,
 }
