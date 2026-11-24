@@ -12,6 +12,8 @@ pub mod durability;
 pub mod questgen;
 pub mod social;
 pub mod travel;
+#[cfg(test)]
+mod pvp_tests;
 
 /// "sethite" -> "Sethite" (banner text helper shared by the track modules).
 pub(crate) fn questgen_title(s: &str) -> String {
