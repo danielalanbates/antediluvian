@@ -47,6 +47,7 @@ test-client build. Details, shots and the unverified list:
 | B08 Travel | server done; client: zone banner, flight window, rested stretch, spirit-release prompt (solo) seen; Fly and Release unpressed |
 | B09 Classes 5-8 | done in sim and builder; they reuse the four old rigs |
 | Variety | done: character looks (protocol, db, server clamp, rigs, LOD, builder), creature grafts, 12 landform families; counts and gaps in the verification README. Builder mouse/keyboard untested |
+| Review 2026-11-23 | merge and client reviewed, 10 defects fixed with tests; see `docs/beta/HANDOFF_2026-11-23.md` (sim 132 / server 16 / client 130 tests) |
 | B10-B12 | not started |
 
 ## Chunks (do in order; each ships through the web gate + app staging)
@@ -80,7 +81,7 @@ test-client build. Details, shots and the unverified list:
 - Window buttons, right-click, tooltips and hotkeys have never been driven by a real mouse or keyboard (see verification README, 2026-11-23 later section).
 - No aura list on the wire: enemy debuffs cannot be shown.
 - XP curve overflows near level 55 (see server track notes).
-- Flaky sim test: `questgen::tests::cave_ore_collect_and_dweller_quests_complete` failed 2 of 9 runs on 2026-11-23 (assert at questgen.rs:1055, ore count). It picks the ore node by hash-map order, which changes per process. Not fixed.
+- Sim test `questgen::tests::cave_ore_collect_and_dweller_quests_complete` was flaky (any ore node from a hash map); it now takes the node nearest the cave and passed 12 of 12 runs. Why other nodes yielded a different count is not root-caused.
 - `batesai.org/membership/` redirects to itself (functions/membership.js).
 - Fresh server character showed 64/100 HP despite godmode (unexplained).
 - Headless SwiftShader renders characters translucent (artifact only).

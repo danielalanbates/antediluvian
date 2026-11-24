@@ -251,3 +251,22 @@ stopped, port free). Port 8787 untouched.
 - Landforms have no collision (the dome rocks they replace had none either).
 - Solo play, the wasm build and windowed play were not run.
 - No profanity filter on names.
+
+## Review pass (last section, 2026-11-23)
+
+Full write-up: `docs/beta/HANDOFF_2026-11-23.md`.
+
+| Shot | What it shows |
+|---|---|
+| `review_builder_fresh.jpg` | builder on a fresh account, scripted name and look |
+| `review_first_spawn.jpg` | first spawn at the gate: unit frame, stamina bar, minimap, "!" over the Sentinel |
+| `review_bags_quest_markers.jpg` | bags, tracker with the first quest, grey "?" over the Elder, rested stretch |
+| `review_world_map.jpg` | world map over the bags |
+| `review_quest_log.jpg` | quest log with objective, giver and reward |
+| `review_swarm200_before_lod_fix.jpg` | 200 bots: players next to the camera drawn as block figures (defect) |
+| `review_swarm200_after_lod_fix.jpg` | same run after the fix: near players are rigs with looks, far ones block figures |
+
+Three windowless runs, all exit 0, own server on 127.0.0.1:8797 with a temp DB
+(removed), server and swarm stopped, port free. fps 42-52 in all three.
+Unverified: anything needing a mouse or keyboard; the "no reject line" change
+on a fresh account; a frame-rate gain from the HUD change.
