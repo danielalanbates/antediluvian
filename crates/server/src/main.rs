@@ -7,6 +7,9 @@
 
 mod db;
 mod net;
+// beta-server-track (B05-B08): new message handling lives in these modules.
+mod social_db;
+mod track;
 
 use antediluvia_protocol::{DevCmd, Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};
 use db::Db;
@@ -123,6 +126,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 let t0 = std::time::Instant::now();
                 let events = world.step();
                 dispatch_events(&mut world, &mut conns, events);
+                track::tick(ticks, &mut world, &mut conns, &db); // beta-server-track hook
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
                     broadcast_snapshots(&world, &conns);
@@ -269,6 +273,7 @@ fn handle_client_msg(
                         let recovery = diff as f32 * 0.00347;
                         s.wakefulness = (s.wakefulness + recovery).clamp(0.0, 100.0);
                     }
+                    track::offline_rest(&mut s, now); // beta-server-track hook (B08 rested XP)
                     s
                 },
                 Ok(None) => {
@@ -387,8 +392,9 @@ fn handle_client_msg(
                 _ => return,
             };
             let text = text.chars().take(240).collect::<String>();
-            for c in conns.values() {
-                if c.logged_in && c.act == act {
+            for (cid, c) in conns.iter() {
+                // beta-server-track hook (B07): ignore lists filter zone chat.
+                if c.logged_in && c.act == act && track::hears(*cid, &from) {
                     c.send(ServerMsg::Chat { from: from.clone(), text: text.clone() });
                 }
             }
@@ -995,8 +1001,8 @@ fn handle_client_msg(
                 c.send(ServerMsg::Pong);
             }
         }
-        // beta-server-track: B05-B08 messages are wired up in a later commit.
-        _ => {}
+        // beta-server-track hook: every B05-B08 message is handled in track.rs.
+        other => track::handle_client(id, other, world, conns, db),
     }
 }
 
