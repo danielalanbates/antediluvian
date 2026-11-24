@@ -568,11 +568,11 @@ pub fn update_ui_frames(
     // ── Player frame ─────────────────────────────────────────────────────
     if let Some(cs) = sheet {
         if let Ok(mut t) = q_name.get_single_mut() {
-            **t = cs.name.clone();
+            set_text(&mut t, &cs.name);
         }
         if let Ok(mut t) = q_level.get_single_mut() {
             // Unit frame shows lineage + standing once chosen (C10).
-            **t = match cs.faction.as_deref() {
+            let line = match cs.faction.as_deref() {
                 Some(f) => {
                     let rep = cs.reputation.get(f).copied().unwrap_or(0);
                     let rank = match rep {
@@ -585,6 +585,7 @@ pub fn update_ui_frames(
                 }
                 None => format!("Lv {}", cs.level),
             };
+            set_text(&mut t, &line);
         }
 
         // HP bar.
@@ -594,10 +595,10 @@ pub fn update_ui_frames(
             0.0
         };
         if let Ok(mut n) = q_hp_fill.get_single_mut() {
-            n.width = Val::Percent(hp_frac * 100.0);
+            set_width(&mut n, hp_frac);
         }
         if let Ok(mut t) = q_hp_text.get_single_mut() {
-            **t = format!("{} / {}", cs.health.max(0), cs.max_health);
+            set_text(&mut t, &format!("{} / {}", cs.health.max(0), cs.max_health));
         }
 
         // Resource bar: mana, or stamina for the classes that spend it.
@@ -609,13 +610,13 @@ pub fn update_ui_frames(
         };
         let mp_frac = if max > 0 { (cur.max(0) as f32 / max as f32).clamp(0.0, 1.0) } else { 0.0 };
         if let Ok((mut n, mut bg)) = q_mp_fill.get_single_mut() {
-            n.width = Val::Percent(mp_frac * 100.0);
+            set_width(&mut n, mp_frac);
             if bg.0 != color {
                 bg.0 = color;
             }
         }
         if let Ok(mut t) = q_mp_text.get_single_mut() {
-            **t = format!("{label} {} / {}", cur.max(0), max);
+            set_text(&mut t, &format!("{label} {} / {}", cur.max(0), max));
         }
 
         // XP bar.
@@ -625,7 +626,7 @@ pub fn update_ui_frames(
             0.0
         };
         if let Ok(mut n) = q_xp_fill.get_single_mut() {
-            n.width = Val::Percent(xp_frac * 100.0);
+            set_width(&mut n, xp_frac);
         }
     }
 
@@ -667,14 +668,14 @@ pub fn update_ui_frames(
         match path {
             None => {
                 cache.clear();
-                *vis = Visibility::Hidden;
+                set_vis(&mut vis, false);
             }
             Some(p) => {
                 if cache != p {
                     *cache = p.to_string();
                     img.image = asset_server.load(p);
                 }
-                *vis = Visibility::Inherited;
+                set_vis(&mut vis, true);
             }
         }
     }
@@ -698,7 +699,7 @@ pub fn update_ui_frames(
         if node.height != want {
             node.height = want;
         }
-        *vis = if frac > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+        set_vis(&mut vis, frac > 0.0);
     }
 
     // Hint line under the bar: the classless prompt.
@@ -709,7 +710,7 @@ pub fn update_ui_frames(
         } else {
             String::new()
         };
-        *vis = if line.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+        set_vis(&mut vis, !line.is_empty());
         if **text != line {
             **text = line;
         }
@@ -733,7 +734,7 @@ pub fn update_ui_panels(
     if let Some(cs) = sheet {
         let has_quests = !cs.quests.is_empty();
         if let Ok(mut vis) = q_quest_root.get_single_mut() {
-            *vis = if has_quests { Visibility::Inherited } else { Visibility::Hidden };
+            set_vis(&mut vis, has_quests);
         }
         if has_quests {
             if let Ok(mut t) = q_quest_text.get_single_mut() {
@@ -751,7 +752,7 @@ pub fn update_ui_panels(
                     // Title, objective and real progress (win/questlog.rs).
                     lines.push_str(&format!("* {theme}{}", crate::win::questlog::tracker_line(name, cs)));
                 }
-                **t = lines;
+                set_text(&mut t, &lines);
             }
         }
     }
@@ -768,11 +769,7 @@ pub fn update_ui_panels(
 
     // ── Chat input ───────────────────────────────────────────────────────
     if let Ok(mut vis) = q_chat_input_bar.get_single_mut() {
-        *vis = if session.chat_active {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+        set_vis(&mut vis, session.chat_active);
     }
     if session.chat_active {
         if let Ok(mut t) = q_chat_input_text.get_single_mut() {
@@ -786,6 +783,79 @@ pub fn update_ui_panels(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// The HUD systems run every frame. Writing through a `Mut` marks the
+// component changed even when the value is the same, and a changed `Text` or
+// `Node` is laid out again; these write only when the value really differs.
+
+pub(crate) fn set_text(t: &mut Mut<Text>, s: &str) {
+    if t.0 != s {
+        t.0.clear();
+        t.0.push_str(s);
+    }
+}
+
+/// Bar fill width as a whole-tenth percentage of `frac` (0..=1).
+pub(crate) fn set_width(n: &mut Mut<Node>, frac: f32) {
+    let frac = if frac.is_finite() { frac.clamp(0.0, 1.0) } else { 0.0 };
+    let want = Val::Percent((frac * 1000.0).round() / 10.0);
+    if n.width != want {
+        n.width = want;
+    }
+}
+
+pub(crate) fn set_vis(v: &mut Mut<Visibility>, shown: bool) {
+    let want = if shown { Visibility::Inherited } else { Visibility::Hidden };
+    if **v != want {
+        **v = want;
+    }
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::*;
+    use bevy::ecs::world::World;
+
+    /// Review regression: an unchanged HUD value must not mark its component
+    /// changed (that re-ran text and UI layout every frame).
+    #[test]
+    fn hud_setters_only_touch_on_real_change() {
+        let mut world = World::new();
+        let e = world.spawn((Text::new("100 / 100"), Node::default(), Visibility::Hidden)).id();
+        world.clear_trackers();
+        {
+            let mut t = world.get_mut::<Text>(e).unwrap();
+            set_text(&mut t, "100 / 100");
+            assert!(!t.is_changed(), "same text must not count as a change");
+            set_text(&mut t, "90 / 100");
+            assert!(t.is_changed());
+            assert_eq!(t.0, "90 / 100");
+        }
+        {
+            let mut n = world.get_mut::<Node>(e).unwrap();
+            set_width(&mut n, 0.5);
+            assert_eq!(n.width, Val::Percent(50.0));
+        }
+        world.clear_trackers();
+        {
+            let mut n = world.get_mut::<Node>(e).unwrap();
+            set_width(&mut n, 0.5);
+            set_width(&mut n, 0.50004);
+            assert!(!n.is_changed(), "same width must not count as a change");
+            set_width(&mut n, f32::NAN);
+            assert_eq!(n.width, Val::Percent(0.0), "a bad fraction from the server draws an empty bar");
+            set_width(&mut n, 7.0);
+            assert_eq!(n.width, Val::Percent(100.0));
+        }
+        {
+            let mut v = world.get_mut::<Visibility>(e).unwrap();
+            set_vis(&mut v, false);
+            assert!(!v.is_changed());
+            set_vis(&mut v, true);
+            assert!(v.is_changed() && *v == Visibility::Inherited);
+        }
+    }
+}
+
 /// Fill the target frame from `Session.target`; hide it when nothing is near.
 pub fn update_target_frame(
     session: Res<Session>,
@@ -796,17 +866,17 @@ pub fn update_target_frame(
     let Ok(mut vis) = q_root.get_single_mut() else { return };
     match &session.target {
         Some((name, hp, max)) => {
-            *vis = Visibility::Visible;
+            if *vis != Visibility::Visible {
+                *vis = Visibility::Visible;
+            }
             if let Ok(mut t) = q_name.get_single_mut() {
-                **t = name.clone();
+                set_text(&mut t, name);
             }
             if let Ok(mut t) = q_hp.get_single_mut() {
-                **t = format!("{} / {}", hp.max(&0), max);
+                set_text(&mut t, &format!("{} / {}", hp.max(&0), max));
             }
         }
-        None => {
-            *vis = Visibility::Hidden;
-        }
+        None => set_vis(&mut vis, false),
     }
 }
 
@@ -821,8 +891,11 @@ pub fn update_banner(
         Some((msg, left)) => {
             *left -= time.delta_secs().min(0.1); // long loading frames must not eat the banner
             let alpha = (*left / 0.8).clamp(0.0, 1.0); // fade out over the last 0.8 s
-            **text = msg.clone();
-            *color = TextColor(GOLD_ACCENT.with_alpha(alpha));
+            set_text(&mut text, msg);
+            let want = GOLD_ACCENT.with_alpha(alpha);
+            if color.0 != want {
+                color.0 = want;
+            }
             if *left <= 0.0 {
                 session.banner = None;
                 **text = String::new();

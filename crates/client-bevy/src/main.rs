@@ -443,7 +443,10 @@ fn main() {
             (
                 receive_from_server,
                 send_input,
-                chat_input,
+                // After the window hotkeys and the menu: an Escape that
+                // cancels the chat line must not also close a window or open
+                // the menu in the same frame (they still see chat as active).
+                chat_input.after(menu::menu_toggle),
                 orbit_camera,
                 mouse_click_attack,
                 sync_prop_colliders,
@@ -617,6 +620,15 @@ pub struct Session {
 }
 
 pub use look::builder::Builder;
+
+impl Session {
+    /// A text field owns the keyboard: chat line, dev console or the
+    /// character builder's name. Game keys (move, talk, mount, tame, bar)
+    /// must not fire while this is true.
+    pub fn typing(&self) -> bool {
+        self.chat_active || self.dev_input.is_some() || self.builder.is_some()
+    }
+}
 
 impl Default for Session {
     fn default() -> Self {
@@ -1962,11 +1974,20 @@ fn update_name_labels(
         match camera.world_to_viewport(cam_xf, world) {
             Ok(p) if near => {
                 // ~7.5 px per glyph at 15 px: centre the text on the head.
-                node.left = Val::Px(p.x - label.chars * 3.8);
-                node.top = Val::Px(p.y - 10.0);
-                *vis = Visibility::Inherited;
+                let (l, t) = (Val::Px((p.x - label.chars * 3.8).round()), Val::Px((p.y - 10.0).round()));
+                if node.left != l || node.top != t {
+                    node.left = l;
+                    node.top = t;
+                }
+                if *vis != Visibility::Inherited {
+                    *vis = Visibility::Inherited;
+                }
             }
-            _ => *vis = Visibility::Hidden,
+            _ => {
+                if *vis != Visibility::Hidden {
+                    *vis = Visibility::Hidden;
+                }
+            }
         }
     }
 }
@@ -2288,8 +2309,9 @@ fn send_input(
         .get_single()
         .map(|t| Vec2::new(t.translation.x, t.translation.z))
         .unwrap_or(Vec2::ZERO);
-    // While chat is active, game keys are disabled.
-    if session.chat_active {
+    // While chat, the dev console or the builder owns the keyboard, game keys
+    // are disabled (typing "heal" in the console used to press H and E).
+    if session.typing() {
         // Still send zero movement if we were moving.
         if *last_dir != (0, 0) {
             *last_dir = (0, 0);
@@ -3145,6 +3167,29 @@ mod collision_tests {
     fn zero_input_stays_zero() {
         let c = wall_at(0.0, 0.0, 50.0);
         assert_eq!(deflect_around_props(Vec2::ZERO, &Vec2::ZERO, &c), Vec2::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_owner_tests {
+    use super::*;
+
+    /// Review regression: the dev console and the builder's name field own
+    /// the keyboard exactly like the chat line does.
+    #[test]
+    fn typing_blocks_game_keys_for_chat_console_and_builder() {
+        let mut s = Session::default();
+        assert!(!s.typing());
+        s.chat_active = true;
+        assert!(s.typing());
+        s.chat_active = false;
+        s.dev_input = Some("hea".into());
+        assert!(s.typing());
+        s.dev_input = None;
+        s.builder = Some(Builder::default());
+        assert!(s.typing());
+        s.builder = None;
+        assert!(!s.typing());
     }
 }
 

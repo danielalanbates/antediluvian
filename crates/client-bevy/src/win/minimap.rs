@@ -65,6 +65,16 @@ pub fn landmarks(act: Act, x: f32, y: f32, range: f32) -> Vec<(f32, f32, [f32; 3
     out
 }
 
+/// Living blips within `range` of (`mx`, `my`), with their distance.
+pub fn nearest_in_range(blips: &[super::Blip], mx: f32, my: f32, range: f32) -> Vec<(f32, &super::Blip)> {
+    blips
+        .iter()
+        .filter(|b| b.alive)
+        .map(|b| ((b.x - mx).hypot(b.y - my), b))
+        .filter(|(d, _)| *d <= range)
+        .collect()
+}
+
 #[derive(Component)]
 pub(crate) struct MiniRoot;
 #[derive(Component)]
@@ -181,7 +191,9 @@ pub(crate) fn update(
         }
     }
     // Nearest blips first, so a crowd never hides what is next to you.
-    let mut blips: Vec<_> = st.blips.iter().filter(|b| b.alive).map(|b| ((b.x - mx).hypot(b.y - my), b)).collect();
+    // Out-of-range blips are dropped before the sort: a solo snapshot carries
+    // the whole zone (thousands of entities), and this runs every frame.
+    let mut blips: Vec<_> = nearest_in_range(&st.blips, mx, my, RANGE);
     blips.sort_by(|a, b| a.0.total_cmp(&b.0));
     for (_, b) in blips {
         if draw.len() >= DOTS {
@@ -239,6 +251,20 @@ pub(crate) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review regression: the per-frame sort only sees living blips in range
+    /// (a solo snapshot carries the whole zone).
+    #[test]
+    fn only_living_blips_in_range_reach_the_sort() {
+        let blip = |x: f32, alive: bool| crate::win::Blip { kind: EntityKind::Enemy, x, y: 0.0, name: None, alive };
+        let mut all: Vec<_> = (0..3000).map(|i| blip(2000.0 + i as f32, true)).collect();
+        all.push(blip(100.0, true));
+        all.push(blip(50.0, false));
+        all.push(blip(RANGE, true));
+        let near = nearest_in_range(&all, 0.0, 0.0, RANGE);
+        assert_eq!(near.len(), 2);
+        assert!(near.iter().all(|(d, b)| *d <= RANGE && b.alive));
+    }
 
     #[test]
     fn projection_is_centred_and_clips_to_the_circle() {

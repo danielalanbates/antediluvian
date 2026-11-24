@@ -436,6 +436,39 @@ impl Db {
 mod look_tests {
     use super::*;
 
+    /// A row written before the beta fields existed (no look, stamina or
+    /// durability in the ext JSON) must still load, with defaults.
+    #[test]
+    fn pre_beta_save_without_new_fields_still_loads() {
+        let db = Db::open(":memory:").unwrap();
+        db.raw()
+            .execute(
+                "INSERT INTO accounts (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, apple_id)
+                 VALUES ('oldtimer', 'Oldtimer', 'eden', 1.0, 2.0, 7, 10, 700, 80, 100, 40, 50, 'herb', ?1, 'apple-old')",
+                [r#"{"class":"warrior","gold":12,"appearance":[1,5,3],"quests_done":["first_steps"]}"#],
+            )
+            .unwrap();
+        let s = db.load_by_apple_id("apple-old").unwrap().expect("old row loads");
+        assert_eq!((s.name.as_str(), s.level, s.gold), ("Oldtimer", 7, 12));
+        assert_eq!(s.class, Some(antediluvia_protocol::Class::Warrior));
+        assert_eq!(s.appearance, [1, 5, 3]);
+        assert_eq!((s.look, s.stamina, s.max_stamina), (0, 0, 0));
+        assert!(s.durability.is_empty());
+        assert_eq!(s.inventory, vec!["herb".to_string()]);
+        // The legacy skin and hair picks carry into a look, as on login.
+        let look = antediluvia_protocol::Look::unpack(antediluvia_protocol::Look::from_legacy(s.appearance).pack());
+        assert_eq!(look.skin, 5);
+        // And the sim tops the empty stamina pool up when the character spawns.
+        let mut w = antediluvia_sim::world::World::new(1);
+        let id = w.spawn_player(9, s);
+        let live = w.player_sheet(antediluvia_protocol::Act::Eden, id).unwrap();
+        assert!(live.max_stamina > 0 && live.stamina == live.max_stamina, "{}/{}", live.stamina, live.max_stamina);
+        // Saving it back and loading again keeps everything.
+        db.save(&live, None).unwrap();
+        let again = db.load("oldtimer").unwrap().unwrap();
+        assert_eq!((again.gold, again.max_stamina), (12, live.max_stamina));
+    }
+
     /// Three-place rule for the look: protocol field, SheetExt, load + save.
     #[test]
     fn look_survives_save_and_load() {
