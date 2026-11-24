@@ -10,6 +10,7 @@ pub mod world;
 // ── beta-server-track (B05-B08) ──
 pub mod durability;
 pub mod questgen;
+pub mod travel;
 
 /// "sethite" -> "Sethite" (banner text helper shared by the track modules).
 pub(crate) fn questgen_title(s: &str) -> String {
