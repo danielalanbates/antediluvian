@@ -272,6 +272,61 @@ pub const FORCED_PVP_LINGER: f32 = 20.0;
 /// Where new mortals step out of the garden (east end of the Eden road).
 pub const GATE_OF_EDEN: Vec2 = Vec2::new(2950.0, 0.0);
 
+// ─── Sanctuaries, leash and respawn (open beta) ──────────────────────────────
+
+/// Sanctuary radius around the Gate of Eden, where every new character
+/// starts. Two caves with next-tier watchers sit 600-700 units away, and
+/// their patrols used to kill an idle level 1 at the gate in about 90 s.
+pub const GATE_SANCTUARY: f32 = 400.0;
+/// Sanctuary radius around each outlying graveyard (spirit release).
+pub const GRAVEYARD_SANCTUARY: f32 = 200.0;
+/// A chasing mob this far from its home gives up and evades home.
+pub const LEASH_RANGE: f32 = 900.0;
+/// A killed (or tamed) mob or a harvested node comes back at its own home
+/// spot after a delay drawn from this range, in seconds. (It used to come
+/// back at once at a random point anywhere in the zone, so every camp a
+/// player cleared, the Eden chain camps included, was gone for good.)
+pub const RESPAWN_DELAY_SECS: (f32, f32) = (25.0, 40.0);
+
+/// Sanctuaries of an act as (centre, radius): the inn ring (its shrine is
+/// the inn graveyard), the four outlying graveyards and, in Eden, the Gate
+/// where new characters start. Hostile mobs never spawn or wander inside
+/// one, never aggro, chase or hit a player standing in one, and evade home
+/// (immune, healing to full) when their target steps inside or when they
+/// are hit from inside one.
+pub fn sanctuaries(act: Act) -> [(Vec2, f32); 6] {
+    let g = crate::travel::graveyards(act);
+    let gate = if act == Act::Eden { GATE_SANCTUARY } else { 0.0 };
+    [
+        (g[0].1, SAFE_RING),
+        (g[1].1, GRAVEYARD_SANCTUARY),
+        (g[2].1, GRAVEYARD_SANCTUARY),
+        (g[3].1, GRAVEYARD_SANCTUARY),
+        (g[4].1, GRAVEYARD_SANCTUARY),
+        (GATE_OF_EDEN, gate),
+    ]
+}
+
+/// Is `p` inside one of the act's sanctuaries?
+pub fn in_sanctuary(act: Act, p: Vec2) -> bool {
+    sanctuaries(act).iter().any(|(c, r)| p.distance(*c) < *r)
+}
+
+/// Move a hostile spawn point radially out of any sanctuary it falls in
+/// (plus a small margin). Deterministic, so it never shifts the seeded
+/// layout of anything else.
+fn out_of_sanctuary(act: Act, mut p: Vec2) -> Vec2 {
+    const MARGIN: f32 = 30.0;
+    for (c, r) in sanctuaries(act) {
+        if r > 0.0 && p.distance(c) < r + MARGIN {
+            let dir = (p - c).try_normalize().unwrap_or(Vec2::X);
+            p = c + dir * (r + MARGIN);
+        }
+    }
+    let lim = WORLD_BOUNDS - 20.0;
+    p.clamp(Vec2::splat(-lim), Vec2::splat(lim))
+}
+
 // ─── Factions & reputation (C10) ─────────────────────────────────────────────
 
 pub const FACTIONS: [&str; 2] = ["sethite", "cainite"];
@@ -499,9 +554,38 @@ pub struct Zone {
     /// `insert_entity`/`remove_entity`, and cell-boundary crossings are
     /// refiled by the pass at the end of `step_zone`.
     pub grid: AoiGrid,
+    /// Replacements waiting to come back at their home spot, as
+    /// (due tick, entity). Not in `entities` or the grid until due.
+    pub respawns: Vec<(u64, Entity)>,
 }
 
 impl Zone {
+    /// Queue the replacement for a mob or node that just left the zone
+    /// (killed, harvested or tamed): same species and stats, fresh state,
+    /// back at its home spot after `secs`.
+    fn queue_respawn(&mut self, gone: &Entity, id: EntityId, secs: f32) {
+        let e = respawn_of(gone, id);
+        let due = self.tick + (secs.max(0.0) * TICK_HZ as f32).round() as u64;
+        self.respawns.push((due, e));
+    }
+
+    /// Bring back every queued replacement that is due.
+    fn drain_respawns(&mut self) {
+        if self.respawns.is_empty() {
+            return;
+        }
+        let tick = self.tick;
+        let mut i = 0;
+        while i < self.respawns.len() {
+            if self.respawns[i].0 <= tick {
+                let (_, e) = self.respawns.swap_remove(i);
+                self.insert_entity(e.id, e);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// Insert an entity, filing it in the AoI grid.
     fn insert_entity(&mut self, id: EntityId, mut e: Entity) {
         e.cell = aoi::cell_of(e.pos.x, e.pos.y) as u32;
@@ -612,6 +696,7 @@ impl World {
                 tick: 0,
                 entry: Vec2::ZERO,
                 grid: AoiGrid::new(),
+                respawns: Vec::new(),
             };
             w.populate_zone(&mut zone);
             w.zones.insert(act, zone);
@@ -667,7 +752,9 @@ impl World {
                 for _ in 0..group {
                     let off = self.rng.point(150.0);
                     let id = self.alloc_id();
-                    zone.entities.insert(id, make_enemy(id, center + off, tag, act));
+                    // A camp member's home never sits inside a sanctuary.
+                    let pos = out_of_sanctuary(act, center + off);
+                    zone.entities.insert(id, make_enemy(id, pos, tag, act));
                 }
                 left -= group;
             }
@@ -697,6 +784,7 @@ impl World {
                 };
                 let id = self.alloc_id();
                 if def.hostile() {
+                    let pos = out_of_sanctuary(act, pos);
                     zone.entities.insert(id, make_enemy(id, pos, &def.tag, act));
                 } else {
                     let lvl = def.mid_level() as i32;
@@ -734,11 +822,13 @@ impl World {
             for _ in 0..3 {
                 let off = self.rng.point(170.0);
                 let id = self.alloc_id();
-                zone.entities.insert(id, make_enemy(id, center + off, tough_tag, next_act));
+                let pos = out_of_sanctuary(act, center + off);
+                zone.entities.insert(id, make_enemy(id, pos, tough_tag, next_act));
             }
             let id = self.alloc_id();
             let boss_tag = format!("{}_dweller", cave.resources[0]);
-            zone.entities.insert(id, make_enemy(id, center + self.rng.point(60.0), &boss_tag, act));
+            let pos = out_of_sanctuary(act, center + self.rng.point(60.0));
+            zone.entities.insert(id, make_enemy(id, pos, &boss_tag, act));
         }
         // The act's quest givers: the Elder at the inn, a Wanderer at the
         // crossroads, and a Seer further afield (see quests.rs giver mapping).
@@ -770,7 +860,7 @@ impl World {
         }
         // One elite "alpha" per act — the dungeon-boss placeholder. Guaranteed
         // rare drop (thick_hide) and big XP.
-        let pos = self.rng.point(WORLD_BOUNDS * 0.7);
+        let pos = out_of_sanctuary(act, self.rng.point(WORLD_BOUNDS * 0.7));
         let id = self.alloc_id();
         // Raw stats: the boss is elite even if it rolls near the entry
         // (the starting-area mercy nerf must never touch it).
@@ -879,6 +969,10 @@ impl World {
         let party_of = self.party_of.clone();
         let zone = self.zones.get_mut(&act).unwrap();
         zone.tick += 1;
+        // Killed / harvested / tamed entities whose delay is up come back home.
+        zone.drain_respawns();
+        let sanct = sanctuaries(act);
+        let safe = |p: Vec2| sanct.iter().any(|(c, r)| p.distance(*c) < *r);
 
         // Snapshots of live players and enemies for cross-entity AI/combat.
         // (id, pos, pvp-flagged, duel partner)
@@ -895,6 +989,8 @@ impl World {
             .collect();
         let players: Vec<(EntityId, Vec2)> =
             player_info.iter().map(|(id, p, _, _)| (*id, *p)).collect();
+        // Players hostile mobs may notice: everyone outside a sanctuary.
+        let hunted: Vec<(EntityId, Vec2)> = players.iter().copied().filter(|(_, p)| !safe(*p)).collect();
         let enemies: Vec<(EntityId, Vec2)> = zone
             .entities
             .values()
@@ -1366,11 +1462,32 @@ impl World {
                         continue;
                     }
                     let move_mult = if st.rooted { 0.0 } else { st.speed };
-                    // A taunt overrides "nearest player" and aggro range.
+                    // Evading (open beta): walk straight home ignoring
+                    // everyone (immune, see the damage pass), then reset to
+                    // full health and patrol again.
+                    if e.state == AiState::Return {
+                        let to = e.origin - e.pos;
+                        let d = to.length();
+                        let step = e.speed * move_mult * DT;
+                        if d <= step.max(4.0) {
+                            e.pos = e.origin;
+                            e.state = AiState::Patrol;
+                            e.state_timer = 0.0;
+                            e.wander_target = e.origin;
+                            e.health = e.max_health;
+                        } else {
+                            let dir = to / d;
+                            e.pos += dir * step;
+                            e.rot = dir.y.atan2(dir.x);
+                        }
+                        continue;
+                    }
+                    // A taunt overrides "nearest player" and aggro range,
+                    // but nothing pulls a mob onto a player in a sanctuary.
                     let taunter = st.taunt.and_then(|t| {
                         players
                             .iter()
-                            .find(|(pid, _)| *pid == t)
+                            .find(|(pid, ppos)| *pid == t && !safe(*ppos))
                             .map(|(pid, ppos)| (*pid, *ppos, e.pos.distance(*ppos)))
                     });
                     // Hit from range (B10 chunk): chase the attacker for a while.
@@ -1381,12 +1498,26 @@ impl World {
                         e.provoked = None;
                     }
                     let provoker = e.provoked.and_then(|(t, _)| {
-                        players.iter().find(|(pid, _)| *pid == t).map(|(pid, ppos)| (*pid, *ppos, e.pos.distance(*ppos)))
+                        players
+                            .iter()
+                            .find(|(pid, ppos)| *pid == t && !safe(*ppos))
+                            .map(|(pid, ppos)| (*pid, *ppos, e.pos.distance(*ppos)))
                     });
                     let taunted = taunter.is_some() || provoker.is_some();
-                    let nearest = taunter.or(provoker).or_else(|| nearest_of(&players, e.pos));
-                    match nearest {
-                        Some((pid, ppos, dist)) if taunted || dist <= e.aggro_range => {
+                    let nearest = taunter.or(provoker).or_else(|| nearest_of(&hunted, e.pos));
+                    // Static quest objects (speed 0) never leash or evade.
+                    let mobile = e.speed > 0.0;
+                    let leashed = mobile && e.pos.distance(e.origin) > LEASH_RANGE;
+                    let was_chasing = e.state == AiState::Chase;
+                    let engage = nearest.filter(|(_, _, d)| taunted || *d <= e.aggro_range);
+                    match engage {
+                        // Lost the target (it died, outran us or stepped
+                        // into a sanctuary) or ran too far from home: evade.
+                        _ if leashed || (mobile && was_chasing && engage.is_none()) => {
+                            e.state = AiState::Return;
+                            e.provoked = None;
+                        }
+                        Some((pid, ppos, dist)) => {
                             e.state = AiState::Chase;
                             let to = ppos - e.pos;
                             if dist > ENEMY_MELEE_RANGE {
@@ -1413,7 +1544,9 @@ impl World {
                                 e.state_timer = rng.range(1.5, 4.0);
                                 let ang = rng.range(0.0, std::f32::consts::TAU);
                                 let r = rng.range(0.0, e.patrol_radius);
-                                e.wander_target = e.origin + Vec2::new(ang.cos(), ang.sin()) * r;
+                                let t = e.origin + Vec2::new(ang.cos(), ang.sin()) * r;
+                                // Patrols never wander into a sanctuary.
+                                e.wander_target = if safe(t) { e.origin } else { t };
                             }
                             let dir = (e.wander_target - e.pos).normalize_or_zero();
                             e.pos += dir * (e.speed * 0.5 * move_mult) * DT;
@@ -1552,15 +1685,25 @@ impl World {
         let mut duel_over: Vec<(EntityId, EntityId)> = Vec::new(); // (loser, winner)
         for (target, dmg, attacker) in damage {
             // Combat dismounts and marks both sides in-combat (C06).
+            let mut from_sanctuary = false;
             if let Some(att) = attacker {
                 if let Some(a) = zone.entities.get_mut(&att) {
                     a.mounted = false;
                     a.combat_timer = COMBAT_LOCK_SECS;
                     crate::durability::wear_weapon(a, zone.tick); // beta-server-track hook (B06)
+                    from_sanctuary = a.kind == EntityKind::Player && safe(a.pos);
                 }
             }
             if let Some(t) = zone.entities.get_mut(&target) {
                 if t.health <= 0 {
+                    continue;
+                }
+                // Evade (open beta): a mob walking home takes no damage, and
+                // a mob hit by a player standing in a sanctuary (where it
+                // may not answer) evades instead of taking the blow.
+                if t.kind == EntityKind::Enemy && t.speed > 0.0 && (t.state == AiState::Return || from_sanctuary) {
+                    t.state = AiState::Return;
+                    t.provoked = None;
                     continue;
                 }
                 if t.mounted && t.mount_hits_left > 0 {
@@ -1648,10 +1791,10 @@ impl World {
             }
         }
 
-        // Resolve kills. Enemies grant xp + a trophy and respawn a replacement;
-        // harvested resource nodes grant a material and respawn elsewhere.
+        // Resolve kills. Enemies grant xp + a trophy, harvested resource
+        // nodes grant a material; both come back later at their own home
+        // spot (see `RESPAWN_DELAY_SECS`), so every camp and grove refills.
         for (target_id, attacker_ent) in killed {
-            let origin = zone.entities.get(&target_id).map(|t| t.origin);
             let (kind, xp_value, etag) = match zone.entities.get(&target_id) {
                 Some(t) if t.kind == EntityKind::Enemy => (EntityKind::Enemy, t.xp_value, t.tag.clone()),
                 Some(t) if t.kind == EntityKind::Resource => (EntityKind::Resource, 0, t.tag.clone()),
@@ -1667,24 +1810,22 @@ impl World {
                 }
                 _ => continue,
             };
-            zone.remove_entity(&target_id);
+            let Some(gone) = zone.remove_entity(&target_id) else { continue };
 
-            // Respawn a replacement elsewhere so the zone stays populated
-            // (enemies never respawn inside the inn's safe ring).
-            let pos = loop {
-                let p = rng.point(WORLD_BOUNDS * 0.9);
-                if kind != EntityKind::Enemy || p.length() > SAFE_RING {
-                    break p;
-                }
-            };
+            // The replacement: same species and stats (a camp guard keeps
+            // its short leash, a cave watcher its tier, the act boss its
+            // boss stats), back at the dead one's home spot after a delay.
+            // It used to appear at once at a random point anywhere in the
+            // zone, which emptied every camp players cleared for good.
             let nid = self_next_id(&mut next_id);
+            let delay = rng.range(RESPAWN_DELAY_SECS.0, RESPAWN_DELAY_SECS.1);
+            zone.queue_respawn(&gone, nid, delay);
             let (reward_item, xp) = match kind {
                 EntityKind::Enemy => {
                     let tag = etag.as_deref().unwrap_or("serpent");
                     // Bestiary species (incl. names that happen to end in
-                    // "_alpha") respawn as themselves and drop bestiary loot.
+                    // "_alpha") drop bestiary loot.
                     if let Some(def) = crate::mobs::mob_by_tag(tag) {
-                        zone.insert_entity(nid, make_enemy(nid, pos, tag, act));
                         let reward = if def.drops.is_empty() {
                             format!("{tag}_trophy")
                         } else {
@@ -1693,37 +1834,21 @@ impl World {
                         };
                         (reward, xp_value)
                     } else if let Some(res) = tag.strip_suffix("_dweller") {
-                        // Cave mini-boss (C09): respawns near its cave (its
-                        // origin), guaranteed crafting-rare drop.
-                        let home = origin.unwrap_or(pos);
-                        let mut boss = make_enemy(nid, home + rng.point(60.0), tag, act);
-                        boss.tag = Some(tag.to_string());
-                        zone.insert_entity(nid, boss);
+                        // Cave mini-boss (C09): guaranteed crafting-rare drop.
                         (res.to_string(), xp_value)
-                    } else if let Some(base) = tag.strip_suffix("_alpha") {
-                        // The act boss respawns as a boss and drops a rare.
-                        let mut boss = make_enemy(nid, pos, base, act);
-                        boss.tag = Some(tag.to_string());
-                        boss.max_health *= 4;
-                        boss.health = boss.max_health;
-                        boss.damage *= 2;
-                        boss.xp_value *= 5;
-                        zone.insert_entity(nid, boss);
+                    } else if tag.ends_with("_alpha") {
+                        // The act boss drops a rare.
                         ("thick_hide".to_string(), xp_value)
                     } else {
-                        zone.insert_entity(nid, make_enemy(nid, pos, tag, act));
                         (format!("{tag}_trophy"), xp_value)
                     }
                 }
                 EntityKind::Resource => {
                     let tag = etag.as_deref().unwrap_or("tree");
                     if let Some(res) = tag.strip_prefix("ore_") {
-                        // Cave ore (C09): respawns inside its cave pocket.
-                        let home = origin.unwrap_or(pos);
-                        zone.insert_entity(nid, make_resource(nid, home + rng.point(120.0), tag));
+                        // Cave ore (C09).
                         (res.to_string(), 0)
                     } else {
-                        zone.insert_entity(nid, make_resource(nid, pos, tag));
                         let material = if tag == "rock" { "stone" } else { "wood" };
                         (material.to_string(), 0)
                     }
@@ -2342,8 +2467,14 @@ impl World {
         let my_tier = Act::ALL.iter().position(|a| *a == act).unwrap_or(0) as i32;
         let chance = (0.4 + 0.1 * (my_tier - mob_tier).max(0) as f32).min(0.95);
         if self.rng.range(0.0, 1.0) <= chance {
+            // The beast leaves the wild; another of its kind returns to its
+            // haunt later, as after a kill.
+            let nid = self.alloc_id();
+            let delay = self.rng.range(RESPAWN_DELAY_SECS.0, RESPAWN_DELAY_SECS.1);
             let z = self.zones.get_mut(&act).unwrap();
-            z.remove_entity(&target);
+            if let Some(gone) = z.remove_entity(&target) {
+                z.queue_respawn(&gone, nid, delay);
+            }
             let e = z.entities.get_mut(&id).unwrap();
             let s = e.sheet.as_mut().unwrap();
             let item = format!("mount:{ttag}");
@@ -2970,6 +3101,33 @@ const OBJECT_TAGS: &[&str] = &[
     "enchanted_bellows", "crystal_lens",
 ];
 
+/// A fresh copy of a mob or node that left the zone: the same species,
+/// stats, aggro and patrol, at its home spot, with every transient field
+/// (health, AI state, auras, timers) new.
+fn respawn_of(gone: &Entity, id: EntityId) -> Entity {
+    let home = gone.origin;
+    let tag = gone.tag.clone().unwrap_or_default();
+    let mut e = match gone.kind {
+        EntityKind::Resource => make_resource(id, home, &tag),
+        EntityKind::Wildlife => make_wildlife(id, home, &tag),
+        _ => make_enemy_raw(id, home, "__respawn__", Act::Eden),
+    };
+    e.kind = gone.kind;
+    e.tag = gone.tag.clone();
+    e.name = gone.name.clone();
+    e.max_health = gone.max_health;
+    e.health = gone.max_health;
+    e.damage = gone.damage;
+    e.xp_value = gone.xp_value;
+    e.speed = gone.speed;
+    e.aggro_range = gone.aggro_range;
+    e.patrol_radius = gone.patrol_radius;
+    if gone.speed <= 0.0 {
+        e.state = AiState::Static;
+    }
+    e
+}
+
 fn make_enemy(id: EntityId, pos: Vec2, tag: &str, act: Act) -> Entity {
     let mut e = make_enemy_raw(id, pos, tag, act);
     // Starting-area mercy (Eden): anything near the inn road or the Gate of
@@ -3299,6 +3457,10 @@ fn award_xp(p: &mut Entity, xp: u32) -> bool {
 #[cfg(test)]
 #[path = "ability_tests.rs"]
 mod ability_tests;
+
+#[cfg(test)]
+#[path = "sanctuary_tests.rs"]
+mod sanctuary_tests;
 
 #[cfg(test)]
 mod tests {

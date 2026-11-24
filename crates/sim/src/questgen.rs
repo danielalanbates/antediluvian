@@ -495,7 +495,13 @@ pub fn seed_camps(zone: &mut Zone, next_id: &mut EntityId) {
         for k in 0..CAMP_SIZE {
             let ang = (a.pos.x * 0.013 + a.pos.y * 0.007) + k as f32 * std::f32::consts::PI;
             let lim = WORLD_BOUNDS - 60.0;
-            let pos = (a.pos + Vec2::new(ang.cos(), ang.sin()) * CAMP_OFFSET).clamp(Vec2::splat(-lim), Vec2::splat(lim));
+            let at = |ang: f32| (a.pos + Vec2::new(ang.cos(), ang.sin()) * CAMP_OFFSET).clamp(Vec2::splat(-lim), Vec2::splat(lim));
+            // A guard never stands in a sanctuary (a POI beside a
+            // graveyard): turn it round the POI until it is clear.
+            let pos = (0..12)
+                .map(|i| at(ang + i as f32 * std::f32::consts::TAU / 12.0))
+                .find(|p| !crate::world::in_sanctuary(act, *p))
+                .unwrap_or_else(|| at(ang));
             let id = *next_id;
             *next_id += 1;
             let mut e = crate::world::st_make_enemy(id, pos, tag, act);
@@ -930,13 +936,18 @@ mod tests {
     /// Slay `n` mobs tagged `tag`, one at a time, standing beside each.
     fn slay(w: &mut World, act: Act, pid: EntityId, tag: &str, n: usize) {
         for _ in 0..n {
-            let (eid, epos) = {
-                let z = &w.zones[&act];
-                let e = z.entities.values().filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
+            let live = |w: &World| {
+                w.zones[&act].entities.values().filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
                     .find(|e| e.tag.as_deref().is_some_and(|t| t.starts_with(tag)))
-                    .unwrap_or_else(|| panic!("no live {tag} in {act:?}"));
-                (e.id, e.pos)
+                    .map(|e| (e.id, e.pos))
             };
+            // Kills come back after a delay at their camp: wait for one.
+            let mut waited = 0;
+            while live(w).is_none() && waited < (crate::world::RESPAWN_DELAY_SECS.1 as usize + 1) * 20 {
+                w.step();
+                waited += 1;
+            }
+            let (eid, epos) = live(w).unwrap_or_else(|| panic!("no live {tag} in {act:?}"));
             {
                 let z = w.zones.get_mut(&act).unwrap();
                 z.entities.get_mut(&eid).unwrap().health = 1;
