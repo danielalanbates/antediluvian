@@ -24,8 +24,8 @@ from having a good first hour.
 | Items | equip, bank, vendors, craft, rarity tiers, durability + repair (no windows) | bags, rarity colours, durability/repair, loot rolls, set items |
 | PvP | opt-in flag, capital auto-flag, honor ticks, duels | battleground instances, honor ranks/rewards |
 | Scale | 1000 bots, 150-entity snapshot cap | delta + binary snapshots for hosted 1000-in-zone |
-| Art | low-poly CC0 + procedural props/creatures | authored hero art (asset production, not code) |
-| Login | local UUID; SIWA helper without entitlement | real Sign in with Apple (needs Daniel's dev-portal step) |
+| Art | low-poly CC0 + procedural props/creatures; test-counted variety: 1473 mob silhouettes over mobs.json, 6956 distinct terrain/prop meshes over 5 acts | authored hero art (asset production, not code) |
+| Login | local UUID; SIWA helper without entitlement; builder with 207 look options, live preview, name rules | real Sign in with Apple (owner steps: `docs/beta/APPLE_SIGN_IN.md`) |
 | Web | playable single + live shard, gate-checked deploys | same, auto-updated each safe release |
 
 ## Integration status (2026-11-23, branch `beta-b01-b09`, not pushed)
@@ -46,6 +46,7 @@ test-client build. Details, shots and the unverified list:
 | B07 Social | server done; client: social window (Who seen), chat tabs (General round trip seen); other tabs unseen with data |
 | B08 Travel | server done; client: zone banner, flight window, rested stretch, spirit-release prompt (solo) seen; Fly and Release unpressed |
 | B09 Classes 5-8 | done in sim and builder; they reuse the four old rigs |
+| Variety | done: character looks (protocol, db, server clamp, rigs, LOD, builder), creature grafts, 12 landform families; counts and gaps in the verification README. Builder mouse/keyboard untested |
 | B10-B12 | not started |
 
 ## Chunks (do in order; each ships through the web gate + app staging)

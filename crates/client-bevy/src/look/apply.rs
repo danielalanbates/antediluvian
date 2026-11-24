@@ -88,9 +88,19 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
 }
 
 /// Vertex colour that turns texture colour `orig` into `want` (both sRGB).
-fn multiplier(orig: Rgb, want: Rgb) -> [f32; 4] {
-    let m = |o: f32, w: f32| (srgb_to_linear(w.clamp(0.0, 1.0)) / srgb_to_linear(o).max(0.002)).min(160.0);
+///
+/// `cap` bounds the multiplier. At a distance the GPU samples a blurred mip
+/// of the texture, so a vertex colour computed for a near-black texel can
+/// meet a much brighter one and blow out; large areas (hair, cloth) get a
+/// low cap and simply cannot be lifted from black to pale. Eyes are a few
+/// pixels and may use the full range.
+fn multiplier_capped(orig: Rgb, want: Rgb, cap: f32) -> [f32; 4] {
+    let m = |o: f32, w: f32| (srgb_to_linear(w.clamp(0.0, 1.0)) / srgb_to_linear(o).max(0.002)).min(cap);
     [m(orig[0], want[0]), m(orig[1], want[1]), m(orig[2], want[2]), 1.0]
+}
+
+fn multiplier(orig: Rgb, want: Rgb) -> [f32; 4] {
+    multiplier_capped(orig, want, 12.0)
 }
 
 /// The colour a skin vertex should end up, keeping the texture's shading.
@@ -142,7 +152,7 @@ pub fn recolour(part: BodyPart, look: Look, pos: &mut [[f32; 3]], texel: &[Rgb])
             if in_eye(*p, c) {
                 // The rigs' eyes are solid dark beads; a bright bead reads as
                 // a sticker, so the colour is deepened a little.
-                multiplier(c, [eye[0] * EYE_DEPTH, eye[1] * EYE_DEPTH, eye[2] * EYE_DEPTH])
+                multiplier_capped(c, [eye[0] * EYE_DEPTH, eye[1] * EYE_DEPTH, eye[2] * EYE_DEPTH], 160.0)
             } else {
                 let k = (luma(c) / hair_mean).clamp(0.72, 1.25);
                 multiplier(c, [hair[0] * k, hair[1] * k, hair[2] * k])

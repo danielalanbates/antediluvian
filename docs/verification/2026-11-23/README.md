@@ -151,3 +151,103 @@ board).
   lands on Say.
 - Action-bar names longer than a tile are still clipped ("Challenging Roar").
 - Name labels still draw over the unit frame (older code).
+
+## Variety chunk (later still): character looks, mob models, terrain and prop models
+
+Three targets, each counted by a unit test over DISTINCT results, not seeds.
+
+| Target | Test | Measured |
+|---|---|---|
+| Hundreds of creation options | `look::tests::every_option_of_every_field_renders_differently`, `look::tests::thousands_of_random_looks_are_all_distinct`, protocol `look::tests::hundreds_of_options` | 207 look options (12 fields + 4 outfits), each drawing differently from every other value of its field; 3000 of 3000 random looks distinct; 4.8e14 combinations |
+| 300+ mob models from `mobs.json` | `mobmodels::tests::mobs_json_reaches_over_300_distinct_models` | 1768 species: 1473 distinct silhouette keys (708 of them generated bodies), 1768 distinct geometries |
+| 2,000+ terrain and prop meshes over 5 acts | `formations::tests::five_acts_hold_over_2000_distinct_terrain_and_prop_meshes` | 6956 spawned sites, 6956 distinct geometries, 1325 distinct (family, silhouette) keys, all 40 families present |
+
+What the keys mean. Geometry hash = every vertex, quantised to 1/1000 unit.
+Silhouette key = coarse: bounding-box proportions in 6 bins per axis plus
+vertex count (terrain), or body plan + graft loadout + proportions (mobs).
+The geometry counts say "no two are the same mesh"; the silhouette counts are
+the stricter "differ at a glance" number. For terrain that stricter number is
+1325, not 2,000: the 2,000 claim holds for distinct meshes, and about
+two thirds of that for clearly different shapes.
+
+### Character looks
+- `antediluvia_protocol::look::Look`: face 24, hair 32, hair colour 24, facial
+  hair 14, skin 20, build 8, height 9, marking 20 (paint, tattoo-style bands,
+  5 scars), marking colour 8, eyes 14, mantle 6, dye 24; outfit 4 stays in
+  `appearance[0]`. Packed into one `u64` (51 bits).
+- Three places: `CharacterSheet.look`, `SheetExt.look`, load + save
+  (`db::look_tests::look_survives_save_and_load`). Broadcast as
+  `EntityState.look`. Clamped by the server with `Look::sanitize`; the solo
+  driver does the same. `PROTOCOL_VERSION` stays 16: the field is optional
+  both ways.
+- Rendering (`look/apply.rs`): the rigs keep skin, hair, eyes and clothes in
+  one texture, so each body-part mesh is copied per character and given vertex
+  colours that multiply the texture. The head copy is reshaped for the face.
+  Hair, beard and mantle are grafted meshes (one per bone, one shared
+  material). Build and height scale the rig. Distant LOD figures take skin
+  tone, build and height (20 shared materials, one shared mesh).
+- Builder (`look/builder.rs`): 15 lines with arrows and colour swatches, typed
+  name with live validation, Randomise, live preview with idle animation.
+- Names (`antediluvia_sim::names::validate_name`): 3 to 16 letters, one
+  apostrophe or hyphen inside, no triple letters, needs a vowel, reserved
+  names refused, stored capitalised. Applies to the builder path only; the
+  legacy name path used by bots and tooling keeps its old 1 to 24 rule.
+- Characters made without the builder get a stable random look from their
+  name, so bot crowds are not clones. Old characters keep their skin and hair
+  picks (`Look::from_legacy`).
+- Apple login flow unchanged; owner steps in `docs/beta/APPLE_SIGN_IN.md`.
+
+### Shots (all read)
+| File | Shows |
+|---|---|
+| `var_looks_sheet.jpg` | 16 random looks, off-screen sheet: skin tones, hair pieces and colours, beards, paint, mantles, dyes, heights |
+| `var_builder_plate.jpg`, `var_builder_cape.jpg`, `var_builder_furs.jpg` | the builder on my own server: panel, swatches, highlighted line, name status, three different rolled looks |
+| `var_world_other_player.jpg` | after Create: own character in the world wearing the rolled look, a bot beside it with its own look |
+| `var_world_lod_figures.jpg` | distant players as LOD figures in different skin tones and sizes |
+| `var_species_sheet.jpg` | 84 real `mobs.json` species with generated bodies and grafts |
+| `var_beast_plans_sheet.jpg` | the ten body plans (existing sheet, now with grafts) |
+| `var_landform_sheet.jpg` | the twelve new landform families, eight seeds each |
+| `var_prop_sheet.jpg` | the twenty prop families (existing sheet, now renderable off-screen) |
+
+New off-screen sheet switches: `ANTEDILUVIA_PROPSHEET_OUT`,
+`ANTEDILUVIA_LANDSHEET_OUT`, `ANTEDILUVIA_SPECIESSHEET_OUT` (with
+`BEVY_ASSET_ROOT=<repo>`), beside the existing `_CHARSHEET_OUT` and
+`_BEASTSHEET_OUT`. The windowed `ANTEDILUVIA_PROPSHEET=1` still opens a window.
+
+Launches: 7 off-screen sheet renders and 2 windowless game runs (my own server
+on 127.0.0.1:8797, temp DB removed, 10 and 30 swarm bots, all three processes
+stopped, port free). Port 8787 untouched.
+
+### Seen in the shots, not fixed
+- Eyes are solid beads on these rigs, so an eye colour is a coloured bead.
+- Face paint follows the head's few vertices: soft blotches, not crisp lines.
+  Thin scars may land on no vertex at all and not show; only the wide ones
+  were seen.
+- "Furs and hide" has a beard and a bald head baked into its head mesh:
+  "Facial hair: None" still shows that beard, in the chosen hair colour.
+- A dye recolours the whole outfit, metal and leather included.
+- Hair styles are pieces added on top of each outfit's own hair, not
+  replacements.
+- The fallen colossus reads as a line of boulders.
+- The prop and landform sheets are small in frame and washed out (no
+  tonemapping off-screen).
+
+### Not verified
+- No mouse or keyboard was used: arrow buttons, line clicks, typing, F5 and
+  Enter are covered by unit tests of the same functions the scripted
+  `look ...` commands call. Create itself ran for real, twice.
+- A refused name coming back from the server (taken, reserved) was not seen.
+- After the last shots, large-area colour multipliers were capped at 12 to
+  stop bright blow-outs when the texture is sampled from a blurred mip at
+  range. Not re-rendered: very dark painted hair (the Robes outfit) may now
+  come out darker than a pale hair colour asks for; grafted hair pieces are
+  unaffected.
+- Hide vest and lineage mantle over a dyed outfit (the flat-material path in
+  `equipment.rs`) was not seen.
+- Frame rate was not measured. By construction the scatter has the same
+  number of sites, meshes and draws as before (landforms replace 45% of the
+  dome rocks and share the prop material); each nearby player costs six small
+  mesh copies and up to two grafts.
+- Landforms have no collision (the dome rocks they replace had none either).
+- Solo play, the wasm build and windowed play were not run.
+- No profanity filter on names.
