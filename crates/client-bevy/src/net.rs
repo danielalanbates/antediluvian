@@ -15,7 +15,14 @@
 //!
 //! `NetTx`/`NetRx` are the same types on both targets, so nothing downstream of
 //! this module needs to know which transport it is talking to.
+//!
+//! World snapshots arrive as binary delta frames (B11,
+//! `antediluvia_protocol::wire`). `Inbound` is the one decoder both transports
+//! feed: it keeps the baseline and hands Bevy a whole `ServerMsg::Snapshot`
+//! per frame, so the game code never sees the wire format. Everything else
+//! stays JSON text.
 
+use antediluvia_protocol::wire::{SnapshotDecoder, WIRE_BINARY, WIRE_JSON};
 use antediluvia_protocol::{ClientMsg, ServerMsg, PROTOCOL_VERSION};
 use bevy::prelude::*;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -33,15 +40,104 @@ impl NetTx {
 /// Inbound channel from the server. Stored as a non-send resource.
 pub struct NetRx(pub UnboundedReceiver<ServerMsg>);
 
-/// The `Login` every connection opens with, pre-serialized.
-fn login_json(apple_id: String, character_name: Option<String>) -> Option<String> {
+/// State of the one socket this client opens, for the status notice
+/// (`crate::beta`). A process-wide atomic rather than a resource: both
+/// transports set it from their own callbacks or thread, and the native and
+/// browser builds keep `start_network`'s signature unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    /// Dialling; no answer yet.
+    Connecting,
+    /// Socket open.
+    Open,
+    /// Was open, then closed (server restart, network drop).
+    Closed,
+    /// Never opened (bad URL, server down, proxy refused).
+    Failed,
+}
+
+static LINK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn link() -> Link {
+    match LINK.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Link::Open,
+        2 => Link::Closed,
+        3 => Link::Failed,
+        _ => Link::Connecting,
+    }
+}
+
+pub fn set_link(l: Link) {
+    let v = match l {
+        Link::Connecting => 0,
+        Link::Open => 1,
+        Link::Closed => 2,
+        Link::Failed => 3,
+    };
+    LINK.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The socket went away: `Closed` if it had opened, else `Failed`.
+fn mark_down() {
+    set_link(if link() == Link::Open || link() == Link::Closed { Link::Closed } else { Link::Failed });
+}
+
+/// The `Login` every connection opens with, pre-serialized. The account id
+/// travels in the protocol's `apple_id` field (a historical name: it is any
+/// opaque per-player id, see `crate::launch_config`).
+fn login_json(account_id: String, character_name: Option<String>) -> Option<String> {
     serde_json::to_string(&ClientMsg::Login {
         proto: PROTOCOL_VERSION,
-        apple_id,
+        apple_id: account_id,
         character_name,
         create: None,
+        wire: wanted_wire(),
     })
     .ok()
+}
+
+/// Snapshot wire this client asks for at login: binary delta frames, unless
+/// `ANTEDILUVIA_WIRE=json` (native only, for comparing the two paths).
+pub fn wanted_wire() -> u8 {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("ANTEDILUVIA_WIRE").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
+        return WIRE_JSON;
+    }
+    let _ = WIRE_JSON;
+    WIRE_BINARY
+}
+
+/// Turns socket frames into `ServerMsg`s, for both transports.
+#[derive(Default)]
+pub(crate) struct Inbound {
+    dec: SnapshotDecoder,
+    /// A `Resync` is on its way; do not ask again until a keyframe lands.
+    asked: bool,
+}
+
+impl Inbound {
+    /// A text frame: one JSON `ServerMsg`.
+    pub fn text(&mut self, txt: &str) -> Result<ServerMsg, serde_json::Error> {
+        serde_json::from_str::<ServerMsg>(txt)
+    }
+
+    /// A binary frame: one delta snapshot. Returns the whole view for Bevy
+    /// and, when the frame could not be applied, the `Resync` to send back.
+    pub fn binary(&mut self, bytes: &[u8]) -> (Option<ServerMsg>, Option<ClientMsg>) {
+        match self.dec.apply(bytes) {
+            Ok(st) => {
+                if st.key {
+                    self.asked = false;
+                }
+                (Some(self.dec.snapshot()), None)
+            }
+            Err(_) if !self.asked => {
+                self.asked = true;
+                (None, Some(ClientMsg::Resync))
+            }
+            Err(_) => (None, None),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -65,10 +161,11 @@ mod native {
 
     pub fn start_network(
         url: String,
-        apple_id: String,
+        account_id: String,
         character_name: Option<String>,
     ) -> (NetTx, NetRx) {
         install_crypto_provider();
+        set_link(Link::Connecting);
         let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
         let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
 
@@ -90,14 +187,17 @@ mod native {
                         Ok(x) => x,
                         Err(e) => {
                             eprintln!("[net] connect to {url} failed: {e}");
+                            set_link(Link::Failed);
                             return;
                         }
                     };
                     println!("[net] connected to {url}");
+                    set_link(Link::Open);
                     let (mut sink, mut stream) = ws.split();
+                    let mut decode = Inbound::default();
 
                     // Authenticate immediately.
-                    if let Some(txt) = login_json(apple_id, character_name) {
+                    if let Some(txt) = login_json(account_id, character_name) {
                         let _ = sink.send(Message::Text(txt.into())).await;
                     }
 
@@ -115,8 +215,22 @@ mod native {
                             },
                             inbound = stream.next() => match inbound {
                                 Some(Ok(Message::Text(txt))) => {
-                                    if let Ok(msg) = serde_json::from_str::<ServerMsg>(&txt) {
+                                    if let Ok(msg) = decode.text(&txt) {
                                         if tx_server.send(msg).is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some(Ok(Message::Binary(bytes))) => {
+                                    let (msg, ask) = decode.binary(&bytes);
+                                    if let Some(msg) = msg {
+                                        if tx_server.send(msg).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    if let Some(txt) = ask.and_then(|m| serde_json::to_string(&m).ok()) {
+                                        eprintln!("[net] snapshot frame did not apply; asking for a keyframe");
+                                        if sink.send(Message::Text(txt.into())).await.is_err() {
                                             break;
                                         }
                                     }
@@ -131,6 +245,7 @@ mod native {
                         }
                     }
                     println!("[net] disconnected");
+                    mark_down();
                 });
             })
             .expect("spawn network thread");
@@ -171,11 +286,12 @@ mod web {
 
     pub fn start_network(
         url: String,
-        apple_id: String,
+        account_id: String,
         character_name: Option<String>,
     ) -> (NetTx, NetRx) {
         let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
         let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
+        set_link(Link::Connecting);
 
         let ws = match WebSocket::new(&url) {
             Ok(ws) => ws,
@@ -183,28 +299,46 @@ mod web {
                 // Nothing to connect to: hand back live-but-silent channels so
                 // the app still boots and can show the failure in its UI.
                 error!("[net] could not open {url}: {e:?}");
+                set_link(Link::Failed);
                 return (NetTx(tx_client), NetRx(rx_server));
             }
         };
-        // The protocol is JSON text; never hand us ArrayBuffers.
+        // Text frames are JSON messages; binary frames (delta snapshots)
+        // must arrive as ArrayBuffers, not Blobs, to be read synchronously.
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
         let pending: Pending = Rc::new(RefCell::new(Vec::new()));
         // Authenticate as soon as the socket is writable.
-        if let Some(txt) = login_json(apple_id, character_name) {
+        if let Some(txt) = login_json(account_id, character_name) {
             pending.borrow_mut().push(txt);
         }
 
         // --- inbound: browser callback -> Bevy channel ---
         {
             let tx_server = tx_server.clone();
+            let ws_in = ws.clone();
+            let pending_in = pending.clone();
+            let mut inbound = Inbound::default();
             let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-                if let Some(txt) = e.data().as_string() {
-                    match serde_json::from_str::<ServerMsg>(&txt) {
+                let data = e.data();
+                if let Some(txt) = data.as_string() {
+                    match inbound.text(&txt) {
                         Ok(msg) => {
                             let _ = tx_server.send(msg);
                         }
                         Err(err) => warn!("[net] undecodable frame: {err}"),
+                    }
+                } else if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
+                    // Binary delta snapshot (B11).
+                    let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+                    let (msg, ask) = inbound.binary(&bytes);
+                    if let Some(msg) = msg {
+                        let _ = tx_server.send(msg);
+                    }
+                    if let Some(txt) = ask.and_then(|m| serde_json::to_string(&m).ok()) {
+                        warn!("[net] snapshot frame did not apply; asking for a keyframe");
+                        pending_in.borrow_mut().push(txt);
+                        flush(&ws_in, &pending_in);
                     }
                 }
             });
@@ -219,6 +353,7 @@ mod web {
             let url_open = url.clone();
             let on_open = Closure::<dyn FnMut(JsValue)>::new(move |_| {
                 info!("[net] connected to {url_open}");
+                set_link(Link::Open);
                 flush(&ws_open, &pending_open);
             });
             ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
@@ -234,6 +369,7 @@ mod web {
 
             let on_close = Closure::<dyn FnMut(CloseEvent)>::new(move |e: CloseEvent| {
                 info!("[net] disconnected (code {} {})", e.code(), e.reason());
+                mark_down();
             });
             ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
             on_close.forget();
@@ -266,3 +402,92 @@ mod web {
 pub use native::start_network;
 #[cfg(target_arch = "wasm32")]
 pub use web::start_network;
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use antediluvia_protocol::wire::FrameWriter;
+    use antediluvia_protocol::{Act, EntityKind, EntityState};
+
+    fn ent(id: u64, x: f32) -> EntityState {
+        EntityState {
+            id,
+            kind: EntityKind::Player,
+            x,
+            y: 0.0,
+            rot: 0.0,
+            health: 10,
+            max_health: 10,
+            tag: None,
+            name: Some(format!("P{id}")),
+            weapon: None,
+            chest: None,
+            back: None,
+            faction: None,
+            appearance: Some([0, 0, 0]),
+            look: Some(0),
+            mounted: false,
+            mount_species: None,
+        }
+    }
+
+    fn key(seq: u32, ids: &[u64]) -> Vec<u8> {
+        let mut w = FrameWriter::begin(true, Act::Eden, seq, 7, 0.5);
+        for id in ids {
+            w.enter_state(&ent(*id, 1.0));
+        }
+        w.finish()
+    }
+
+    /// Both transports feed `Inbound`: a binary frame becomes the same
+    /// `ServerMsg::Snapshot` the JSON wire carries, and text still parses.
+    #[test]
+    fn binary_frames_become_whole_snapshots() {
+        let mut inb = Inbound::default();
+        let (msg, ask) = inb.binary(&key(1, &[4, 5]));
+        assert!(ask.is_none());
+        match msg {
+            Some(ServerMsg::Snapshot { act, tick, entities, .. }) => {
+                assert_eq!((act, tick, entities.len()), (Act::Eden, 7, 2));
+                assert!(entities.iter().any(|e| e.name.as_deref() == Some("P5")));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A delta that only moves entity 4 still yields the whole view.
+        let mut w = FrameWriter::begin(false, Act::Eden, 2, 8, 0.5);
+        w.update(4, antediluvia_protocol::wire::F_POS, antediluvia_protocol::wire::Dyn::new(50.0, 0.0, 0.0, 10, 10), &[]);
+        let (msg, _) = inb.binary(&w.finish());
+        let Some(ServerMsg::Snapshot { entities, .. }) = msg else { panic!() };
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities.iter().find(|e| e.id == 4).unwrap().x, 50.0);
+        assert!(matches!(inb.text("{\"t\":\"pong\"}"), Ok(ServerMsg::Pong)));
+    }
+
+    /// A frame that does not apply asks for a keyframe once, yields nothing
+    /// until it arrives, then carries on.
+    #[test]
+    fn a_bad_frame_asks_for_one_resync() {
+        let mut inb = Inbound::default();
+        assert!(inb.binary(&key(1, &[4])).0.is_some());
+        // Sequence 2 is lost; 3 arrives.
+        let delta = |seq| FrameWriter::begin(false, Act::Eden, seq, 9, 0.5).finish();
+        let (msg, ask) = inb.binary(&delta(3));
+        assert!(msg.is_none());
+        assert!(matches!(ask, Some(ClientMsg::Resync)));
+        let (msg, ask) = inb.binary(&delta(4));
+        assert!(msg.is_none() && ask.is_none(), "one request, not one per frame");
+        let (msg, ask) = inb.binary(&[0xFF, 0, 0]);
+        assert!(msg.is_none() && ask.is_none());
+        // The keyframe mends it; a later fault may ask again.
+        assert!(inb.binary(&key(9, &[4, 6])).0.is_some());
+        assert!(inb.binary(&delta(10)).0.is_some());
+        assert!(matches!(inb.binary(&delta(12)).1, Some(ClientMsg::Resync)));
+    }
+
+    #[test]
+    fn the_client_asks_for_the_binary_wire() {
+        let json = login_json("acct".into(), None).unwrap();
+        assert!(json.contains("\"wire\":1"), "{json}");
+        assert!(json.contains(&format!("\"proto\":{PROTOCOL_VERSION}")));
+    }
+}

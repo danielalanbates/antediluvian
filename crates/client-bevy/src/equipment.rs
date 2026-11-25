@@ -98,6 +98,8 @@ pub fn apply_loadouts(
     names: Query<&Name>,
     meshes: Query<&Mesh3d>,
     equip: Res<EquipAssets>,
+    look_rigs: Query<(), With<crate::look::apply::LookRig>>,
+    pristine: Query<&crate::look::apply::Pristine>,
 ) {
     for (root, loadout, applied) in &mut roots {
         if let Some(a) = &applied {
@@ -130,6 +132,10 @@ pub fn apply_loadouts(
                         Some("cainite") => Some(equip.mantle_cainite.clone()),
                         _ => Some(equip.mantle_sethite.clone()),
                     }
+                } else if loadout.chest.as_deref() == Some("animal_skins") && look_rigs.get(root).is_ok() {
+                    // A character with a look starts in the outfit chosen
+                    // (and dyed) in the builder: the skins ARE that outfit.
+                    None
                 } else if matches!(loadout.chest.as_deref(), Some("hide_vest") | Some("animal_skins")) {
                     Some(equip.vest.clone())
                 } else {
@@ -140,6 +146,12 @@ pub fn apply_loadouts(
                         for kid in kids.iter() {
                             if meshes.get(*kid).is_ok() {
                                 commands.entity(*kid).try_insert(MeshMaterial3d(mat.clone()));
+                                // The look's dyed copy carries colours meant
+                                // for the texture; a flat material gets the
+                                // rig's own mesh back.
+                                if let Ok(p) = pristine.get(*kid) {
+                                    commands.entity(*kid).try_insert(Mesh3d(p.0.clone()));
+                                }
                             }
                         }
                     }

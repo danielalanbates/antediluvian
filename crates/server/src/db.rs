@@ -37,6 +37,9 @@ struct SheetExt {
     quests: std::collections::BTreeMap<String, u32>,
     #[serde(default)]
     quests_done: Vec<String>,
+    /// Completed board quests, packed (sim::questbits). Absent in old saves.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    quests_gq: String,
     #[serde(default)]
     equipment: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_ext_wakefulness")]
@@ -59,6 +62,15 @@ struct SheetExt {
     reputation: std::collections::BTreeMap<String, i32>,
     #[serde(default)]
     appearance: [u32; 3],
+    #[serde(default)]
+    look: u64,
+    #[serde(default)]
+    stamina: i32,
+    #[serde(default)]
+    max_stamina: i32,
+    // beta-server-track (B06)
+    #[serde(default)]
+    durability: std::collections::BTreeMap<String, u32>,
 }
 
 fn default_ext_wakefulness() -> f32 {
@@ -179,7 +191,7 @@ impl Db {
                         rested_xp: ext.rested_xp,
                         pvp: ext.pvp,
                         quests: ext.quests,
-                        quests_done: ext.quests_done,
+                        quests_done: antediluvia_sim::questbits::unpack(ext.quests_done, &ext.quests_gq),
                         equipment: ext.equipment,
                         wakefulness: ext.wakefulness,
                         last_logout: ext.last_logout,
@@ -191,6 +203,10 @@ impl Db {
                         faction: ext.faction,
                         reputation: ext.reputation,
                         appearance: ext.appearance,
+                        look: ext.look,
+                        stamina: ext.stamina,
+                        max_stamina: ext.max_stamina,
+                        durability: ext.durability, // beta-server-track (B06)
                     })
                 },
             )
@@ -198,7 +214,8 @@ impl Db {
         Ok(row)
     }
 
-    /// Load a character by apple_id, or `None` if this Apple ID hasn't created a character.
+    /// Load a character by account id (stored in the historical `apple_id`
+    /// column), or `None` if this account has not created a character.
     pub fn load_by_apple_id(&self, apple_id: &str) -> Result<Option<CharacterSheet>> {
         let row = self
             .conn
@@ -220,6 +237,7 @@ impl Db {
     pub fn save(&self, c: &CharacterSheet, apple_id: Option<&str>) -> Result<()> {
         let key = c.name.trim().to_lowercase();
         let inv = c.inventory.join("\u{1f}");
+        let (done_text, done_packed) = antediluvia_sim::questbits::pack(&c.quests_done);
         let ext = serde_json::to_string(&SheetExt {
             class: c.class,
             gold: c.gold,
@@ -230,7 +248,8 @@ impl Db {
             rested_xp: c.rested_xp,
             pvp: c.pvp,
             quests: c.quests.clone(),
-            quests_done: c.quests_done.clone(),
+            quests_done: done_text,
+            quests_gq: done_packed,
             equipment: c.equipment.clone(),
             wakefulness: c.wakefulness,
             last_logout: c.last_logout,
@@ -242,6 +261,10 @@ impl Db {
             faction: c.faction.clone(),
             reputation: c.reputation.clone(),
             appearance: c.appearance,
+            look: c.look,
+            stamina: c.stamina,
+            max_stamina: c.max_stamina,
+            durability: c.durability.clone(), // beta-server-track (B06)
         })?;
         self.conn.execute(
             "INSERT INTO accounts
@@ -405,5 +428,160 @@ fn parse_act(s: &str) -> Act {
         "enoch" => Act::Enoch,
         "flood" => Act::Flood,
         _ => Act::Eden,
+    }
+}
+
+/// What `antediluvia-server --check-db` found. Counts only: the tool runs on
+/// copies of the production DB and its output may be pasted into notes.
+#[derive(Debug, Default)]
+pub struct DbAudit {
+    pub accounts: usize,
+    /// Rows with an account id (a player can log in to them).
+    pub with_account_id: usize,
+    pub loaded: usize,
+    pub load_errors: usize,
+    /// `ext` JSON that does not parse. `load` would silently reset class,
+    /// gold, quests and the rest to defaults, so this must be 0.
+    pub ext_unreadable: usize,
+    /// `act` strings `parse_act` does not know (they load as Eden).
+    pub act_unknown: usize,
+    /// Sheets the XP-curve migration will change on their next login.
+    pub xp_migrations: usize,
+    pub levels: std::collections::BTreeMap<u32, usize>,
+    pub guilds: i64,
+    pub mail: i64,
+    pub auctions: i64,
+}
+
+impl Db {
+    /// Load every account the way a login does and count what would go wrong.
+    pub fn audit(&self) -> Result<DbAudit> {
+        let mut a = DbAudit::default();
+        let rows: Vec<(String, bool, String, String)> = {
+            let mut st = self.conn.prepare("SELECT name_key, apple_id IS NOT NULL, act, ext FROM accounts")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            it.collect::<rusqlite::Result<_>>()?
+        };
+        for (key, has_id, act, ext) in rows {
+            a.accounts += 1;
+            a.with_account_id += has_id as usize;
+            if serde_json::from_str::<SheetExt>(&ext).is_err() {
+                a.ext_unreadable += 1;
+            }
+            if !["eden", "hermon", "nephilim", "enoch", "flood"].contains(&act.as_str()) {
+                a.act_unknown += 1;
+            }
+            match self.load(&key) {
+                Ok(Some(mut s)) => {
+                    a.loaded += 1;
+                    if antediluvia_sim::progression::migrate_sheet(&mut s) {
+                        a.xp_migrations += 1;
+                    }
+                    *a.levels.entry(s.level).or_default() += 1;
+                }
+                _ => a.load_errors += 1,
+            }
+        }
+        let count = |t: &str| -> Result<i64> { Ok(self.conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))?) };
+        a.guilds = count("guilds")?;
+        a.mail = count("mail")?;
+        a.auctions = count("auctions")?;
+        Ok(a)
+    }
+}
+
+// ── beta-server-track: raw connection for the social tables (social_db.rs) ──
+impl Db {
+    pub(crate) fn raw(&self) -> &Connection {
+        &self.conn
+    }
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    /// A row written before the beta fields existed (no look, stamina or
+    /// durability in the ext JSON) must still load, with defaults.
+    #[test]
+    fn pre_beta_save_without_new_fields_still_loads() {
+        let db = Db::open(":memory:").unwrap();
+        db.raw()
+            .execute(
+                "INSERT INTO accounts (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, apple_id)
+                 VALUES ('oldtimer', 'Oldtimer', 'eden', 1.0, 2.0, 7, 10, 700, 80, 100, 40, 50, 'herb', ?1, 'apple-old')",
+                [r#"{"class":"warrior","gold":12,"appearance":[1,5,3],"quests_done":["first_steps"]}"#],
+            )
+            .unwrap();
+        let s = db.load_by_apple_id("apple-old").unwrap().expect("old row loads");
+        assert_eq!((s.name.as_str(), s.level, s.gold), ("Oldtimer", 7, 12));
+        assert_eq!(s.class, Some(antediluvia_protocol::Class::Warrior));
+        assert_eq!(s.appearance, [1, 5, 3]);
+        assert_eq!((s.look, s.stamina, s.max_stamina), (0, 0, 0));
+        assert!(s.durability.is_empty());
+        assert_eq!(s.inventory, vec!["herb".to_string()]);
+        // The legacy skin and hair picks carry into a look, as on login.
+        let look = antediluvia_protocol::Look::unpack(antediluvia_protocol::Look::from_legacy(s.appearance).pack());
+        assert_eq!(look.skin, 5);
+        // And the sim tops the empty stamina pool up when the character spawns.
+        let mut w = antediluvia_sim::world::World::new(1);
+        let id = w.spawn_player(9, s);
+        let live = w.player_sheet(antediluvia_protocol::Act::Eden, id).unwrap();
+        assert!(live.max_stamina > 0 && live.stamina == live.max_stamina, "{}/{}", live.stamina, live.max_stamina);
+        // Saving it back and loading again keeps everything.
+        db.save(&live, None).unwrap();
+        let again = db.load("oldtimer").unwrap().unwrap();
+        assert_eq!((again.gold, again.max_stamina), (12, live.max_stamina));
+    }
+
+    /// Three-place rule for the look: protocol field, SheetExt, load + save.
+    #[test]
+    fn look_survives_save_and_load() {
+        let db = Db::open(":memory:").unwrap();
+        let mut s = antediluvia_sim::world::new_character("Lookkeeper");
+        s.look = antediluvia_protocol::Look::random(77).pack();
+        s.appearance = [2, 0, 0];
+        assert_ne!(s.look, 0);
+        db.save(&s, Some("apple-look-test")).unwrap();
+        let back = db.load("lookkeeper").unwrap().expect("saved character loads");
+        assert_eq!(back.look, s.look);
+        assert_eq!(back.appearance, [2, 0, 0]);
+        let by_id = db.load_by_apple_id("apple-look-test").unwrap().unwrap();
+        assert_eq!(by_id.look, s.look);
+    }
+
+    /// B10 chunk: completed board quests are stored packed; an old row with
+    /// text ids loads, and its next save is small. Old-curve XP migrates.
+    #[test]
+    fn board_quests_store_packed_and_old_curve_migrates() {
+        let db = Db::open(":memory:").unwrap();
+        let gen = antediluvia_sim::questgen::generated();
+        let mut done: Vec<String> = vec!["serpents_in_the_garden".into()];
+        done.extend(gen.iter().map(|g| g.def.id.to_string()));
+        let ext = serde_json::json!({"quests_done": done}).to_string();
+        db.raw()
+            .execute(
+                "INSERT INTO accounts (name_key, name, act, x, y, level, xp, max_xp, health, max_health, mana, max_mana, inventory, ext, apple_id)
+                 VALUES ('veteran', 'Veteran', 'eden', 1.0, 2.0, 20, 5000, 30000, 80, 100, 40, 50, '', ?1, NULL)",
+                [ext.as_str()],
+            )
+            .unwrap();
+        let old_len = ext.len();
+        let s = db.load("veteran").unwrap().unwrap();
+        assert_eq!(s.quests_done.len(), done.len());
+        let mut w = antediluvia_sim::world::World::new(1);
+        let id = w.spawn_player(9, s);
+        let live = w.player_sheet(antediluvia_protocol::Act::Eden, id).unwrap();
+        assert_eq!(live.max_xp, antediluvia_sim::progression::xp_to_next(20));
+        assert_eq!(live.xp, (5000u64 * live.max_xp as u64 / 30000) as u32);
+        db.save(&live, None).unwrap();
+        let new_len: usize = db.raw().query_row("SELECT length(ext) FROM accounts WHERE name_key='veteran'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
+        assert!(new_len * 3 < old_len, "ext {new_len} B vs old {old_len} B");
+        let back = db.load("veteran").unwrap().unwrap();
+        let (mut a, mut b) = (back.quests_done.clone(), done.clone());
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        println!("{} board quests done: ext {old_len} B as text -> {new_len} B packed", gen.len());
     }
 }

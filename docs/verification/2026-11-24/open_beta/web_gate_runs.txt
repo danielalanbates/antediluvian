@@ -1,0 +1,25 @@
+== gate (builder flow) on bundle 5de573e08930
+open http://127.0.0.1:8099/?server=ws://127.0.0.1:8797 as Gatekined
+builder open at 25 s
+builder shot target/tmp/gate-final/web_gate_open_beta_local_builder.png
+in world at 77 s
+name=Gatekined stamp=5de573e08930 logged_in_secs=223 console_lines=292 panics=0 page_errors=0 bad_status=0 pkg_requests=2 pkg_without_stamp=0
+GATE PASS
+exit 0
+
+== old client: proxy rewrites Login proto 17 -> 16
+open http://127.0.0.1:8099/?server=ws://127.0.0.1:8796&name=Gaterakak as Gaterakak
+saw expected status NewVersion at 43 s
+name=Gaterakak stamp=5de573e08930 logged_in_secs=0 console_lines=328 panics=0 page_errors=0 bad_status=0 pkg_requests=2 pkg_without_stamp=0
+GATE PASS
+exit 0
+proxy on 8796 -> ws://127.0.0.1:8797
+rewrote login proto "proto":17 -> "proto":16
+server said: {"t":"login_rejected","reason":"protocol version mismatch - a new version of Antediluvia is out: refresh the page (or update the app)"}
+
+== server stopped mid-session
+open http://127.0.0.1:8099/?server=ws://127.0.0.1:8797&name=Gatebenab as Gatebenab
+in world at 45 s
+saw expected status Disconnected at 50 s
+name=Gatebenab stamp=5de573e08930 logged_in_secs=39 console_lines=281 panics=0 page_errors=0 bad_status=0 pkg_requests=2 pkg_without_stamp=0
+GATE PASS

@@ -1,0 +1,251 @@
+connected to ws://127.0.0.1:8797 as Quest2
+WELCOME Quest2 — lvl 1 in eden at (2950,0) hp 100/100
+[notice] The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins - mercy's first gift. A Sentinel waits by the gate; the road runs west.
+[msg] {"t":"zone_banner","act":"eden","name":"Eden and Nod","subtitle":"Levels 1-12","level_min":1,"level_max":12,"pvp":false}
+[stats] lvl 1 xp 0/100 hp 100/100 inv 1
+tick 1689: 32 entities (players 2, enemies 13, wildlife 4) — me@(2608,0)
+tick 1729: 34 entities (players 2, enemies 15, wildlife 4) — me@(2248,0)
+tick 1769: 31 entities (players 2, enemies 14, wildlife 4) — me@(1888,0)
+tick 1809: 25 entities (players 1, enemies 18, wildlife 1) — me@(1528,0)
+tick 1849: 21 entities (players 1, enemies 13, wildlife 1) — me@(1168,0)
+tick 1889: 17 entities (players 1, enemies 9, wildlife 1) — me@(808,0)
+[msg] {"t":"zone_banner","act":"eden","name":"The Shadowy Serpent's Hollow","subtitle":"Point of interest - a notice board stands here","level_min":1,"level_max":12,"pvp":false}
+[notice] Discovered: The Shadowy Serpent's Hollow (+50 xp)
+[stats] lvl 1 xp 50/100 hp 100/100 inv 1
+tick 1929: 23 entities (players 1, enemies 15, wildlife 1) — me@(448,0)
+[msg] {"t":"zone_banner","act":"eden","name":"Inn of Eden","subtitle":"Sanctuary - rest here to bank rested XP","level_min":1,"level_max":12,"pvp":false}
+[notice] Elder: Serpents defile the garden. Slay 5 of them. (0/5)
+[stats] lvl 1 xp 50/100 hp 100/100 inv 1
+tick 1969: 27 entities (players 1, enemies 16, wildlife 0) — me@(182,49)
+tick 2009: 22 entities (players 1, enemies 13, wildlife 2) — me@(346,327)
+[stats] lvl 1 xp 50/100 hp 99/100 inv 1
+[notice] Quest: serpents_in_the_garden - 1/5
+[stats] lvl 1 xp 80/100 hp 96/100 inv 2
+[notice] You collected serpent_trophy.
+[stats] lvl 1 xp 80/100 hp 96/100 inv 2
+[stats] lvl 1 xp 80/100 hp 92/100 inv 2
+tick 2049: 21 entities (players 1, enemies 12, wildlife 2) — me@(361,360)
+[notice] You reached level 2!
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[notice] Quest: serpents_in_the_garden - 2/5
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[notice] You collected serpent_trophy.
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[notice] Quest: serpents_in_the_garden - 3/5
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[notice] You collected serpent_trophy.
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[stats] lvl 2 xp 15/133 hp 115/115 inv 4
+[stats] lvl 2 xp 15/133 hp 113/115 inv 4
+tick 2089: 20 entities (players 1, enemies 11, wildlife 2) — me@(390,538)
+[notice] Quest: serpents_in_the_garden - 4/5
+[stats] lvl 2 xp 30/133 hp 108/115 inv 5
+[notice] You collected serpent_trophy.
+[stats] lvl 2 xp 30/133 hp 108/115 inv 5
+[stats] lvl 2 xp 30/133 hp 109/115 inv 5
+[notice] Quest: serpents_in_the_garden - 5/5
+[stats] lvl 2 xp 45/133 hp 103/115 inv 6
+[notice] You collected serpent_trophy.
+[stats] lvl 2 xp 45/133 hp 103/115 inv 6
+[stats] lvl 2 xp 45/133 hp 105/115 inv 6
+tick 2129: 19 entities (players 1, enemies 10, wildlife 2) — me@(303,380)
+[stats] lvl 2 xp 45/133 hp 107/115 inv 6
+[stats] lvl 2 xp 45/133 hp 109/115 inv 6
+[msg] {"t":"zone_banner","act":"eden","name":"Inn of Eden","subtitle":"Sanctuary - rest here to bank rested XP","level_min":1,"level_max":12,"pvp":false}
+tick 2169: 25 entities (players 1, enemies 14, wildlife 0) — me@(127,66)
+[notice] Elder: It is done! (+120 xp, +15g, bronze_sword)
+QUEST-E2E-OK step 1
+[stats] lvl 3 xp 32/172 hp 130/130 inv 7
+[stats] lvl 3 xp 32/172 hp 130/130 inv 7
+tick 2209: 24 entities (players 1, enemies 13, wildlife 0) — me@(-123,127)
+[notice] Wanderer: Cainite scavengers dismantle Abel's altar. Drive off 8 of them. (0/8)
+[stats] lvl 3 xp 32/172 hp 130/130 inv 7
+tick 2249: 31 entities (players 1, enemies 16, wildlife 0) — me@(-463,119)
+[notice] Quest: altar_of_the_firstborn - 1/8
+[stats] lvl 3 xp 62/172 hp 128/130 inv 8
+[notice] You collected cainite_trophy.
+[stats] lvl 3 xp 62/172 hp 128/130 inv 8
+[stats] lvl 3 xp 62/172 hp 129/130 inv 8
+tick 2289: 30 entities (players 1, enemies 15, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 62/172 hp 125/130 inv 8
+[notice] Quest: altar_of_the_firstborn - 2/8
+[stats] lvl 3 xp 92/172 hp 123/130 inv 9
+[notice] You collected cainite_trophy.
+[stats] lvl 3 xp 92/172 hp 123/130 inv 9
+[stats] lvl 3 xp 92/172 hp 118/130 inv 9
+[notice] Quest: altar_of_the_firstborn - 3/8
+[stats] lvl 3 xp 117/172 hp 118/130 inv 10
+[notice] You collected cainite_trophy.
+[stats] lvl 3 xp 117/172 hp 118/130 inv 10
+tick 2329: 30 entities (players 1, enemies 15, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 117/172 hp 117/130 inv 10
+[stats] lvl 3 xp 117/172 hp 116/130 inv 10
+tick 2369: 30 entities (players 1, enemies 15, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 117/172 hp 112/130 inv 10
+[stats] lvl 3 xp 117/172 hp 105/130 inv 10
+tick 2409: 30 entities (players 1, enemies 15, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 117/172 hp 98/130 inv 10
+[notice] Quest: altar_of_the_firstborn - 4/8
+[stats] lvl 3 xp 132/172 hp 87/130 inv 11
+[notice] You collected cainite_trophy.
+[stats] lvl 3 xp 132/172 hp 87/130 inv 11
+[stats] lvl 3 xp 132/172 hp 88/130 inv 11
+tick 2449: 29 entities (players 1, enemies 14, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 84/130 inv 11
+[stats] lvl 3 xp 132/172 hp 77/130 inv 11
+tick 2489: 29 entities (players 1, enemies 14, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 73/130 inv 11
+[stats] lvl 3 xp 132/172 hp 66/130 inv 11
+tick 2529: 29 entities (players 1, enemies 14, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 62/130 inv 11
+[stats] lvl 3 xp 132/172 hp 55/130 inv 11
+tick 2569: 30 entities (players 1, enemies 15, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 51/130 inv 11
+[stats] lvl 3 xp 132/172 hp 44/130 inv 11
+tick 2609: 29 entities (players 1, enemies 14, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 40/130 inv 11
+[stats] lvl 3 xp 132/172 hp 33/130 inv 11
+tick 2649: 33 entities (players 1, enemies 18, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 29/130 inv 11
+[stats] lvl 3 xp 132/172 hp 22/130 inv 11
+tick 2689: 34 entities (players 1, enemies 19, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 18/130 inv 11
+[stats] lvl 3 xp 132/172 hp 11/130 inv 11
+tick 2729: 33 entities (players 1, enemies 18, wildlife 0) — me@(-585,93)
+[stats] lvl 3 xp 132/172 hp 7/130 inv 11
+tick 2769: 34 entities (players 1, enemies 19, wildlife 0) — me@(-585,93)
+tick 2809: 34 entities (players 1, enemies 19, wildlife 0) — me@(-585,93)
+tick 2849: 35 entities (players 1, enemies 20, wildlife 0) — me@(-585,93)
+[notice] You were slain and revived at the shrine. Use /sethome at an inn to set a home.
+[stats] lvl 3 xp 132/172 hp 130/130 inv 11
+[stats] lvl 3 xp 132/172 hp 130/130 inv 11
+[msg] {"t":"zone_banner","act":"eden","name":"Inn of Eden","subtitle":"Sanctuary - rest here to bank rested XP","level_min":1,"level_max":12,"pvp":false}
+tick 2889: 32 entities (players 1, enemies 21, wildlife 0) — me@(-108,-1)
+tick 2929: 36 entities (players 1, enemies 22, wildlife 0) — me@(-460,64)
+[stats] lvl 3 xp 132/172 hp 128/130 inv 11
+[notice] Quest: altar_of_the_firstborn - 5/8
+[stats] lvl 3 xp 162/172 hp 128/130 inv 12
+[notice] You collected cainite_trophy.
+[stats] lvl 3 xp 162/172 hp 128/130 inv 12
+tick 2969: 33 entities (players 1, enemies 18, wildlife 0) — me@(-657,86)
+[stats] lvl 3 xp 162/172 hp 130/130 inv 12
+[stats] lvl 3 xp 162/172 hp 129/130 inv 12
+[notice] You reached level 4!
+[stats] lvl 4 xp 20/217 hp 145/145 inv 13
+[notice] Quest: altar_of_the_firstborn - 6/8
+[stats] lvl 4 xp 20/217 hp 145/145 inv 13
+[notice] You collected cainite_trophy.
+[stats] lvl 4 xp 20/217 hp 145/145 inv 13
+tick 3009: 34 entities (players 1, enemies 19, wildlife 0) — me@(-690,226)
+[stats] lvl 4 xp 20/217 hp 143/145 inv 13
+[notice] Quest: altar_of_the_firstborn - 7/8
+[stats] lvl 4 xp 45/217 hp 141/145 inv 14
+[notice] You collected cainite_trophy.
+[stats] lvl 4 xp 45/217 hp 141/145 inv 14
+[stats] lvl 4 xp 45/217 hp 142/145 inv 14
+tick 3049: 34 entities (players 1, enemies 19, wildlife 0) — me@(-767,152)
+[stats] lvl 4 xp 45/217 hp 138/145 inv 14
+[notice] Quest: altar_of_the_firstborn - 8/8
+[stats] lvl 4 xp 60/217 hp 138/145 inv 15
+[notice] You collected cainite_trophy.
+[stats] lvl 4 xp 60/217 hp 138/145 inv 15
+[stats] lvl 4 xp 60/217 hp 140/145 inv 15
+tick 3089: 32 entities (players 1, enemies 17, wildlife 0) — me@(-587,141)
+[stats] lvl 4 xp 60/217 hp 142/145 inv 15
+[stats] lvl 4 xp 60/217 hp 144/145 inv 15
+tick 3129: 30 entities (players 1, enemies 18, wildlife 1) — me@(-228,119)
+[msg] {"t":"zone_banner","act":"eden","name":"Inn of Eden","subtitle":"Sanctuary - rest here to bank rested XP","level_min":1,"level_max":12,"pvp":false}
+[notice] Wanderer: It is done! (+180 xp, +20g)
+QUEST-E2E-OK step 2
+[stats] lvl 5 xp 23/268 hp 160/160 inv 15
+[stats] lvl 5 xp 23/268 hp 160/160 inv 15
+tick 3169: 28 entities (players 1, enemies 17, wildlife 0) — me@(82,4)
+[notice] Elder: Stray embers drift from the Garden's flaming sword. Gather 5 cherubim sparks from the wisps they ignite. (0/5)
+[stats] lvl 5 xp 23/268 hp 160/160 inv 15
+tick 3209: 29 entities (players 1, enemies 18, wildlife 0) — me@(21,162)
+tick 3249: 30 entities (players 1, enemies 18, wildlife 1) — me@(-171,464)
+[stats] lvl 5 xp 23/268 hp 155/160 inv 15
+[notice] Quest: the_flaming_sword - 1/5 cherubim_spark
+[stats] lvl 5 xp 83/268 hp 149/160 inv 19
+[notice] You collected ember_wisp_trophy.
+[stats] lvl 5 xp 83/268 hp 149/160 inv 19
+[notice] Quest: the_flaming_sword - 2/5 cherubim_spark
+[stats] lvl 5 xp 83/268 hp 149/160 inv 19
+[notice] You collected ember_wisp_trophy.
+[stats] lvl 5 xp 83/268 hp 149/160 inv 19
+[stats] lvl 5 xp 83/268 hp 148/160 inv 19
+[notice] Quest: the_flaming_sword - 3/5 cherubim_spark
+[stats] lvl 5 xp 113/268 hp 148/160 inv 21
+[notice] You collected ember_wisp_trophy.
+[stats] lvl 5 xp 113/268 hp 148/160 inv 21
+tick 3289: 27 entities (players 1, enemies 14, wildlife 2) — me@(-164,517)
+[stats] lvl 5 xp 113/268 hp 147/160 inv 21
+[notice] Quest: the_flaming_sword - 4/5 cherubim_spark
+[stats] lvl 5 xp 143/268 hp 145/160 inv 23
+[notice] You collected ember_wisp_trophy.
+[stats] lvl 5 xp 143/268 hp 145/160 inv 23
+[stats] lvl 5 xp 143/268 hp 143/160 inv 23
+tick 3329: 26 entities (players 1, enemies 14, wildlife 1) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 142/160 inv 23
+[stats] lvl 5 xp 143/268 hp 141/160 inv 23
+tick 3369: 26 entities (players 1, enemies 14, wildlife 1) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 140/160 inv 23
+[stats] lvl 5 xp 143/268 hp 136/160 inv 23
+tick 3409: 27 entities (players 1, enemies 14, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 135/160 inv 23
+[stats] lvl 5 xp 143/268 hp 134/160 inv 23
+tick 3449: 27 entities (players 1, enemies 14, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 133/160 inv 23
+[stats] lvl 5 xp 143/268 hp 129/160 inv 23
+tick 3489: 27 entities (players 1, enemies 14, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 128/160 inv 23
+[stats] lvl 5 xp 143/268 hp 127/160 inv 23
+tick 3529: 26 entities (players 1, enemies 13, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 126/160 inv 23
+[stats] lvl 5 xp 143/268 hp 122/160 inv 23
+tick 3569: 26 entities (players 1, enemies 13, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 121/160 inv 23
+[stats] lvl 5 xp 143/268 hp 120/160 inv 23
+tick 3609: 28 entities (players 1, enemies 15, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 119/160 inv 23
+[stats] lvl 5 xp 143/268 hp 115/160 inv 23
+tick 3649: 28 entities (players 1, enemies 15, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 114/160 inv 23
+[stats] lvl 5 xp 143/268 hp 113/160 inv 23
+tick 3689: 29 entities (players 1, enemies 16, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 112/160 inv 23
+[stats] lvl 5 xp 143/268 hp 108/160 inv 23
+tick 3729: 28 entities (players 1, enemies 15, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 107/160 inv 23
+[stats] lvl 5 xp 143/268 hp 106/160 inv 23
+tick 3769: 26 entities (players 1, enemies 14, wildlife 1) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 105/160 inv 23
+[stats] lvl 5 xp 143/268 hp 101/160 inv 23
+tick 3809: 27 entities (players 1, enemies 14, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 100/160 inv 23
+[stats] lvl 5 xp 143/268 hp 99/160 inv 23
+tick 3849: 31 entities (players 1, enemies 18, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 98/160 inv 23
+[stats] lvl 5 xp 143/268 hp 91/160 inv 23
+tick 3889: 32 entities (players 1, enemies 19, wildlife 2) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 87/160 inv 23
+[stats] lvl 5 xp 143/268 hp 83/160 inv 23
+tick 3929: 31 entities (players 1, enemies 19, wildlife 1) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 79/160 inv 23
+[stats] lvl 5 xp 143/268 hp 69/160 inv 23
+tick 3969: 31 entities (players 1, enemies 19, wildlife 1) — me@(-159,553)
+[stats] lvl 5 xp 143/268 hp 62/160 inv 23
+[stats] lvl 5 xp 143/268 hp 55/160 inv 23
+[notice] Quest: the_flaming_sword - 5/5 cherubim_spark
+[stats] lvl 5 xp 173/268 hp 55/160 inv 25
+[notice] You collected ember_wisp_trophy.
+[stats] lvl 5 xp 173/268 hp 55/160 inv 25
+tick 4009: 31 entities (players 1, enemies 19, wildlife 1) — me@(-137,503)
+[stats] lvl 5 xp 173/268 hp 57/160 inv 25
+[stats] lvl 5 xp 173/268 hp 59/160 inv 25
+[msg] {"t":"zone_banner","act":"eden","name":"Inn of Eden","subtitle":"Sanctuary - rest here to bank rested XP","level_min":1,"level_max":12,"pvp":false}
+tick 4049: 30 entities (players 1, enemies 19, wildlife 0) — me@(11,175)
+[stats] lvl 5 xp 173/268 hp 61/160 inv 25
+[notice] Elder: It is done! (+250 xp, +30g, spark_woven_cloak)
+QUEST-E2E-OK step 3
+CHAIN-E2E-OK

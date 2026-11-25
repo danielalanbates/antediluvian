@@ -1,0 +1,19 @@
+2026-11-25T00:32:05.777125Z  INFO antediluvia_server: persistence: target/tmp/gate-final/gate.sqlite
+2026-11-25T00:32:05.778540Z  INFO antediluvia_server: Antediluvia server listening on ws://127.0.0.1:8797  (proto v17)
+2026-11-25T00:32:05.793523Z  INFO antediluvia_server: AH seed: Alulim lists bread at 1g
+2026-11-25T00:32:05.793659Z  INFO antediluvia_server: AH seed: Enmenluana lists bread at 2g
+2026-11-25T00:32:05.793794Z  INFO antediluvia_server: AH seed: Alulim lists taming_lasso at 37g
+2026-11-25T00:32:05.793911Z  INFO antediluvia_server: AH seed: Enmenluana lists healing_potion at 27g
+2026-11-25T00:32:05.794044Z  INFO antediluvia_server: AH seed: Ensipadzidana lists bread at 2g
+2026-11-25T00:32:14.426488Z  INFO antediluvia_server::net: client connected conn=1 peer=Some(127.0.0.1:57559)
+2026-11-25T00:33:28.060679Z  INFO antediluvia_server: login (account=web_d487954f7f070d28e93fec273727552d) conn=1 name=Gatekined act="eden"
+2026-11-25T00:34:06.694291Z  INFO antediluvia_server: snap telemetry: pass avg 15.772µs max 268.75µs; 1 binary clients, 228 B/s each, 385 frames, 1 keyframes, 37 enters, 1438 updates, 6 leaves
+2026-11-25T00:35:07.239872Z  INFO antediluvia_server: snap telemetry: pass avg 27.247µs max 338.583µs; 1 binary clients, 346 B/s each, 600 frames, 1 keyframes, 40 enters, 2196 updates, 9 leaves
+2026-11-25T00:36:07.811792Z  INFO antediluvia_server: snap telemetry: pass avg 27.488µs max 608.5µs; 1 binary clients, 352 B/s each, 600 frames, 1 keyframes, 39 enters, 2261 updates, 8 leaves
+2026-11-25T00:37:08.163646Z  INFO antediluvia_server: snap telemetry: pass avg 28.489µs max 928.084µs; 1 binary clients, 359 B/s each, 600 frames, 1 keyframes, 42 enters, 2326 updates, 11 leaves
+2026-11-25T00:37:12.886357Z  INFO antediluvia_server::net: client disconnected conn=1
+2026-11-25T00:37:38.578812Z  INFO antediluvia_server::net: client connected conn=2 peer=Some(127.0.0.1:58040)
+2026-11-25T00:38:53.456470Z  INFO antediluvia_server::net: client disconnected conn=2
+2026-11-25T00:38:55.688699Z  INFO antediluvia_server::net: client connected conn=3 peer=Some(127.0.0.1:58232)
+2026-11-25T00:39:06.932573Z  INFO antediluvia_server: login (account=web_2a50df6f7e1343343130455bada63c20) conn=3 name=Gatebenab act="eden"
+2026-11-25T00:39:09.208981Z  INFO antediluvia_server: snap telemetry: pass avg 4.215µs max 121.375µs; 1 binary clients, 29 B/s each, 23 frames, 1 keyframes, 33 enters, 89 updates, 0 leaves

@@ -45,6 +45,13 @@ struct Preloaded(#[allow(dead_code)] Vec<UntypedHandle>);
 /// Walk the assets dir for loadable extensions only — `load_folder` would
 /// also hit glTF `.bin` buffer files, which have no loader and error-spam.
 fn preload_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // `ANTEDILUVIA_NO_PRELOAD=1`: load models on first use instead. For
+    // windowless measurement runs on a machine short of memory: preloading
+    // every model at once peaks near 900 MB before settling.
+    if std::env::var("ANTEDILUVIA_NO_PRELOAD").is_ok() {
+        commands.insert_resource(Preloaded(Vec::new()));
+        return;
+    }
     const EXTS: [&str; 4] = ["glb", "gltf", "ogg", "wav"];
     let root = std::path::Path::new("assets");
     let mut handles = Vec::new();

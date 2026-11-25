@@ -8,7 +8,35 @@
 use bevy::prelude::*;
 
 
-use super::{class_abilities, Session};
+use super::{class_bar, Session};
+use antediluvia_sim::abilities::{class_resource, Resource, BAR_SLOTS};
+
+/// Action-bar tiles: slot 0 is the left-click attack, 1..=10 the class kit.
+const BAR_TILES: usize = BAR_SLOTS + 1;
+const TILE_PX: f32 = 50.0;
+/// Taller than wide: three-line names ("Fires of Hermon") must fit under the key hint.
+const TILE_H: f32 = 60.0;
+const TILE_GAP: f32 = 4.0;
+/// Half the bar's width, to centre it under a 50%-anchored parent.
+const BAR_HALF: f32 = (BAR_TILES as f32 * TILE_PX + (BAR_TILES as f32 - 1.0) * TILE_GAP + 12.0) / 2.0;
+const STAMINA_COLOR: Color = Color::srgb(0.85, 0.70, 0.18);
+
+/// Asset path of an ability's rendered icon, for the abilities that have art.
+/// (The B03/B09 abilities have none yet; their tiles show the name instead.)
+pub fn ability_icon(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "attack" => "sprites/icons/attack.png",
+        "heroic_strike" => "sprites/icons/heroic_strike.png",
+        "whirlwind" => "sprites/icons/whirlwind.png",
+        "aimed_shot" => "sprites/icons/aimed_shot.png",
+        "multi_shot" => "sprites/icons/multi_shot.png",
+        "smite" => "sprites/icons/smite.png",
+        "heal" => "sprites/icons/heal.png",
+        "firebolt" => "sprites/icons/firebolt.png",
+        "frost_nova" => "sprites/icons/frost_nova.png",
+        _ => return None,
+    })
+}
 
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
@@ -30,7 +58,7 @@ const FONT_STAT: f32 = 15.0;
 const FONT_LABEL: f32 = 13.0;
 const FONT_CHAT: f32 = 12.0;
 const FONT_KEY: f32 = 11.0;
-const FONT_SLOT: f32 = 14.0;
+const FONT_SLOT: f32 = 10.0;
 
 // ─── Marker components ──────────────────────────────────────────────────────
 
@@ -191,7 +219,10 @@ fn spawn_player_frame(commands: &mut Commands) {
             flex_direction: FlexDirection::Column,
             padding: UiRect::all(Val::Px(8.0)),
             row_gap: Val::Px(3.0),
-            min_width: Val::Px(220.0),
+            // A definite width: with only `min_width` the bars' "100%" had
+            // nothing to resolve against, so HP/mana shrank to their text
+            // and the XP bar (no text) collapsed to nothing.
+            width: Val::Px(236.0),
             ..default()
         })
         .insert(BackgroundColor(PANEL))
@@ -229,7 +260,8 @@ fn spawn_player_frame(commands: &mut Commands) {
             frame
                 .spawn(Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(5.0),
+                    // Tall enough for the rested stretch (win/rested.rs) to read.
+                    height: Val::Px(7.0),
                     margin: UiRect::top(Val::Px(2.0)),
                     ..default()
                 })
@@ -309,33 +341,33 @@ fn spawn_action_bar(commands: &mut Commands) {
             anchor
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(6.0),
+                    column_gap: Val::Px(TILE_GAP),
                     padding: UiRect::all(Val::Px(6.0)),
-                    // Pull back by ~half the expected width so the bar centres.
-                    margin: UiRect::left(Val::Px(-120.0)),
+                    // Pull back by half the bar's width so it centres.
+                    margin: UiRect::left(Val::Px(-BAR_HALF)),
                     ..default()
                 })
                 .insert(BackgroundColor(PANEL))
                 .with_children(|bar| {
-                    for slot in 0u8..3 {
+                    for slot in 0..BAR_TILES as u8 {
                         let key_label = match slot {
-                            0 => "Click", // Space is jump now; attack is left-click
-                            1 => "1",
-                            _ => "2",
+                            0 => "Click".to_string(), // attack is left-click
+                            10 => "0".to_string(),
+                            n => n.to_string(),
                         };
-                        spawn_action_slot(bar, slot, key_label);
+                        spawn_action_slot(bar, slot, &key_label);
                     }
                 });
 
             // Class-selection prompt (shown when no class chosen).
             anchor.spawn((
-                Text::new("F1 warrior | F2 hunter | F3 priest | F4 mage"),
+                Text::new(""),
                 TextFont { font_size: FONT_LABEL, ..default() },
                 TextColor(GOLD_ACCENT),
                 Node {
                     margin: UiRect {
                         top: Val::Px(6.0),
-                        left: Val::Px(-120.0),
+                        left: Val::Px(-BAR_HALF),
                         ..default()
                     },
                     ..default()
@@ -349,12 +381,13 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
     parent
         .spawn((
             Node {
-                width: Val::Px(56.0),
-                height: Val::Px(56.0),
+                width: Val::Px(TILE_PX),
+                height: Val::Px(TILE_H),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Px(4.0)),
+                padding: UiRect::all(Val::Px(2.0)),
+                overflow: Overflow::clip(),
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
@@ -384,25 +417,24 @@ fn spawn_action_slot(parent: &mut ChildBuilder, slot: u8, key: &str) {
                 TextColor(TEXT_DIM),
             ));
             // Ability name (centre).
-            let default_name = match slot {
-                0 => "Atk/Jump",
-                1 => "-",
-                _ => "-",
-            };
+            let default_name = if slot == 0 { "Attack" } else { "" };
             s.spawn((
                 Text::new(default_name),
                 TextFont { font_size: FONT_SLOT, ..default() },
                 TextColor(TEXT_COLOR),
+                TextLayout::new_with_justify(JustifyText::Center),
+                Node { max_width: Val::Px(TILE_PX - 4.0), ..default() },
                 ActionBarLabel(slot),
             ));
-            // Cooldown overlay (hidden by default).
+            // Cooldown sweep (hidden by default): anchored to the bottom, its
+            // height is the fraction of the cooldown still to run.
             s.spawn((
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Percent(100.0),
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
-                    top: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
                     ..default()
                 },
                 BackgroundColor(COOLDOWN_OVERLAY),
@@ -419,7 +451,8 @@ fn spawn_quest_tracker(commands: &mut Commands) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(14.0),
+                // Below the minimap (win/minimap.rs), which owns the corner.
+                top: Val::Px(220.0),
                 right: Val::Px(14.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(8.0)),
@@ -467,6 +500,9 @@ fn spawn_chat(commands: &mut Commands) {
             chat.spawn((
                 Node {
                     flex_direction: FlexDirection::Column,
+                    // Bottom-anchored: when wrapped lines overflow the box
+                    // the OLDEST text is clipped, never the newest line.
+                    justify_content: JustifyContent::FlexEnd,
                     padding: UiRect::all(Val::Px(6.0)),
                     max_height: Val::Px(160.0),
                     overflow: Overflow::clip(),
@@ -516,15 +552,15 @@ pub fn update_ui_frames(
     mut q_level: Query<&mut Text, (With<PlayerLevelText>, Without<PlayerNameText>, Without<HpText>, Without<MpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
     mut q_hp_fill: Query<&mut Node, (With<HpFill>, Without<MpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
     mut q_hp_text: Query<&mut Text, (With<HpText>, Without<PlayerNameText>, Without<PlayerLevelText>, Without<MpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
-    mut q_mp_fill: Query<&mut Node, (With<MpFill>, Without<HpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
+    mut q_mp_fill: Query<(&mut Node, &mut BackgroundColor), (With<MpFill>, Without<HpFill>, Without<XpFill>, Without<ActionBarCooldown>)>,
     mut q_mp_text: Query<&mut Text, (With<MpText>, Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<ActionBarLabel>, Without<ClassSelectText>)>,
     mut q_xp_fill: Query<&mut Node, (With<XpFill>, Without<HpFill>, Without<MpFill>, Without<ActionBarCooldown>)>,
     mut q_action_labels: Query<(&ActionBarLabel, &mut Text), (Without<PlayerNameText>, Without<PlayerLevelText>, Without<HpText>, Without<MpText>, Without<ClassSelectText>)>,
     asset_server: Res<AssetServer>,
-    mut icon_cache: Local<[String; 3]>,
+    mut icon_cache: Local<[String; BAR_TILES]>,
     mut q_icons: Query<(&ActionBarIcon, &mut ImageNode, &mut Visibility), (Without<ActionBarCooldown>, Without<QuestTrackerRoot>, Without<ClassSelectText>, Without<ChatInputBar>)>,
-    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility), (Without<QuestTrackerRoot>, Without<ActionBarIcon>)>,
-    mut q_class_select: Query<&mut Visibility, (With<ClassSelectText>, Without<ActionBarCooldown>, Without<ActionBarIcon>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
+    mut q_cd_overlay: Query<(&ActionBarCooldown, &mut Visibility, &mut Node), (Without<QuestTrackerRoot>, Without<ActionBarIcon>, Without<HpFill>, Without<MpFill>, Without<XpFill>)>,
+    mut q_class_select: Query<(&mut Visibility, &mut Text), (With<ClassSelectText>, Without<ActionBarCooldown>, Without<ActionBarIcon>, Without<QuestTrackerRoot>, Without<ChatInputBar>)>,
 ) {
     let now = time.elapsed_secs();
     let sheet = session.sheet.as_ref();
@@ -532,11 +568,11 @@ pub fn update_ui_frames(
     // ── Player frame ─────────────────────────────────────────────────────
     if let Some(cs) = sheet {
         if let Ok(mut t) = q_name.get_single_mut() {
-            **t = cs.name.clone();
+            set_text(&mut t, &cs.name);
         }
         if let Ok(mut t) = q_level.get_single_mut() {
             // Unit frame shows lineage + standing once chosen (C10).
-            **t = match cs.faction.as_deref() {
+            let line = match cs.faction.as_deref() {
                 Some(f) => {
                     let rep = cs.reputation.get(f).copied().unwrap_or(0);
                     let rank = match rep {
@@ -549,6 +585,7 @@ pub fn update_ui_frames(
                 }
                 None => format!("Lv {}", cs.level),
             };
+            set_text(&mut t, &line);
         }
 
         // HP bar.
@@ -558,23 +595,28 @@ pub fn update_ui_frames(
             0.0
         };
         if let Ok(mut n) = q_hp_fill.get_single_mut() {
-            n.width = Val::Percent(hp_frac * 100.0);
+            set_width(&mut n, hp_frac);
         }
         if let Ok(mut t) = q_hp_text.get_single_mut() {
-            **t = format!("{} / {}", cs.health.max(0), cs.max_health);
+            set_text(&mut t, &format!("{} / {}", cs.health.max(0), cs.max_health));
         }
 
-        // MP bar.
-        let mp_frac = if cs.max_mana > 0 {
-            (cs.mana.max(0) as f32 / cs.max_mana as f32).clamp(0.0, 1.0)
+        // Resource bar: mana, or stamina for the classes that spend it.
+        let stamina = cs.class.is_some_and(|c| class_resource(c) == Resource::Stamina);
+        let (cur, max, label, color) = if stamina {
+            (cs.stamina, cs.max_stamina, "Stamina", STAMINA_COLOR)
         } else {
-            0.0
+            (cs.mana, cs.max_mana, "Mana", MP_COLOR)
         };
-        if let Ok(mut n) = q_mp_fill.get_single_mut() {
-            n.width = Val::Percent(mp_frac * 100.0);
+        let mp_frac = if max > 0 { (cur.max(0) as f32 / max as f32).clamp(0.0, 1.0) } else { 0.0 };
+        if let Ok((mut n, mut bg)) = q_mp_fill.get_single_mut() {
+            set_width(&mut n, mp_frac);
+            if bg.0 != color {
+                bg.0 = color;
+            }
         }
         if let Ok(mut t) = q_mp_text.get_single_mut() {
-            **t = format!("{} / {}", cs.mana.max(0), cs.max_mana);
+            set_text(&mut t, &format!("{label} {} / {}", cur.max(0), max));
         }
 
         // XP bar.
@@ -584,60 +626,94 @@ pub fn update_ui_frames(
             0.0
         };
         if let Ok(mut n) = q_xp_fill.get_single_mut() {
-            n.width = Val::Percent(xp_frac * 100.0);
+            set_width(&mut n, xp_frac);
         }
     }
 
-    // ── Action bar labels ────────────────────────────────────────────────
-    let abilities: Option<[&str; 2]> = session.class.map(class_abilities);
+    // ── Action bar (B03): 10 class slots after the attack tile ────────────
+    let bar = session.class.map(class_bar).unwrap_or_default();
+    let level = sheet.map_or(1, |c| c.level);
+    // Fraction of a (start, end) window still to run.
+    let left = |(start, end): (f32, f32)| -> f32 {
+        if now >= end || end <= start { 0.0 } else { ((end - now) / (end - start)).clamp(0.0, 1.0) }
+    };
     for (label, mut text) in q_action_labels.iter_mut() {
-        let name = match label.0 {
-            0 => "Attack",
-            1 => abilities.map_or("-", |a| a[0]),
-            2 => abilities.map_or("-", |a| a[1]),
-            _ => "-",
+        let pretty = match label.0 {
+            0 => "Attack".to_string(),
+            n => match bar.get(n as usize - 1) {
+                None => String::new(),
+                Some(ab) if level < ab.min_level => format!("Lv {}", ab.min_level),
+                Some(ab) => match session.ability_cd.get(ab.id) {
+                    // Long cooldowns count down in seconds.
+                    Some((_, end)) if *end - now > 1.5 => format!("{:.0}s", *end - now),
+                    _ => ab.name.to_string(),
+                },
+            },
         };
-        // Prettify: replace underscores, title-case first letter.
-        let pretty = prettify_ability(name);
         if **text != pretty {
             **text = pretty;
         }
     }
 
-    // Ability icons: load once per ability change (asset server caches paths).
+    // Ability icons, for the abilities that have rendered art.
     for (icon, mut img, mut vis) in q_icons.iter_mut() {
-        let name = match icon.0 {
-            0 => "attack",
-            1 => abilities.map_or("", |a| a[0]),
-            2 => abilities.map_or("", |a| a[1]),
-            _ => "",
+        let path = match icon.0 {
+            0 => ability_icon("attack"),
+            n => bar
+                .get(n as usize - 1)
+                .filter(|ab| level >= ab.min_level)
+                .and_then(|ab| ability_icon(ab.id)),
         };
-        let cache = &mut icon_cache[icon.0.min(2) as usize];
-        if name.is_empty() {
-            *vis = Visibility::Hidden;
-        } else if cache != name {
-            *cache = name.to_string();
-            img.image = asset_server.load(format!("sprites/icons/{name}.png"));
-            *vis = Visibility::Inherited;
+        let cache = &mut icon_cache[(icon.0 as usize).min(BAR_TILES - 1)];
+        match path {
+            None => {
+                cache.clear();
+                set_vis(&mut vis, false);
+            }
+            Some(p) => {
+                if cache != p {
+                    *cache = p.to_string();
+                    img.image = asset_server.load(p);
+                }
+                set_vis(&mut vis, true);
+            }
         }
     }
 
-    // Cooldown overlays.
-    for (cd, mut vis) in q_cd_overlay.iter_mut() {
-        *vis = if cooldowns.on_cd(cd.0, now) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
+    // Cooldown sweeps: the dark overlay drains downward as the ability (or
+    // the global cooldown) recovers. Level-locked slots stay fully dark.
+    for (cd, mut vis, mut node) in q_cd_overlay.iter_mut() {
+        let frac = match cd.0 {
+            0 => if cooldowns.on_cd(0, now) { 1.0 } else { 0.0 },
+            n => match bar.get(n as usize - 1) {
+                None => 0.0,
+                Some(ab) if level < ab.min_level => 1.0,
+                Some(ab) => session
+                    .ability_cd
+                    .get(ab.id)
+                    .map_or(0.0, |w| left(*w))
+                    .max(left(session.gcd)),
+            },
         };
+        let want = Val::Percent(frac * 100.0);
+        if node.height != want {
+            node.height = want;
+        }
+        set_vis(&mut vis, frac > 0.0);
     }
 
-    // Class-select prompt visibility.
-    if let Ok(mut vis) = q_class_select.get_single_mut() {
-        *vis = if session.class.is_none() {
-            Visibility::Inherited
+    // Hint line under the bar: the classless prompt.
+    if let Ok((mut vis, mut text)) = q_class_select.get_single_mut() {
+        // (The cast itself is drawn by castbar.rs.)
+        let line = if session.class.is_none() && session.sheet.is_some() {
+            "No class chosen - type /class warrior | hunter | priest | mage | wanderer | herald | warden | occultist".to_string()
         } else {
-            Visibility::Hidden
+            String::new()
         };
+        set_vis(&mut vis, !line.is_empty());
+        if **text != line {
+            **text = line;
+        }
     }
 }
 
@@ -645,6 +721,7 @@ pub fn update_ui_frames(
 #[allow(clippy::type_complexity)]
 pub fn update_ui_panels(
     session: Res<Session>,
+    wins: Res<crate::win::WinState>,
     mut q_quest_root: Query<&mut Visibility, (With<QuestTrackerRoot>, Without<ChatInputBar>)>,
     mut q_quest_text: Query<&mut Text, (With<QuestTrackerText>, Without<ChatLogText>, Without<ChatInputText>)>,
     mut q_chat_log: Query<&mut Text, (With<ChatLogText>, Without<QuestTrackerText>, Without<ChatInputText>)>,
@@ -657,7 +734,7 @@ pub fn update_ui_panels(
     if let Some(cs) = sheet {
         let has_quests = !cs.quests.is_empty();
         if let Ok(mut vis) = q_quest_root.get_single_mut() {
-            *vis = if has_quests { Visibility::Inherited } else { Visibility::Hidden };
+            set_vis(&mut vis, has_quests);
         }
         if has_quests {
             if let Ok(mut t) = q_quest_text.get_single_mut() {
@@ -666,25 +743,24 @@ pub fn update_ui_panels(
                 if !session.party.is_empty() {
                     lines.push_str(&format!("! Party: {}\n", session.party.join(", ")));
                 }
-                for (name, progress) in &cs.quests {
+                for name in cs.quests.keys() {
                     if !lines.is_empty() {
                         lines.push('\n');
                     }
-                    let pretty = prettify_ability(name.strip_prefix("fa_").unwrap_or(name));
                     // Theme-pillar quests (C08) carry their pillar as a prefix.
                     let theme = if name.starts_with("fa_") { "[Forbidden Arts] " } else { "" };
-                    lines.push_str(&format!("* {theme}{} - {}/target", pretty, progress));
+                    // Title, objective and real progress (win/questlog.rs).
+                    lines.push_str(&format!("* {theme}{}", crate::win::questlog::tracker_line(name, cs)));
                 }
-                **t = lines;
+                set_text(&mut t, &lines);
             }
         }
     }
 
     // ── Chat log ─────────────────────────────────────────────────────────
     if let Ok(mut t) = q_chat_log.get_single_mut() {
-        // Show last ~8 lines.
-        let start = session.chat_log.len().saturating_sub(8);
-        let visible: Vec<&str> = session.chat_log.iter().skip(start).map(|s| s.as_str()).collect();
+        // Show the last 8 lines of the selected chat tab (win/chattabs.rs).
+        let visible = crate::win::chattabs::visible(&session.chat_log, wins.chat_tab, 8);
         let joined = visible.join("\n");
         if **t != joined {
             **t = joined;
@@ -693,11 +769,7 @@ pub fn update_ui_panels(
 
     // ── Chat input ───────────────────────────────────────────────────────
     if let Ok(mut vis) = q_chat_input_bar.get_single_mut() {
-        *vis = if session.chat_active {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+        set_vis(&mut vis, session.chat_active);
     }
     if session.chat_active {
         if let Ok(mut t) = q_chat_input_text.get_single_mut() {
@@ -711,21 +783,77 @@ pub fn update_ui_panels(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Turn `"heroic_strike"` into `"Heroic Strike"`.
-fn prettify_ability(raw: &str) -> String {
-    raw.split('_')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + c.as_str()
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+// The HUD systems run every frame. Writing through a `Mut` marks the
+// component changed even when the value is the same, and a changed `Text` or
+// `Node` is laid out again; these write only when the value really differs.
+
+pub(crate) fn set_text(t: &mut Mut<Text>, s: &str) {
+    if t.0 != s {
+        t.0.clear();
+        t.0.push_str(s);
+    }
+}
+
+/// Bar fill width as a whole-tenth percentage of `frac` (0..=1).
+pub(crate) fn set_width(n: &mut Mut<Node>, frac: f32) {
+    let frac = if frac.is_finite() { frac.clamp(0.0, 1.0) } else { 0.0 };
+    let want = Val::Percent((frac * 1000.0).round() / 10.0);
+    if n.width != want {
+        n.width = want;
+    }
+}
+
+pub(crate) fn set_vis(v: &mut Mut<Visibility>, shown: bool) {
+    let want = if shown { Visibility::Inherited } else { Visibility::Hidden };
+    if **v != want {
+        **v = want;
+    }
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::*;
+    use bevy::ecs::world::World;
+
+    /// Review regression: an unchanged HUD value must not mark its component
+    /// changed (that re-ran text and UI layout every frame).
+    #[test]
+    fn hud_setters_only_touch_on_real_change() {
+        let mut world = World::new();
+        let e = world.spawn((Text::new("100 / 100"), Node::default(), Visibility::Hidden)).id();
+        world.clear_trackers();
+        {
+            let mut t = world.get_mut::<Text>(e).unwrap();
+            set_text(&mut t, "100 / 100");
+            assert!(!t.is_changed(), "same text must not count as a change");
+            set_text(&mut t, "90 / 100");
+            assert!(t.is_changed());
+            assert_eq!(t.0, "90 / 100");
+        }
+        {
+            let mut n = world.get_mut::<Node>(e).unwrap();
+            set_width(&mut n, 0.5);
+            assert_eq!(n.width, Val::Percent(50.0));
+        }
+        world.clear_trackers();
+        {
+            let mut n = world.get_mut::<Node>(e).unwrap();
+            set_width(&mut n, 0.5);
+            set_width(&mut n, 0.50004);
+            assert!(!n.is_changed(), "same width must not count as a change");
+            set_width(&mut n, f32::NAN);
+            assert_eq!(n.width, Val::Percent(0.0), "a bad fraction from the server draws an empty bar");
+            set_width(&mut n, 7.0);
+            assert_eq!(n.width, Val::Percent(100.0));
+        }
+        {
+            let mut v = world.get_mut::<Visibility>(e).unwrap();
+            set_vis(&mut v, false);
+            assert!(!v.is_changed());
+            set_vis(&mut v, true);
+            assert!(v.is_changed() && *v == Visibility::Inherited);
+        }
+    }
 }
 
 /// Fill the target frame from `Session.target`; hide it when nothing is near.
@@ -738,17 +866,17 @@ pub fn update_target_frame(
     let Ok(mut vis) = q_root.get_single_mut() else { return };
     match &session.target {
         Some((name, hp, max)) => {
-            *vis = Visibility::Visible;
+            if *vis != Visibility::Visible {
+                *vis = Visibility::Visible;
+            }
             if let Ok(mut t) = q_name.get_single_mut() {
-                **t = name.clone();
+                set_text(&mut t, name);
             }
             if let Ok(mut t) = q_hp.get_single_mut() {
-                **t = format!("{} / {}", hp.max(&0), max);
+                set_text(&mut t, &format!("{} / {}", hp.max(&0), max));
             }
         }
-        None => {
-            *vis = Visibility::Hidden;
-        }
+        None => set_vis(&mut vis, false),
     }
 }
 
@@ -763,8 +891,11 @@ pub fn update_banner(
         Some((msg, left)) => {
             *left -= time.delta_secs().min(0.1); // long loading frames must not eat the banner
             let alpha = (*left / 0.8).clamp(0.0, 1.0); // fade out over the last 0.8 s
-            **text = msg.clone();
-            *color = TextColor(GOLD_ACCENT.with_alpha(alpha));
+            set_text(&mut text, msg);
+            let want = GOLD_ACCENT.with_alpha(alpha);
+            if color.0 != want {
+                color.0 = want;
+            }
             if *left <= 0.0 {
                 session.banner = None;
                 **text = String::new();

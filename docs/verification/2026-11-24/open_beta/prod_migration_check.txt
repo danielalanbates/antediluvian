@@ -1,0 +1,35 @@
+Production save-migration test, 2026-11-24 (local, on a copy; counts only)
+
+Backup on the VM (production service not stopped or modified; its DB files kept
+their sizes and timestamps):
+  /home/ubuntu/antediluvia-prod-backup-20261125-000549Z.sqlite  (45,056 bytes, mode 600)
+  made with SQLite's online backup API from python3 (the VM has no sqlite3
+  CLI; the CLI's .backup uses the same API), source opened read-only.
+  PRAGMA integrity_check on the backup: ok
+
+Copy scp'd to target/tmp/prodcopy/ (gitignored), deleted after the test.
+
+Contents: 5 accounts, all with an account id (all browser ids, web_...),
+levels 1,1,1,1,2, all in Eden; 0 guilds, 0 mail, 5 auction lots; no
+social_list table yet (the new server creates it).
+
+1. antediluvia-server --check-db on the copy (server built from f5b740a):
+   accounts 5, with_account_id 5, loaded 5, load_errors 0, ext_unreadable 0,
+   act_unknown 0, xp_migrations 1  ->  CHECK-DB OK
+
+2. New release server on 127.0.0.1:8798 against the copy: started, "listening
+   ... (proto v17)", no ERROR or WARN lines. Each of the 5 accounts logged in
+   over the wire with the test-client (ANTEDILUVIA_ACCOUNT_ID + ANTEDILUVIA_CHECK=1,
+   no character creation allowed) and was compared with the original row:
+   level, act, position (<1 unit), inventory count, gold, class, quest count,
+   equipment count, and seen in a snapshot.
+   run1: accounts=5 logged_in=5, account #1-#5 OK, RESULT PASS
+   After disconnect: all 5 rows re-saved by the new server; key, level, act,
+   position, inventory and account id unchanged; 1 row's max_xp changed (the
+   1-60 XP curve migration); social_list table created.
+
+3. Server stopped and restarted on the same copy, all 5 logged in again:
+   run2-after-restart: accounts=5 logged_in=5, account #1-#5 OK, RESULT PASS
+   server log: 0 ERROR/WARN lines.
+   --check-db after: loaded 5, load_errors 0, xp_migrations 0 (the migration
+   is idempotent and was saved)  ->  CHECK-DB OK

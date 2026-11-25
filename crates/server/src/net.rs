@@ -31,19 +31,20 @@ pub async fn handle_connection(id: u64, stream: TcpStream, game: mpsc::Unbounded
     // Writer task: serialize ServerMsgs to the socket.
     let writer = tokio::spawn(async move {
         while let Some(out) = out_rx.recv().await {
-            let txt = match out {
+            let frame = match out {
                 crate::Out::Msg(msg) => match serde_json::to_string(&msg) {
-                    Ok(t) => t,
+                    Ok(t) => Message::Text(t.into()),
                     Err(e) => {
                         tracing::error!("serialize ServerMsg: {e}");
                         continue;
                     }
                 },
-                // Pre-assembled frame (C15): snapshots are serialized once
-                // per zone tick and shared across every receiving client.
-                crate::Out::Raw(t) => t,
+                // Pre-assembled JSON snapshot frame (C15).
+                crate::Out::Raw(t) => Message::Text(t.into()),
+                // Binary delta snapshot frame (B11).
+                crate::Out::Bin(b) => Message::Binary(b.into()),
             };
-            if write.send(Message::Text(txt.into())).await.is_err() {
+            if write.send(frame).await.is_err() {
                 break;
             }
         }

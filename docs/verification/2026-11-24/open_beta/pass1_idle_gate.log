@@ -1,0 +1,14 @@
+[   0.2s] WELCOME IdleGate lvl 1 act eden at (2950,0) hp 100/100
+[   0.2s] notice: The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins - mercy's first gift. A Sentinel waits by the gate; the road runs west.
+[  30.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 11 nearest 513
+[  60.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 12 nearest 565
+[  90.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 12 nearest 503
+[ 120.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 11 nearest 578
+[ 150.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 11 nearest 497
+[ 180.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 12 nearest 512
+[ 210.0s] at (2950,0) hp min 100/100 deaths 0 enemies in view 14 nearest 486
+[ 240.1s] at (2950,0) hp min 100/100 deaths 0 enemies in view 10 nearest 496
+[ 270.2s] at (2950,0) hp min 100/100 deaths 0 enemies in view 11 nearest 587
+[ 300.3s] at (2950,0) hp min 100/100 deaths 0 enemies in view 11 nearest 578
+IDLE-RESULT name=IdleGate secs=330 deaths=0 min_hp=100/100 attacks_on_me=0 final=(2950,0)
+IDLE-OK

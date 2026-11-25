@@ -5,8 +5,13 @@
 //! `World` and steps every zone at a fixed rate. Clients talk to the game loop
 //! only through channels, so the simulation stays lock-free and deterministic.
 
+mod bg;
 mod db;
 mod net;
+mod snap;
+// beta-server-track (B05-B08): new message handling lives in these modules.
+mod social_db;
+mod track;
 
 use antediluvia_protocol::{DevCmd, Act, ClientMsg, ServerMsg, EntityId, PROTOCOL_VERSION};
 use db::Db;
@@ -30,6 +35,8 @@ pub enum GameCmd {
 pub enum Out {
     Msg(ServerMsg),
     Raw(String),
+    /// A binary delta snapshot frame (B11, `snap`).
+    Bin(Vec<u8>),
 }
 
 struct Conn {
@@ -52,6 +59,11 @@ struct Conn {
     party: Option<u64>,
     /// (party id or 0=new, inviter conn id) of the latest party invite.
     pending_party_invite: Option<u64>,
+    /// Snapshot wire asked for at login (B11): `wire::WIRE_JSON` or
+    /// `wire::WIRE_BINARY`.
+    wire: u8,
+    /// Binary wire: the client asked for a keyframe (`Resync`).
+    resync: bool,
 }
 
 impl Conn {
@@ -77,6 +89,17 @@ async fn main() -> anyhow::Result<()> {
 
     let db = Db::open(&db_path)?;
     tracing::info!("persistence: {db_path}");
+
+    // `--check-db`: open (and so migrate) the DB, load every account the way
+    // a login does, print counts and exit; nonzero if anything failed. Run it
+    // on a copy of the production DB before deploying a new server.
+    if std::env::args().any(|a| a == "--check-db") {
+        let a = db.audit()?;
+        println!("{a:#?}");
+        let ok = a.load_errors == 0 && a.ext_unreadable == 0 && a.act_unknown == 0 && a.loaded == a.accounts;
+        println!("CHECK-DB {}", if ok { "OK" } else { "FAIL" });
+        std::process::exit(if ok { 0 } else { 1 });
+    }
 
     let (tx, rx) = mpsc::unbounded_channel::<GameCmd>();
 
@@ -116,16 +139,32 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     let mut tick_max = Duration::ZERO;
     let mut seed_round: u64 = 0;
     seed_auctions(&db, &mut seed_round);
+    let mut hub = snap::SnapHub::new();
+    let mut listeners: (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    // Telemetry window in seconds (60 by default; shorter for load tests).
+    let telemetry_secs: u64 = std::env::var("ANTEDILUVIA_TELEMETRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(60);
+    let mut snap_accum = Duration::ZERO;
+    let mut snap_max = Duration::ZERO;
 
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 let t0 = std::time::Instant::now();
                 let events = world.step();
-                dispatch_events(&mut world, &mut conns, events);
+                dispatch_events(&mut world, &mut conns, events, &hub, &mut listeners);
+                track::tick(ticks, &mut world, &mut conns, &db); // beta-server-track hook
+                bg::tick(&mut world, &mut conns); // B10 battleground
                 // Snapshots at 10 Hz (every other sim tick) — C15 budget.
                 if ticks % 2 == 0 {
-                    broadcast_snapshots(&world, &conns);
+                    let s0 = std::time::Instant::now();
+                    broadcast_snapshots(&world, &mut conns, &mut hub);
+                    let s = s0.elapsed();
+                    snap_accum += s;
+                    snap_max = snap_max.max(s);
                 }
                 let spent = t0.elapsed();
                 tick_accum += spent;
@@ -133,19 +172,32 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
                 if spent.as_millis() > 45 {
                     tracing::warn!("slow tick: {:?} ({} conns)", spent, conns.len());
                 }
-                if ticks % (TICK_HZ * 60) == 0 && ticks > 0 {
+                if ticks % (TICK_HZ * telemetry_secs) == 0 && ticks > 0 {
                     tracing::info!(
-                        "tick telemetry: avg {:?} max {:?} over 60s ({} conns)",
-                        tick_accum / (TICK_HZ * 60) as u32, tick_max, conns.len()
+                        "tick telemetry: avg {:?} max {:?} over {}s ({} conns)",
+                        tick_accum / (TICK_HZ * telemetry_secs) as u32, tick_max, telemetry_secs, conns.len()
                     );
                     tick_accum = Duration::ZERO;
                     tick_max = Duration::ZERO;
+                    // Binary snapshot cost (B11): time per snapshot pass and
+                    // bytes per client per second.
+                    let st = hub.take_stats();
+                    let bin = conns.values().filter(|c| c.logged_in && c.wire != 0).count() as u64;
+                    if bin > 0 {
+                        tracing::info!(
+                            "snap telemetry: pass avg {:?} max {:?}; {} binary clients, {} B/s each, {} frames, {} keyframes, {} enters, {} updates, {} leaves",
+                            snap_accum / (TICK_HZ * telemetry_secs / 2) as u32, snap_max, bin,
+                            st.bytes / telemetry_secs / bin, st.frames, st.keyframes, st.enters, st.updates, st.leaves
+                        );
+                    }
+                    snap_accum = Duration::ZERO;
+                    snap_max = Duration::ZERO;
                 }
                 ticks += 1;
-                // Persist all online characters every ~10s.
-                if ticks % (TICK_HZ * 10) == 0 {
-                    save_all(&world, &conns, &db);
-                }
+                // Persist every online character once every ~10s, a slice
+                // of the connections each tick: saving 1,000 sheets in one
+                // tick would blow the 50 ms budget by itself.
+                save_slice(&world, &conns, &db, ticks);
                 // Economy heartbeat (C11): hourly gold-flow log, daily AH re-seed.
                 if ticks % (TICK_HZ * 3600) == 0 && ticks > 0 {
                     tracing::info!(
@@ -166,7 +218,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     Ok(())
 }
 
-/// Dev-account allowlist (C14): apple_ids from ANTEDILUVIA_DEV_ACCOUNTS
+/// Dev-account allowlist (C14): account ids from ANTEDILUVIA_DEV_ACCOUNTS
 /// (comma-separated) plus optional dev_accounts.txt (one per line, # comments).
 fn dev_accounts() -> &'static std::collections::HashSet<String> {
     static SET: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
@@ -209,9 +261,13 @@ fn handle_cmd(
                 pending_guild_invite: None,
                 party: None,
                 pending_party_invite: None,
+                wire: antediluvia_protocol::wire::WIRE_JSON,
+                resync: false,
             });
         }
         GameCmd::Disconnect { id } => {
+            // B10: off the field and back where they queued before the save.
+            bg::before_disconnect(id, world, conns);
             if let Some(c) = conns.remove(&id) {
                 if let (Some(ent), true) = (c.entity, c.logged_in) {
                     if let Some(mut sheet) = world.player_sheet(c.act, ent) {
@@ -243,8 +299,33 @@ fn handle_client_msg(
     active_names: &mut HashSet<String>,
     db: &Db,
 ) {
+    // B10 chunk: the older social messages share the flood gate and honour
+    // ignore lists; battleground messages are handled in bg.rs.
+    if !matches!(msg, ClientMsg::Login { .. }) {
+        if !track::legacy_gate(id, &msg, conns) {
+            return;
+        }
+        let target = match &msg {
+            ClientMsg::TradeGive { player, .. }
+            | ClientMsg::TradeGold { player, .. }
+            | ClientMsg::Duel { player }
+            | ClientMsg::GuildInvite { player }
+            | ClientMsg::PartyInvite { player } => Some(player.as_str()),
+            ClientMsg::MailSend { to, .. } => Some(to.as_str()),
+            _ => None,
+        };
+        if let Some(t) = target {
+            let from = conns.get(&id).and_then(|c| c.name.clone()).unwrap_or_default();
+            if track::ignored_by(conns, t, &from) {
+                return notice(conns, id, format!("{t} is not accepting that from you."));
+            }
+        }
+        if bg::handle(id, &msg, world, conns) {
+            return;
+        }
+    }
     match msg {
-        ClientMsg::Login { proto, apple_id, character_name, create } => {
+        ClientMsg::Login { proto, apple_id, character_name, create, wire } => {
             let apple_id = apple_id.trim().to_string();
             let reject = |conns: &HashMap<u64, Conn>, reason: &str| {
                 if let Some(c) = conns.get(&id) {
@@ -252,16 +333,27 @@ fn handle_client_msg(
                 }
             };
             if proto != PROTOCOL_VERSION {
-                return reject(conns, "protocol version mismatch");
+                // Clients match on the first three words; the rest is for
+                // older clients, which print the reason as it is.
+                return reject(conns, "protocol version mismatch - a new version of Antediluvia is out: refresh the page (or update the app)");
             }
             if conns.get(&id).map(|c| c.logged_in).unwrap_or(false) {
                 return reject(conns, "already logged in");
             }
 
-            // Load or create the character via apple_id
+            // Load or create the character via the account id (the
+            // protocol's historical `apple_id` field; any opaque string).
             let mut newborn = false;
             let mut sheet = match db.load_by_apple_id(&apple_id) {
                 Ok(Some(mut s)) => {
+                    // Characters saved before the look field keep their old
+                    // skin and hair picks; a stored look is re-clamped in case
+                    // the option tables shrank.
+                    s.look = if s.look == 0 && (s.appearance[1] != 0 || s.appearance[2] != 0) {
+                        antediluvia_protocol::Look::from_legacy(s.appearance).pack()
+                    } else {
+                        antediluvia_protocol::Look::sanitize(s.look)
+                    };
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
                     if let Some(last) = s.last_logout {
                         let diff = now.saturating_sub(last);
@@ -269,26 +361,41 @@ fn handle_client_msg(
                         let recovery = diff as f32 * 0.00347;
                         s.wakefulness = (s.wakefulness + recovery).clamp(0.0, 100.0);
                     }
+                    track::offline_rest(&mut s, now); // beta-server-track hook (B08 rested XP)
                     s
                 },
                 Ok(None) => {
                     // No character on this account: the builder must create
                     // one (C13). The legacy character_name path still works
                     // for headless test tooling.
-                    let (name, class, faction, appearance) = match (create, character_name) {
+                    let (name, class, faction, appearance, look) = match (create, character_name) {
                         (Some(c), _) => {
                             if let Some(f) = &c.faction {
                                 if !antediluvia_sim::world::FACTIONS.contains(&f.as_str()) {
                                     return reject(conns, "unknown lineage");
                                 }
                             }
-                            (c.name, Some(c.class), c.faction, [
+                            // Builder names follow the shared name rules and
+                            // are stored in their normalised form.
+                            let name = match antediluvia_sim::names::validate_name(&c.name) {
+                                Ok(n) => n,
+                                Err(why) => return reject(conns, why),
+                            };
+                            // The look is clamped here, whatever the client sent.
+                            (name, Some(c.class), c.faction, [
                                 c.appearance[0].min(3),
                                 c.appearance[1].min(15), // 16 skins (Alpha-2 A3)
                                 c.appearance[2].min(11), // 12 hair colors/styles
-                            ])
+                            ], antediluvia_protocol::Look::sanitize(c.look))
                         }
-                        (None, Some(n)) => (n, None, None, [0, 0, 0]),
+                        // Characters made without the builder (bots, test
+                        // tooling) get a stable look from their name, so a
+                        // crowd of them is not a crowd of clones.
+                        (None, Some(n)) => {
+                            let seed = antediluvia_protocol::Look::seed_for_name(&n);
+                            let look = antediluvia_protocol::Look::random(seed).pack();
+                            (n, None, None, [(seed % 4) as u32, 0, 0], look)
+                        }
                         (None, None) => {
                             return reject(conns, "no character on this account - run the character builder");
                         }
@@ -301,7 +408,8 @@ fn handle_client_msg(
                         return reject(conns, "character name already taken");
                     }
                     newborn = true;
-                    let s = antediluvia_sim::world::new_character_with(&name, class, faction, appearance);
+                    let mut s = antediluvia_sim::world::new_character_with(&name, class, faction, appearance);
+                    s.look = look;
                     if let Err(e) = db.save(&s, Some(&apple_id)) {
                         tracing::error!("db save new: {e}");
                         return reject(conns, "server error creating character");
@@ -332,6 +440,8 @@ fn handle_client_msg(
                 c.logged_in = true;
                 c.guild = guild;
                 c.is_dev = is_dev;
+                c.wire = wire.min(antediluvia_protocol::wire::WIRE_BINARY);
+                c.resync = true;
                 c.send(ServerMsg::Welcome { entity_id, character: sheet, is_dev });
                 if newborn {
                     // Prologue (Gen 3): every mortal's story starts at the
@@ -339,7 +449,7 @@ fn handle_client_msg(
                     c.send(ServerMsg::Notice { text: "The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins - mercy's first gift. A Sentinel waits by the gate; the road runs west.".into() });
                 }
             }
-            tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
+            tracing::info!(conn = id, %name, act = act.as_str(), "login (account={apple_id})");
         }
         ClientMsg::Move { dx, dy } => {
             if let Some(c) = conns.get(&id) {
@@ -387,8 +497,9 @@ fn handle_client_msg(
                 _ => return,
             };
             let text = text.chars().take(240).collect::<String>();
-            for c in conns.values() {
-                if c.logged_in && c.act == act {
+            for (cid, c) in conns.iter() {
+                // beta-server-track hook (B07): ignore lists filter zone chat.
+                if c.logged_in && c.act == act && track::hears(*cid, &from) {
                     c.send(ServerMsg::Chat { from: from.clone(), text: text.clone() });
                 }
             }
@@ -488,6 +599,10 @@ fn handle_client_msg(
         ClientMsg::Talk => {
             let Some((act, ent)) = conn_entity(conns, id) else { return };
             match world.talk(act, ent) {
+                Ok(text) if text.starts_with("Battlemaster:") => {
+                    notice(conns, id, text);
+                    bg::handle(id, &ClientMsg::BgQueue, world, conns); // B10
+                }
                 Ok(text) | Err(text) => notice(conns, id, text),
             }
             send_stats(world, conns, id);
@@ -733,6 +848,12 @@ fn handle_client_msg(
             };
             if conns.get(&id).map(|c| c.party.is_some()).unwrap_or(false) {
                 return notice(conns, id, "You are already in a party.".into());
+            }
+            // B10 chunk: parties hold 5 (raids, 40, are the bigger group).
+            let pid_now = conns.get(&inviter).and_then(|c| c.party).unwrap_or(inviter);
+            let size = conns.values().filter(|c| c.logged_in && c.party == Some(pid_now)).count().max(1);
+            if size >= PARTY_CAP {
+                return notice(conns, id, format!("That party is full ({PARTY_CAP}). Form a raid for more."));
             }
             if !conns.get(&inviter).map(|c| c.logged_in).unwrap_or(false) {
                 return notice(conns, id, "The inviter is no longer online.".into());
@@ -995,6 +1116,14 @@ fn handle_client_msg(
                 c.send(ServerMsg::Pong);
             }
         }
+        ClientMsg::Resync => {
+            // Answered with a keyframe by `snap` (rate-limited there).
+            if let Some(c) = conns.get_mut(&id) {
+                c.resync = true;
+            }
+        }
+        // beta-server-track hook: every B05-B08 message is handled in track.rs.
+        other => track::handle_client(id, other, world, conns, db),
     }
 }
 
@@ -1027,6 +1156,9 @@ fn broadcast_party_info(conns: &HashMap<u64, Conn>, pid: u64) {
     }
 }
 
+/// Party size cap (B10 chunk).
+const PARTY_CAP: usize = 5;
+
 fn conn_entity(conns: &HashMap<u64, Conn>, id: u64) -> Option<(Act, EntityId)> {
     let c = conns.get(&id)?;
     if !c.logged_in {
@@ -1053,14 +1185,44 @@ fn send_stats(world: &World, conns: &HashMap<u64, Conn>, id: u64) {
 
 /// Push per-tick simulation events (level-ups, deaths, loot) to their owners,
 /// along with a refreshed stat block.
-fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Vec<SimEvent>) {
+fn dispatch_events(
+    world: &mut World,
+    conns: &mut HashMap<u64, Conn>,
+    events: Vec<SimEvent>,
+    hub: &snap::SnapHub,
+    listeners: &mut (Vec<u64>, Vec<u64>),
+) {
     for ev in events {
-        // Combat events are cosmetic and zone-wide: fan out to every client in
-        // the act (same pattern as zone chat) rather than to one owner.
+        // Combat events are cosmetic (they drive swing / hit / death
+        // animations), and only entities drawn as full rigs animate. They
+        // used to fan out to every client in the act, which is N listeners
+        // for each of N fighters; now a client hears of an event when its
+        // source is in that client's 10 Hz tier (B11), or, for JSON clients,
+        // within the near radius.
         if let SimEvent::Combat { act, kind, src, dst } = ev {
-            for c in conns.values() {
-                if c.logged_in && c.act == act {
-                    c.send(ServerMsg::Event { act, kind, src, dst });
+            let (binary, plain) = (&mut listeners.0, &mut listeners.1);
+            hub.event_listeners(world, act, src, binary, plain);
+            // Whoever is hit always hears of it.
+            let victim = dst
+                .and_then(|d| world.zones.get(&act).and_then(|z| z.entities.get(&d)))
+                .and_then(|e| e.owner);
+            if let Some(v) = victim {
+                if !binary.contains(&v) && !plain.contains(&v) {
+                    binary.push(v);
+                }
+            }
+            for id in binary.iter() {
+                if let Some(c) = conns.get(id) {
+                    if c.logged_in && c.act == act {
+                        c.send(ServerMsg::Event { act, kind, src, dst });
+                    }
+                }
+            }
+            for id in plain.iter() {
+                if let Some(c) = conns.get(id) {
+                    if c.logged_in && c.act == act && c.wire == antediluvia_protocol::wire::WIRE_JSON {
+                        c.send(ServerMsg::Event { act, kind, src, dst });
+                    }
                 }
             }
             continue;
@@ -1075,6 +1237,10 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
                 _ => continue,
             };
             let Some(ent) = ent else { continue };
+            // Deaths go to the log so a shard's journal shows who dies where
+            // (open beta: idle players at spawn must never appear here).
+            let who = conns.get(&owner).and_then(|c| c.name.clone()).unwrap_or_default();
+            tracing::info!(conn = owner, name = %who, act = cur_act.as_str(), "player died");
             let home_msg = match home {
                 Some(h) if *h != cur_act => {
                     if let Some(mut sheet) = world.player_sheet(cur_act, ent) {
@@ -1109,6 +1275,9 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
             SimEvent::Died { owner, .. } => *owner,
             SimEvent::Loot { owner, .. } => *owner,
             SimEvent::Info { owner, .. } => *owner,
+            SimEvent::CastStart { owner, .. } => *owner,
+            SimEvent::AbilityUsed { owner, .. } => *owner,
+            SimEvent::Vitals { owner } => *owner,
             SimEvent::Combat { .. } => unreachable!(),
         };
         let Some(c) = conns.get(&owner) else { continue };
@@ -1121,8 +1290,20 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
                 c.send(ServerMsg::Notice { text: format!("You collected {item}.") });
             }
             SimEvent::Info { text, .. } => {
+                if text == "Honorable kill!" {
+                    bg::note_kill(owner); // B10 scoreboard
+                }
                 c.send(ServerMsg::Notice { text });
             }
+            SimEvent::CastStart { ability, secs, .. } => {
+                // Cast bar only; the sheet has not changed yet.
+                c.send(ServerMsg::CastStart { ability: ability.to_string(), secs });
+                continue;
+            }
+            SimEvent::AbilityUsed { ability, cooldown, .. } => {
+                c.send(ServerMsg::AbilityUsed { ability: ability.to_string(), cooldown });
+            }
+            SimEvent::Vitals { .. } => {} // just the refreshed stat block below
             SimEvent::Combat { .. } => unreachable!(),
         }
         if let Some(ent) = c.entity {
@@ -1136,67 +1317,78 @@ fn dispatch_events(world: &mut World, conns: &mut HashMap<u64, Conn>, events: Ve
 /// Radius (world units) a client is told about. Entities beyond this are culled
 /// from that player's snapshot — the core MMO bandwidth control.
 const AOI_RADIUS: f32 = 1400.0;
-/// Hard ceiling on entities in one snapshot frame, nearest-first. This is the
-/// interest-management backstop: AOI alone does not bound anything when a
-/// thousand players pile into the same square, which is exactly when the
-/// server can least afford O(N²) frame building.
+/// Hard ceiling on entities in one JSON snapshot frame, nearest-first. This
+/// is the interest-management backstop of the text wire: AOI alone does not
+/// bound anything when a thousand players pile into the same square. The
+/// binary wire (`snap`) has its own, much higher caps.
 const MAX_ENTITIES_PER_FRAME: usize = 150;
 
-/// Send each logged-in client an area-of-interest snapshot centered on its own
-/// player: only the entities near it, not the whole zone.
-fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
+/// Send each logged-in client a snapshot centered on its own player. Binary
+/// clients get delta frames from `snap`; JSON clients (test tools) get their
+/// nearest `MAX_ENTITIES_PER_FRAME` entities in full. Both walk the AoI grid:
+/// no entity is read or serialized unless some client can see it.
+fn broadcast_snapshots(world: &World, conns: &mut HashMap<u64, Conn>, hub: &mut snap::SnapHub) {
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     // 86400 seconds in a day. time_of_day = 0.0 at midnight UTC, 0.5 at noon UTC.
     let time_of_day = world
         .time_override
         .unwrap_or((now_secs % 86400) as f32 / 86400.0);
 
-    // C15: serialize every entity ONCE per zone, then assemble each client's
-    // frame from the shared fragments — 1,000 clients no longer cost 1,000
-    // full serde passes over the same entities.
-    let mut per_act: HashMap<Act, (u64, Vec<(antediluvia_protocol::Vec2, String)>)> = HashMap::new();
-    for act in Act::ALL {
-        if !conns.values().any(|c| c.logged_in && c.act == act) {
+    // Binary delta clients.
+    let mut reqs: Vec<snap::ClientReq> = Vec::new();
+    for (id, c) in conns.iter_mut() {
+        if !c.logged_in || c.wire == antediluvia_protocol::wire::WIRE_JSON {
             continue;
         }
-        let (tick, frags) = world.zone_serialized(act);
-        per_act.insert(act, (tick, frags));
+        let Some(entity) = c.entity else { continue };
+        reqs.push(snap::ClientReq { conn: *id, act: c.act, entity, aoi: c.aoi, resync: c.resync });
+        c.resync = false;
     }
+    hub.run(world, &reqs, time_of_day, |conn, frame| {
+        if let Some(c) = conns.get(&conn) {
+            let _ = c.out.send(Out::Bin(frame));
+        }
+    });
+
+    // JSON clients. Each entity is serialized at most once per snapshot, on
+    // first need, and the fragment is shared by every client that sees it.
+    let mut frags: HashMap<EntityId, String> = HashMap::new();
+    let mut near: Vec<(f32, EntityId)> = Vec::new();
     for c in conns.values() {
-        if !c.logged_in {
+        if !c.logged_in || c.wire != antediluvia_protocol::wire::WIRE_JSON {
             continue;
         }
         let Some(ent) = c.entity else { continue };
-        let Some((tick, frags)) = per_act.get(&c.act) else { continue };
+        let Some(zone) = world.zones.get(&c.act) else { continue };
         let pos = world.player_pos(c.act, ent).unwrap_or_default();
         let r2 = c.aoi * c.aoi;
-        let mut frame = format!(
-            "{{\"t\":\"snapshot\",\"act\":\"{}\",\"tick\":{},\"time_of_day\":{},\"entities\":[",
-            c.act.as_str(), tick, time_of_day
-        );
-        // Collect candidates with their distance, then send only the nearest
-        // MAX_ENTITIES_PER_FRAME. Without this cap a crowded zone is O(N²):
-        // every one of N clients gets a frame containing all N entities, which
-        // measured at ~1 GB/s and 67-82 ms ticks with 1000 players. The cap
-        // bounds both egress and per-tick CPU no matter how dense the zone is,
-        // and losing the 200th-nearest entity is imperceptible.
-        let mut near: Vec<(f32, &str)> = frags
-            .iter()
-            .filter_map(|(p, json)| {
-                let d2 = p.distance_squared(pos);
-                (d2 <= r2).then_some((d2, json.as_str()))
-            })
-            .collect();
+        near.clear();
+        for cell in antediluvia_sim::aoi::cells_in_radius(pos, c.aoi) {
+            for id in zone.grid.cell_entities(cell) {
+                if let Some(e) = zone.entities.get(id) {
+                    let d2 = e.pos.distance_squared(pos);
+                    if d2 <= r2 {
+                        near.push((d2, *id));
+                    }
+                }
+            }
+        }
+        // Without this cap a crowded zone is O(N^2) on the text wire: every
+        // one of N clients gets a frame containing all N entities in full.
         if near.len() > MAX_ENTITIES_PER_FRAME {
-            // Partial select — cheaper than a full sort, and we don't care
-            // about the ordering within the kept set.
-            near.select_nth_unstable_by(MAX_ENTITIES_PER_FRAME, |a, b| {
-                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            near.select_nth_unstable_by(MAX_ENTITIES_PER_FRAME, |a, b| a.0.total_cmp(&b.0));
             near.truncate(MAX_ENTITIES_PER_FRAME);
         }
+        let mut frame = format!(
+            "{{\"t\":\"snapshot\",\"act\":\"{}\",\"tick\":{},\"time_of_day\":{},\"entities\":[",
+            c.act.as_str(), zone.tick, time_of_day
+        );
         let mut first = true;
-        for (_, json) in &near {
+        for (_, id) in &near {
+            let Some(e) = zone.entities.get(id) else { continue };
+            let json = frags
+                .entry(*id)
+                .or_insert_with(|| serde_json::to_string(&e.to_state()).unwrap_or_default());
             if !first {
                 frame.push(',');
             }
@@ -1208,8 +1400,16 @@ fn broadcast_snapshots(world: &World, conns: &HashMap<u64, Conn>) {
     }
 }
 
-fn save_all(world: &World, conns: &HashMap<u64, Conn>, db: &Db) {
-    for c in conns.values() {
+/// Ticks between two saves of the same character (10 s).
+const SAVE_PERIOD: u64 = TICK_HZ * 10;
+
+/// Save the characters whose turn it is this tick (connection id modulo the
+/// save period), so the work is level instead of one spike every 10 s.
+fn save_slice(world: &World, conns: &HashMap<u64, Conn>, db: &Db, ticks: u64) {
+    for (id, c) in conns.iter() {
+        if (id + ticks) % SAVE_PERIOD != 0 {
+            continue;
+        }
         if let (true, Some(ent)) = (c.logged_in, c.entity) {
             if let Some(sheet) = world.player_sheet(c.act, ent) {
                 if let Err(e) = db.save(&sheet, None) {

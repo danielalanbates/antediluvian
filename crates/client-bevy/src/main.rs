@@ -13,16 +13,25 @@
 //!
 //! The server world is top-down 2D; it maps into 3D as (x, height, y).
 //!
-//! Usage: antediluvia-client-bevy [name] [ws-url]
-//!   defaults: name="Adam", url="ws://127.0.0.1:8787"
+//! Usage: antediluvia-client-bevy <account-id> [name] [ws-url]
+//!   defaults: url="ws://127.0.0.1:8787"; no name opens the character builder
+//!   for a new account (the macOS launcher passes only the account id).
 
 mod atmosphere;
+mod beta;
+mod castbar;
+mod crowd;
+mod track_ui;
 mod audio;
 mod ambient;
 mod creaturegen;
 mod dressing;
 mod shots;
 mod face;
+mod formations;
+mod beastgrafts;
+mod mobmodels;
+mod look;
 mod equipment;
 mod grass;
 // Embedded single-player. Native-only: it owns an OS thread and paces itself
@@ -44,6 +53,7 @@ mod terrain_material;
 mod ui;
 mod variety;
 mod vfx;
+mod win;
 
 use atmosphere::{act_mood, spawn_sky, update_atmosphere, Sun};
 use audio::{ambient_system, init_audio_assets, one_shot, AudioAssets, Pool};
@@ -54,9 +64,8 @@ use antediluvia_protocol::{
 use terrain::{build_terrain_mesh, terrain_height};
 use ui::{spawn_ui, update_banner, update_target_frame, update_ui_frames, update_ui_panels, Cooldowns};
 use variety::{
-    apply_tints, attach_hair_style, attach_species_parts, formation_color, formation_mesh,
-    hair_hue, skin_hue, species_parts_seed, species_stretch, species_variation, HairStyle,
-    SpeciesParts, TintCache, TintRig, HAIR_CHOICES, SKIN_CHOICES,
+    apply_tints, attach_species_parts, formation_color, species_parts_seed, species_stretch,
+    species_variation, SpeciesParts, TintCache, TintRig,
 };
 use vfx::{init_vfx, pulse_inn_ring, spawn_burst, update_vfx, InnRing, VfxAssets};
 use bevy::gltf::GltfAssetLabel;
@@ -70,28 +79,33 @@ use std::time::Duration;
 
 /// Where this client connects and who it logs in as, resolved before Bevy
 /// starts. Native takes it from argv; the browser takes it from the host page.
+///
+/// `account_id` is an opaque per-player id: `local-<uuid>` from the macOS
+/// launcher (`scripts/app/launcher.sh`), `web_<hex>` from browser storage.
+/// It goes over the wire in the protocol's `apple_id` field, a historical
+/// name kept for compatibility; there is no Sign in with Apple.
 struct LaunchConfig {
-    apple_id: String,
+    account_id: String,
     url: String,
     character_name: Option<String>,
 }
 
 const DEFAULT_URL: &str = "ws://127.0.0.1:8787";
 
-/// Native: `antediluvia-client-bevy [name] [ws-url]`, either order-ish — an
-/// argument that looks like a URL is treated as one, otherwise as a character
-/// name.
+/// Native: `antediluvia-client-bevy <account-id> [name] [ws-url]` — after the
+/// account id, an argument that looks like a URL is treated as one, otherwise
+/// as a character name (test tooling; players use the builder).
 #[cfg(not(target_arch = "wasm32"))]
 fn launch_config() -> LaunchConfig {
     let mut args = std::env::args().skip(1);
-    let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
+    let account_id = args.next().unwrap_or_else(|| "local_user_1".into());
     let url_or_name = args.next().unwrap_or_else(|| DEFAULT_URL.into());
     let (character_name, url) = if is_ws_url(&url_or_name) {
         (None, url_or_name)
     } else {
         (Some(url_or_name), args.next().unwrap_or_else(|| DEFAULT_URL.into()))
     };
-    LaunchConfig { apple_id, url, character_name }
+    LaunchConfig { account_id, url, character_name }
 }
 
 /// Browser: there is no argv. The server comes from `window.ANTEDILUVIA_SERVER`
@@ -103,7 +117,19 @@ fn launch_config() -> LaunchConfig {
     use wasm_bindgen::JsValue;
 
     let window = web_sys::window();
+    // `?server=` and `?name=` are test hooks (the browser gate, local play),
+    // honoured only on a page served from this machine. On the public page a
+    // shared link must not be able to point the client at another server: the
+    // account id is the player's only credential, and that server could log in
+    // with it.
+    let local_page = window
+        .as_ref()
+        .and_then(|w| w.location().hostname().ok())
+        .is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "[::1]");
     let query = |key: &str| -> Option<String> {
+        if !local_page {
+            return None;
+        }
         let search = window.as_ref()?.location().search().ok()?;
         let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
         params.get(key).filter(|v| !v.is_empty())
@@ -130,24 +156,34 @@ fn launch_config() -> LaunchConfig {
         .unwrap_or_else(|| DEFAULT_URL.into());
 
     let character_name = query("name");
-    // Without Sign in with Apple in the browser yet, identity is a per-browser
-    // random id kept in localStorage so a returning player keeps their save.
-    let apple_id = window
-        .as_ref()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|store| {
-            if let Ok(Some(id)) = store.get_item("antediluvia_id") {
-                if !id.is_empty() {
-                    return Some(id);
-                }
+    // Identity: a random per-browser account id kept in localStorage, so a
+    // returning player keeps their character. It is the only credential, so a
+    // new id carries 128 random bits. Ids stored by older builds (`web_` + 8
+    // hex) are kept as they are, so nobody loses a character.
+    let fresh = || {
+        let mut b = [0u8; 16];
+        if getrandom::fill(&mut b).is_err() {
+            for x in b.iter_mut() {
+                *x = (js_sys::Math::random() * 256.0) as u8;
             }
-            let id = format!("web_{:08x}", (js_sys::Math::random() * 4294967295.0) as u32);
-            store.set_item("antediluvia_id", &id).ok()?;
-            Some(id)
-        })
-        .unwrap_or_else(|| "web_guest".into());
+        }
+        format!("web_{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
+    };
+    let account_id = match window.as_ref().and_then(|w| w.local_storage().ok().flatten()) {
+        Some(store) => match store.get_item("antediluvia_id") {
+            Ok(Some(id)) if !id.is_empty() => id,
+            _ => {
+                let id = fresh();
+                let _ = store.set_item("antediluvia_id", &id);
+                id
+            }
+        },
+        // Site data blocked: a session-only id. Never a shared fallback id,
+        // which would put every such player on one account.
+        None => fresh(),
+    };
 
-    LaunchConfig { apple_id, url, character_name }
+    LaunchConfig { account_id, url, character_name }
 }
 
 fn is_ws_url(s: &str) -> bool {
@@ -155,6 +191,15 @@ fn is_ws_url(s: &str) -> bool {
 }
 
 fn main() {
+    // Bevy's glTF loader waits for its textures by ticking the task pool on
+    // the same thread, which can start another glTF load on top of it. With
+    // many models loading at once those nest (five deep in the crash report of
+    // 2026-11-23) and overflow the default 2 MB worker stack. std reads this
+    // variable the first time it spawns a thread, so it must be set here.
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("RUST_MIN_STACK").is_none() {
+        std::env::set_var("RUST_MIN_STACK", "16777216");
+    }
     // Art-review mode: a minimal app that renders nothing but the procedural
     // prop grid. It deliberately shares none of the gameplay systems — those
     // expect a live world and network resources this mode never creates.
@@ -186,10 +231,18 @@ fn main() {
     // With ANTEDILUVIA_BEASTSHEET_OUT=<png> it renders off-screen (no window,
     // no focus change) and writes the image — safe to run while someone is
     // using the machine.
-    let offscreen = std::env::var("ANTEDILUVIA_BEASTSHEET_OUT")
-        .map(|o| (o, false))
-        .or_else(|_| std::env::var("ANTEDILUVIA_CHARSHEET_OUT").map(|o| (o, true)));
-    if let Ok((out, chars)) = offscreen {
+    // The same off-screen path serves every review sheet: generated beasts,
+    // character looks, procedural props, landforms and real bestiary species.
+    let offscreen = [
+        ("ANTEDILUVIA_BEASTSHEET_OUT", 0u8),
+        ("ANTEDILUVIA_CHARSHEET_OUT", 1),
+        ("ANTEDILUVIA_PROPSHEET_OUT", 2),
+        ("ANTEDILUVIA_LANDSHEET_OUT", 3),
+        ("ANTEDILUVIA_SPECIESSHEET_OUT", 4),
+    ]
+    .iter()
+    .find_map(|(k, kind)| std::env::var(k).ok().map(|o| (o, *kind)));
+    if let Some((out, sheet)) = offscreen {
         use bevy::render::camera::RenderTarget;
         use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
         use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -208,7 +261,10 @@ fn main() {
             .insert_resource(AmbientLight { color: Color::WHITE, brightness: 400.0 })
             .insert_resource(TintCache::default())
             .insert_resource(face::RestyledFaces::default())
-            .add_systems(Update, (apply_tints, attach_hair_style, face::restyle_faces))
+            .insert_resource(look::apply::LookAssets::default())
+            .add_systems(PreStartup, init_equip_assets)
+            .add_systems(PreUpdate, (apply_loadouts, look::apply::apply_looks))
+            .add_systems(Update, (apply_tints, face::restyle_faces))
             .add_systems(
                 Startup,
                 move |mut c: Commands,
@@ -216,10 +272,12 @@ fn main() {
                  mut mat: ResMut<Assets<StandardMaterial>>,
                  mut images: ResMut<Assets<Image>>,
                  server: Res<AssetServer>| {
-                    if chars {
-                        spawn_character_sheet(&mut c, &mut m, &mut mat, &server);
-                    } else {
-                        creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat);
+                    match sheet {
+                        1 => spawn_character_sheet(&mut c, &mut m, &mut mat, &server),
+                        2 => propgen::spawn_contact_sheet(&mut c, &mut m, &mut mat),
+                        3 => formations::spawn_land_sheet(&mut c, &mut m, &mut mat),
+                        4 => mobmodels::spawn_species_sheet(&mut c, &mut m, &mut mat),
+                        _ => creaturegen::spawn_beast_sheet(&mut c, &mut m, &mut mat),
                     }
                     let size = Extent3d { width: 1600, height: 900, ..default() };
                     let mut img = Image::new_fill(
@@ -281,23 +339,24 @@ fn main() {
         return;
     }
 
-    let LaunchConfig { apple_id, url, character_name } = launch_config();
+    let LaunchConfig { account_id, url, character_name } = launch_config();
 
     // Start the network thread before the app so login is already in flight.
-    let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
-    let apple_id_for_session = apple_id.clone();
+    let display_name = character_name.clone().unwrap_or_else(|| account_id.clone());
+    let account_id_for_session = account_id.clone();
 
     #[cfg(not(target_arch = "wasm32"))]
     let (tx, rx) = if url == "local" || std::env::var("ANTEDILUVIA_LOCAL").is_ok() {
         // Embedded single-player: run the World in-process.
         // A default character is used unless one is created in the builder.
+        net::set_link(net::Link::Open);
         local::start_local(display_name.clone(), None)
     } else {
-        start_network(url, apple_id, character_name)
+        start_network(url, account_id, character_name)
     };
     // The browser has no in-process server to fall back to.
     #[cfg(target_arch = "wasm32")]
-    let (tx, rx) = start_network(url, apple_id, character_name);
+    let (tx, rx) = start_network(url, account_id, character_name);
 
     // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
     // workspace-level assets/ dir, independent of cwd.
@@ -362,6 +421,8 @@ fn main() {
         .add_plugins(plugins)
         .add_plugins(shots::ShotsPlugin)
         .add_plugins(perf::PerfPlugin)
+        .add_plugins(win::WinPlugin)
+        .add_plugins(beta::BetaPlugin)
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .init_resource::<lighting::EnvMaps>()
         .add_systems(Update, (lighting::apply_env_map, lighting::drift_ripples))
@@ -384,6 +445,7 @@ fn main() {
         .insert_resource(TintCache::default())
         .insert_resource(creaturegen::ProcBodyCache::default())
         .insert_resource(face::RestyledFaces::default())
+        .insert_resource(look::apply::LookAssets::default())
         .add_systems(Update, (face::restyle_faces, update_name_labels, grass::update_far_grass))
         .insert_resource(grass::FarGrass::default())
         // Systems that graft children onto (or insert into) rig entities found
@@ -393,25 +455,31 @@ fn main() {
         // before Update runs, so they only ever touch live entities.
         .add_systems(
             PreUpdate,
-            (apply_loadouts, apply_tints, attach_species_parts, creaturegen::build_proc_bodies, attach_hair_style),
+            (apply_loadouts, apply_tints, attach_species_parts, creaturegen::build_proc_bodies, look::apply::apply_looks),
         )
         .insert_resource(PlayerJump::default())
         .insert_resource(LeftDrag::default())
         .insert_resource(PropColliders::default())
         .insert_resource(Session {
             name: display_name,
-            apple_id: apple_id_for_session,
+            account_id: account_id_for_session,
             ..default()
         })
         .insert_resource(menu::MenuOpen::default())
         .add_event::<CombatEvt>()
+        .add_systems(Startup, castbar::spawn_cast_bar)
+        .add_systems(Update, castbar::update_cast_bar)
+        .add_systems(Update, crowd::log_crowd)
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
         .add_systems(
             Update,
             (
                 receive_from_server,
                 send_input,
-                chat_input,
+                // After the window hotkeys and the menu: an Escape that
+                // cancels the chat line must not also close a window or open
+                // the menu in the same frame (they still see chat as active).
+                chat_input.after(menu::menu_toggle),
                 orbit_camera,
                 mouse_click_attack,
                 sync_prop_colliders,
@@ -419,7 +487,7 @@ fn main() {
                 attach_rigs,
                 animate_movement,
                 trigger_attack_anim,
-                builder_screen,
+                look::builder::builder_screen.after(orbit_camera),
                 dev_console,
                 dev_autocmd,
                 menu::menu_toggle,
@@ -467,7 +535,7 @@ struct ServerEnt(u64);
 pub(crate) struct PlayerTag;
 
 #[derive(Component)]
-struct MainCamera;
+pub(crate) struct MainCamera;
 
 // (HudText / ActionBarText markers replaced by ui.rs components.)
 
@@ -536,6 +604,9 @@ struct Mirrored {
     /// While `time.elapsed_secs()` is below this, the entity is playing its
     /// death animation — keep the corpse visible even if it left the snapshot.
     dying_until: f32,
+    /// Crowd LOD of another player: `Some(true)` = shared block figure,
+    /// `Some(false)` = full rig. `None` for everything else.
+    lod_cheap: Option<bool>,
 }
 
 #[derive(Resource, Default)]
@@ -565,8 +636,12 @@ pub struct Session {
     pub target_id: Option<u64>,
     /// Big centered announcement (text, seconds remaining).
     pub banner: Option<(String, f32)>,
-    /// Apple account id this session logs in with (C13 re-login from builder).
-    pub apple_id: String,
+    /// Account id this session logs in with (C13 re-login from builder);
+    /// see `LaunchConfig`.
+    pub account_id: String,
+    /// Why the server refused a login made outside the builder (shown by
+    /// `beta::update_status`; cleared on Welcome).
+    pub login_error: Option<String>,
     /// Character-builder state; `Some` while the create screen is up (C13).
     pub builder: Option<Builder>,
     /// Account has dev rights (server-advised, C14).
@@ -575,28 +650,23 @@ pub struct Session {
     pub dev_input: Option<String>,
     /// Current party roster (P1); empty = not in a party.
     pub party: Vec<String>,
+    /// Ability cooldowns as told by the server (B03): id -> (start, end) in
+    /// client seconds. Drives the action-bar sweep.
+    pub ability_cd: std::collections::HashMap<String, (f32, f32)>,
+    /// Global cooldown window (start, end).
+    pub gcd: (f32, f32),
+    /// Cast in progress: (ability id, start, end).
+    pub cast: Option<(String, f32, f32)>,
 }
 
-/// Character-builder working state (C13).
-pub struct Builder {
-    pub name: String,
-    pub class: Class,
-    pub faction: Option<String>,
-    pub appearance: [u32; 3],
-    pub submitted: bool,
-    pub error: Option<String>,
-}
+pub use look::builder::Builder;
 
-impl Default for Builder {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            class: Class::Warrior,
-            faction: None,
-            appearance: [0, 0, 0],
-            submitted: false,
-            error: None,
-        }
+impl Session {
+    /// A text field owns the keyboard: chat line, dev console or the
+    /// character builder's name. Game keys (move, talk, mount, tame, bar)
+    /// must not fire while this is true.
+    pub fn typing(&self) -> bool {
+        self.chat_active || self.dev_input.is_some() || self.builder.is_some()
     }
 }
 
@@ -614,12 +684,16 @@ impl Default for Session {
             time_of_day: 0.5,
             target: None,
             target_id: None,
-            apple_id: String::new(),
+            account_id: String::new(),
+            login_error: None,
             is_dev: false,
             dev_input: None,
             banner: None,
             builder: None,
             party: Vec::new(),
+            ability_cd: std::collections::HashMap::new(),
+            gcd: (0.0, 0.0),
+            cast: None,
         }
     }
 }
@@ -666,10 +740,36 @@ struct RenderAssets {
     m_lod: Vec<Handle<StandardMaterial>>,
 }
 
-/// Players farther than this from the local player spawn as capsule
-/// impostors with no rig, animation, or nameplate (C15). Chosen at spawn;
-/// AoI churn re-evaluates naturally as entities come and go.
+/// Players farther than this from the local player are block figures with no
+/// rig, animation, or nameplate (C15).
 const RIG_LOD_RADIUS: f32 = 350.0;
+/// Most other players drawn as full rigs at once. Every rig is a skinned
+/// mesh with its own look meshes, so a crowd standing on one spot must not
+/// turn into hundreds of them; the rest stay block figures however near.
+const MAX_PLAYER_RIGS: usize = 40;
+
+/// Should a player's stand-in change? `cheap` is what it is now, `dist` its
+/// distance from the local player, `rigs` how many other players are full
+/// rigs right now. Returns the new `cheap` when it must be respawned.
+///
+/// The choice used to be made once, when the entity first appeared: a player
+/// who arrived from afar stayed a block figure while standing next to you
+/// (seen in the 200-bot run of 2026-11-23). Promotion and demotion use
+/// different radii so someone pacing along the boundary does not flicker.
+fn lod_swap(cheap: bool, dist: f32, rigs: usize) -> Option<bool> {
+    if cheap && dist < RIG_LOD_RADIUS * 0.8 && rigs < MAX_PLAYER_RIGS {
+        Some(false)
+    } else if !cheap && dist > RIG_LOD_RADIUS * 1.25 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// Stand-in for a player seen for the first time.
+fn lod_initial(dist: f32, rigs: usize) -> bool {
+    dist > RIG_LOD_RADIUS || rigs >= MAX_PLAYER_RIGS
+}
 
 #[derive(Resource)]
 struct OffscreenTarget(Handle<Image>);
@@ -682,13 +782,6 @@ fn spawn_character_sheet(
     materials: &mut Assets<StandardMaterial>,
     server: &AssetServer,
 ) {
-    const BODIES: [&str; 5] = [
-        "models/characters/Knight.glb",
-        "models/characters/Barbarian.glb",
-        "models/characters/Rogue.glb",
-        "models/characters/Mage.glb",
-        "models/characters/Rogue_Hooded.glb",
-    ];
     let envf = |k: &str, d: f32| -> f32 {
         std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
     };
@@ -711,21 +804,10 @@ fn spawn_character_sheet(
             ));
         }
     }
-    for (i, f) in BODIES.iter().enumerate() {
-        if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_ok() {
-            break;
-        }
-        let mut ec = commands.spawn((
-            SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(*f))),
-            Transform::from_xyz((i as f32 - 2.0) * spacing, 0.0, 0.0),
-        ));
-        if std::env::var("ANTEDILUVIA_CHARSHEET_RAW").is_err() {
-            let (hue, light) = skin_hue(i as u32 * 3);
-            ec.insert((
-                TintRig { hue, light, hair_hue: Some(hair_hue(i as u32)) },
-                HairStyle { style: i as u32, hue: hair_hue(i as u32) },
-            ));
-        }
+    if std::env::var("ANTEDILUVIA_CHARSHEET_MOBS").is_err() {
+        // Player looks: the same rigs, colours, faces and grafts as in game.
+        look::spawn_look_sheet(commands, meshes, materials, server);
+        return;
     }
     let ground = meshes.add(Plane3d::default().mesh().size(40.0, 40.0));
     let gmat = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.33, 0.26), ..default() });
@@ -734,14 +816,14 @@ fn spawn_character_sheet(
         DirectionalLight { illuminance: 14_000.0, shadows_enabled: true, ..default() },
         Transform::from_xyz(4.0, 8.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    let (h, d, look) = (
+    let (h, d, look_y) = (
         envf("ANTEDILUVIA_CHARSHEET_CAMH", 2.0),
         envf("ANTEDILUVIA_CHARSHEET_CAMD", 5.5),
         envf("ANTEDILUVIA_CHARSHEET_LOOKY", 1.5),
     );
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, h, d).looking_at(Vec3::new(0.0, look, 0.0), Vec3::Y),
+        Transform::from_xyz(0.0, h, d).looking_at(Vec3::new(0.0, look_y, 0.0), Vec3::Y),
     ));
 }
 
@@ -757,6 +839,8 @@ const BAR_WIDTH: f32 = 34.0;
 const CHAR_SCALE: f32 = 30.0;
 /// Boss ("alpha") enemies render half again as large.
 const ALPHA_SCALE: f32 = 45.0;
+/// Quaternius character-pack bodies are ~30% taller than the KayKit rigs.
+const HUMANOID_SCALE: f32 = 23.0;
 
 /// How long a corpse stays after death. Long enough for Death_A (~1.2 s) to
 /// finish before the entity is reclaimed; `attack_until` is held past this so
@@ -778,6 +862,12 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
                 Some("hunter") => ("models/characters/Rogue.glb", 1),
                 Some("priest") => ("models/characters/Knight.glb", 62),
                 Some("mage") => ("models/characters/Mage.glb", 62),
+                // B09 classes reuse the four adventurer rigs until they get
+                // art of their own (attack clip: 1 = slice, 8 = chop, 62 = cast).
+                Some("wanderer") => ("models/characters/Rogue.glb", 1),
+                Some("herald") => ("models/characters/Knight.glb", 8),
+                Some("warden") => ("models/characters/Mage.glb", 62),
+                Some("occultist") => ("models/characters/Mage.glb", 62),
                 _ => ("models/characters/Knight.glb", 1),
             };
             // Builder appearance (C13): body index overrides the rig model.
@@ -837,12 +927,30 @@ fn rig_for(e: &EntityState) -> (&'static str, [usize; 4], f32) {
             }
             // Deterministic variety: hash the species tag onto the minion set.
             let h = tag.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-            let (file, attack) = match h % 3 {
-                0 => ("models/enemies/Skeleton_Minion.glb", 2),
-                1 => ("models/enemies/Skeleton_Rogue.glb", 2),
-                _ => ("models/enemies/Skeleton_Mage.glb", 77),
-            };
-            (file, [SKEL[0], SKEL[1], attack, SKEL[2]], CHAR_SCALE)
+            // Quaternius Ultimate Animated Characters (CC0): Death=0 Idle=2
+            // Run=8 SwordSlash=13. Raiders, cultists and the fallen used to
+            // be only three skeletons.
+            const UAC: [usize; 4] = [2, 8, 13, 0];
+            const HUMANOIDS: [&str; 12] = [
+                "models/humanoids/Goblin_Male.glb",
+                "models/humanoids/Goblin_Female.glb",
+                "models/humanoids/Zombie_Male.glb",
+                "models/humanoids/Zombie_Female.glb",
+                "models/humanoids/Viking_Male.glb",
+                "models/humanoids/Viking_Female.glb",
+                "models/humanoids/Ninja_Male.glb",
+                "models/humanoids/Ninja_Female.glb",
+                "models/humanoids/Pirate_Male.glb",
+                "models/humanoids/Pirate_Female.glb",
+                "models/humanoids/Witch.glb",
+                "models/humanoids/Wizard.glb",
+            ];
+            match h % 15 {
+                0 => ("models/enemies/Skeleton_Minion.glb", [SKEL[0], SKEL[1], 2, SKEL[2]], CHAR_SCALE),
+                1 => ("models/enemies/Skeleton_Rogue.glb", [SKEL[0], SKEL[1], 2, SKEL[2]], CHAR_SCALE),
+                2 => ("models/enemies/Skeleton_Mage.glb", [SKEL[0], SKEL[1], 77, SKEL[2]], CHAR_SCALE),
+                n => (HUMANOIDS[(n - 3) as usize], UAC, HUMANOID_SCALE),
+            }
         }
     }
 }
@@ -854,13 +962,26 @@ fn beast_rig(tag: &str) -> Option<(&'static str, [usize; 4], f32)> {
     const HERB: [usize; 4] = [6, 4, 0, 2];
     const PRED: [usize; 4] = [5, 3, 0, 1];
     let has = |ks: &[&str]| ks.iter().any(|k| tag.contains(k));
+    // Quaternius Farm Animals (Death=0 Idle=1 Jump=2 Run=3): the jump reads
+    // as a charge, so it doubles as the attack.
+    const FARM: [usize; 4] = [1, 3, 2, 0];
     Some(if has(&["wolf", "hound", "jackal", "dog"]) {
         ("models/wildlife/Wolf.gltf", PRED, 22.0)
     } else if has(&["cat", "smilodon", "panther", "lion", "fox"]) {
         ("models/wildlife/Fox.gltf", PRED, 24.0)
-    } else if has(&["bear", "mammoth", "mastodon", "behemoth", "bison", "auroch", "bull", "boar"]) {
+    } else if has(&["boar", "hog", "swine", "pig"]) {
+        ("models/beasts/Pig.glb", FARM, 22.0)
+    } else if has(&["auroch", "bison", "bull", "cattle"]) {
+        ("models/beasts/Cow.glb", FARM, 26.0)
+    } else if has(&["horse", "zebra", "onager", "steed"]) {
+        ("models/beasts/Horse.glb", FARM, 20.0)
+    } else if has(&["bear", "mammoth", "mastodon", "behemoth"]) {
         ("models/wildlife/Bull.gltf", HERB, 30.0)
-    } else if has(&["goat", "ibex", "alpaca", "camel"]) {
+    } else if has(&["sheep", "ibex"]) {
+        ("models/beasts/Sheep.glb", FARM, 22.0)
+    } else if has(&["llama", "camel"]) {
+        ("models/beasts/Llama.glb", FARM, 18.0)
+    } else if has(&["goat", "alpaca"]) {
         ("models/wildlife/Alpaca.gltf", HERB, 22.0)
     } else if has(&["deer", "elk", "stag", "antelope"]) {
         ("models/wildlife/Deer.gltf", HERB, 24.0)
@@ -894,14 +1015,29 @@ fn proc_body_plan(e: &EntityState) -> Option<u32> {
     }
 }
 
-/// The two ability keys per class (action-bar slots 1 and 2).
-pub fn class_abilities(class: Class) -> [&'static str; 2] {
-    match class {
-        Class::Warrior => ["heroic_strike", "whirlwind"],
-        Class::Hunter => ["aimed_shot", "multi_shot"],
-        Class::Priest => ["smite", "heal"],
-        Class::Mage => ["firebolt", "frost_nova"],
-    }
+/// A class's abilities in action-bar order (keys 1-9 then 0), read from the
+/// sim's data table so the bar can never drift from what the server accepts.
+pub fn class_bar(class: Class) -> Vec<&'static antediluvia_sim::abilities::Ability> {
+    antediluvia_sim::abilities::kit(class)
+}
+
+/// Keys for action-bar slots 1..=10.
+const BAR_KEYS: [KeyCode; antediluvia_sim::abilities::BAR_SLOTS] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+    KeyCode::Digit0,
+];
+
+/// Parse a class name as typed (`/class warden`).
+fn class_from_str(s: &str) -> Option<Class> {
+    Class::ALL.into_iter().find(|c| c.as_str() == s.trim().to_lowercase())
 }
 
 // ─── Props / scenery ─────────────────────────────────────────────────────────
@@ -1365,104 +1501,53 @@ fn spawn_act_scenery(
         commands.entity(e).insert((Terrain, DECOR_RANGE));
     }
 
-    // Procedural formations (Alpha-2 A1): 1,200 per act across eight
-    // families, every one a unique deformed mesh — thousands of distinct
-    // terrain models world-wide. A4 finding: every third site clusters near
-    // a POI so the variety is visible where players actually walk — but
-    // POI_CLEARANCE below keeps them off the site itself.
-    for i in 0..1200u64 {
-        let seed = act_idx * 1_000_003 + i * 7919;
-        let (x, z) = if i % 3 == 0 && !poi_sites.is_empty() {
-            let (px, pz) = poi_sites[(seed / 3 % poi_sites.len() as u64) as usize];
-            (
-                px + (hash01(seed * 4 + 11) - 0.5) * 900.0,
-                pz + (hash01(seed * 4 + 12) - 0.5) * 900.0,
-            )
-        } else {
-            (
-                (hash01(seed * 4 + 11) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-                (hash01(seed * 4 + 12) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-            )
-        };
-        if (x * x + z * z).sqrt() < 320.0 {
-            continue; // keep the inn clearing open
-        }
-        // Landmark clearance: formations ring a POI but never stand on it.
-        // Without this the set-dressing (and hero landmarks especially) end
-        // up buried inside 40-unit rock spires.
-        if poi_sites
-            .iter()
-            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
-        {
-            continue;
-        }
-        let size = 14.0 + hash01(seed * 4 + 13) * 46.0;
-        let y = terrain_height(act, x, z);
-        commands.spawn((
-            Mesh3d(meshes.add(formation_mesh(seed))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: formation_color(seed),
-                perceptual_roughness: 0.95,
-                ..default()
-            })),
-            terrain_material::RockSkin((seed % terrain_material::ROCK_TINTS.len() as u64) as usize),
-            Transform::from_xyz(x, y, z)
-                .with_scale(Vec3::splat(size))
-                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 14) * 6.283)),
-            Terrain,
-            DECOR_RANGE,
-        ));
-    }
-
-    // Procedural landmark props: 600 per act across 20 families, every one a
-    // unique mesh (propgen). The GLB kits give us good props but a FINITE set
-    // — the same barrel in every act is the loudest asset-pack tell we have.
-    // These cost one draw call each like a GLB and share ONE material, since
-    // all their colour lives in vertex attributes.
+    // Procedural scatter: 1,200 formation sites (deformed-dome rocks and the
+    // landform families of `formations.rs`) and 600 landmark props per act,
+    // every one a unique mesh. The site list lives in `formations::act_sites`
+    // so the distinct-model test walks exactly what is spawned here. Landforms
+    // and props carry their colour in vertex attributes and share ONE
+    // material; each site is one mesh and one draw.
     let prop_mat = materials.add(StandardMaterial {
         base_color: Color::WHITE,
         perceptual_roughness: 0.9,
         ..default()
     });
-    for i in 0..600u64 {
-        let seed = act_idx * 7_700_017 + i * 6421 + 31;
-        // Two thirds cluster near POIs — the A4 finding was that scattered
-        // variety is invisible because players walk the roads and landmarks.
-        let (x, z) = if i % 3 != 0 && !poi_sites.is_empty() {
-            let (px, pz) = poi_sites[(seed / 7 % poi_sites.len() as u64) as usize];
-            (
-                px + (hash01(seed * 4 + 21) - 0.5) * 1100.0,
-                pz + (hash01(seed * 4 + 22) - 0.5) * 1100.0,
-            )
-        } else {
-            (
-                (hash01(seed * 4 + 21) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-                (hash01(seed * 4 + 22) - 0.5) * antediluvia_protocol::WORLD_BOUNDS * 2.0,
-            )
-        };
-        if (x * x + z * z).sqrt() < 320.0 {
-            continue; // keep the inn clearing open
-        }
-        if poi_sites
-            .iter()
-            .any(|(px, pz)| ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < POI_CLEARANCE)
-        {
-            continue;
-        }
-        // Props are authored at roughly 10-30 units tall, so the world scale
-        // is a modest multiplier rather than the 14-60x formations use.
-        let size = 1.6 + hash01(seed * 4 + 23) * 2.2;
+    for site in formations::act_sites(act_idx, &poi_sites, antediluvia_protocol::WORLD_BOUNDS, POI_CLEARANCE) {
+        let (x, z, seed, size) = (site.x, site.z, site.seed, site.size);
         let y = terrain_height(act, x, z);
-        commands.spawn((
-            Mesh3d(meshes.add(propgen::prop_mesh(seed))),
-            MeshMaterial3d(prop_mat.clone()),
-            Transform::from_xyz(x, y, z)
-                .with_scale(Vec3::splat(size))
-                .with_rotation(Quat::from_rotation_y(hash01(seed * 4 + 24) * 6.283)),
-            SolidProp { radius: (size * 4.0).clamp(8.0, 45.0) },
-            Terrain,
-            DECOR_RANGE,
-        ));
+        let xf = Transform::from_xyz(x, y, z)
+            .with_scale(Vec3::splat(size))
+            .with_rotation(Quat::from_rotation_y(site.yaw));
+        let mesh = Mesh3d(meshes.add(formations::site_mesh(&site)));
+        match site.kind {
+            formations::SiteKind::Rock => {
+                commands.spawn((
+                    mesh,
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: formation_color(seed),
+                        perceptual_roughness: 0.95,
+                        ..default()
+                    })),
+                    terrain_material::RockSkin((seed % terrain_material::ROCK_TINTS.len() as u64) as usize),
+                    xf,
+                    Terrain,
+                    DECOR_RANGE,
+                ));
+            }
+            formations::SiteKind::Land(_) => {
+                commands.spawn((mesh, MeshMaterial3d(prop_mat.clone()), xf, Terrain, DECOR_RANGE));
+            }
+            formations::SiteKind::Prop => {
+                commands.spawn((
+                    mesh,
+                    MeshMaterial3d(prop_mat.clone()),
+                    xf,
+                    SolidProp { radius: (size * 4.0).clamp(8.0, 45.0) },
+                    Terrain,
+                    DECOR_RANGE,
+                ));
+            }
+        }
     }
 
     // Cave mouths (C09): two big flanking rocks and a leaning capstone make
@@ -1690,11 +1775,11 @@ fn setup(
         // featureless pills. Same draw-call budget, but now a head/torso/legs
         // silhouette in the SAME 16-tone skin palette the real rigs use, so a
         // crowd reads as a crowd of people instead of cloned markers.
-        m_lod: (0..variety::SKIN_CHOICES)
-            .map(|i| {
-                let (hue, light) = variety::skin_hue(i);
+        m_lod: look::SKIN
+            .iter()
+            .map(|(_, c)| {
                 materials.add(StandardMaterial {
-                    base_color: Color::hsl(hue, 0.35, (0.42 * light).clamp(0.12, 0.78)),
+                    base_color: Color::srgb(c[0], c[1], c[2]),
                     perceptual_roughness: 0.9,
                     ..default()
                 })
@@ -1731,15 +1816,17 @@ fn spawn_visual(
         // C15 crowd LOD: distant players are one shared capsule, no rig,
         // no animation graph, no nameplate.
         EntityKind::Player if cheap => {
+            let lod_look = antediluvia_protocol::Look::unpack(e.look.unwrap_or(0));
+            let lod_scale = look::body_scale(lod_look);
             let mut m = Entity::PLACEHOLDER;
             commands.entity(root).with_children(|p| {
                 m = p
                     .spawn((
                         Mesh3d(assets.lod_capsule.clone()),
-                        MeshMaterial3d(
-                            assets.m_lod[e.id as usize % assets.m_lod.len()].clone(),
-                        ),
-                        Transform::from_xyz(0.0, 30.0, 0.0).with_rotation(rot),
+                        MeshMaterial3d(assets.m_lod[lod_look.skin as usize % assets.m_lod.len()].clone()),
+                        // Skin tone, build and height survive at range: one
+                        // shared mesh, one of 20 shared materials, a scale.
+                        Transform::from_xyz(0.0, 30.0 * lod_scale.y, 0.0).with_rotation(rot).with_scale(lod_scale),
                     ))
                     .id();
             });
@@ -1798,18 +1885,21 @@ fn spawn_visual(
                     // Skeleton rigs are thin humanoids already; the per-axis
                     // body-plan stretch made them look spindly. Keep it for
                     // the animal rigs, uniform for the skeletons.
-                    if !file.contains("Skeleton") {
+                    if !file.contains("Skeleton") && !file.contains("humanoids/") {
                         stretch = species_stretch(tag);
                     }
                     parts = Some(SpeciesParts { seed: species_parts_seed(tag) });
                     Some(TintRig { hue, light, hair_hue: None })
                 }
-                EntityKind::Player => e.appearance.map(|a| {
-                    let (hue, light) = skin_hue(a[1]);
-                    TintRig { hue, light, hair_hue: Some(hair_hue(a[2])) }
-                }),
                 _ => None,
             };
+            // Players wear their look: build and height scale the rig here,
+            // colours, face, hair and mantle are applied by `look::apply`.
+            let player_look = (e.kind == EntityKind::Player)
+                .then(|| antediluvia_protocol::Look::unpack(e.look.unwrap_or(0)));
+            if let Some(l) = player_look {
+                stretch = look::body_scale(l);
+            }
             let clips = RigClips {
                 idle: asset_server.load(GltfAssetLabel::Animation(i_idle).from_asset(file)),
                 run: asset_server.load(GltfAssetLabel::Animation(i_run).from_asset(file)),
@@ -1842,11 +1932,8 @@ fn spawn_visual(
             if let Some(p) = parts {
                 commands.entity(rig).insert(p);
             }
-            // A3: players also grow their chosen hairstyle geometry.
-            if e.kind == EntityKind::Player {
-                if let Some(a) = e.appearance {
-                    commands.entity(rig).insert(HairStyle { style: a[2], hue: hair_hue(a[2]) });
-                }
+            if let Some(l) = player_look {
+                commands.entity(rig).insert(look::apply::LookRig { look: l });
             }
             commands.entity(root).insert(Mover {
                 rig,
@@ -1876,8 +1963,9 @@ fn spawn_visual(
         }
     };
 
-    // Health-bar nameplate for anything that fights or lives.
-    if matches!(e.kind, EntityKind::Player | EntityKind::Enemy | EntityKind::Wildlife) {
+    // Health bar for anything that fights or lives; in a crowd only the
+    // players drawn as full rigs carry one (B11, see `crowd`).
+    if crowd::wants_health_bar(e.kind, cheap) {
         let mut fill = Entity::PLACEHOLDER;
         commands.entity(root).with_children(|p| {
             p.spawn((
@@ -1904,16 +1992,19 @@ fn spawn_visual(
     }
 
     // Floating gold name over NPCs, WoW-style, so the Elder, Innkeeper and
-    // Quartermaster can be told apart at a glance.
-    if e.kind == EntityKind::Npc {
+    // Quartermaster can be told apart at a glance; pale blue names over the
+    // other players near enough to be full rigs (B11: bounded by the rig
+    // budget, block figures have none).
+    if let Some(colour) = crowd::name_plate(e.kind, is_me, cheap) {
         if let Some(name) = e.name.as_deref() {
+            let height = if e.kind == EntityKind::Npc { NAME_HEIGHT } else { PLAYER_NAME_HEIGHT };
             commands.spawn((
                 Text::new(name),
                 TextFont { font_size: 15.0, ..default() },
-                TextColor(Color::srgb(1.0, 0.84, 0.25)),
+                TextColor(colour),
                 Node { position_type: PositionType::Absolute, ..default() },
                 Visibility::Hidden,
-                NameLabel { root, chars: name.chars().count() as f32 },
+                NameLabel { root, chars: name.chars().count() as f32, height },
             ));
         }
     }
@@ -1921,7 +2012,8 @@ fn spawn_visual(
     if is_me {
         commands.entity(root).insert(PlayerTag);
     }
-    Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0 }
+    let lod_cheap = (e.kind == EntityKind::Player && !is_me).then_some(cheap);
+    Mirrored { root, model, bar_fill, mount_model: None, dying_until: 0.0, lod_cheap }
 }
 
 /// Screen-space name label pinned above a world entity.
@@ -1929,10 +2021,14 @@ fn spawn_visual(
 struct NameLabel {
     root: Entity,
     chars: f32,
+    /// Height above the root where the name floats.
+    height: f32,
 }
 
-/// Height above the root where names float (above the rig's head).
+/// Height above the root where NPC names float (above the rig's head).
 const NAME_HEIGHT: f32 = 80.0;
+/// Player names sit just above the health bar.
+const PLAYER_NAME_HEIGHT: f32 = BAR_HEIGHT + 14.0;
 /// Past this camera distance names are hidden, as in WoW.
 const NAME_RANGE: f32 = 900.0;
 
@@ -1949,16 +2045,25 @@ fn update_name_labels(
             commands.entity(ent).despawn_recursive();
             continue;
         };
-        let world = root.translation() + Vec3::Y * NAME_HEIGHT;
+        let world = root.translation() + Vec3::Y * label.height;
         let near = world.distance(cam_xf.translation()) < NAME_RANGE;
         match camera.world_to_viewport(cam_xf, world) {
             Ok(p) if near => {
                 // ~7.5 px per glyph at 15 px: centre the text on the head.
-                node.left = Val::Px(p.x - label.chars * 3.8);
-                node.top = Val::Px(p.y - 10.0);
-                *vis = Visibility::Inherited;
+                let (l, t) = (Val::Px((p.x - label.chars * 3.8).round()), Val::Px((p.y - 10.0).round()));
+                if node.left != l || node.top != t {
+                    node.left = l;
+                    node.top = t;
+                }
+                if *vis != Visibility::Inherited {
+                    *vis = Visibility::Inherited;
+                }
             }
-            _ => *vis = Visibility::Hidden,
+            _ => {
+                if *vis != Visibility::Hidden {
+                    *vis = Visibility::Hidden;
+                }
+            }
         }
     }
 }
@@ -1977,9 +2082,13 @@ fn prettify_tag(tag: &str) -> String {
         .join(" ")
 }
 
-/// Push a line into the rolling chat log, keeping at most 24 entries.
+/// Lines of chat history kept (the chat tabs filter this, so it has to hold
+/// more than one screen).
+pub(crate) const CHAT_KEEP: usize = 200;
+
+/// Push a line into the rolling chat log, keeping at most `CHAT_KEEP` entries.
 fn push_chat(session: &mut Session, line: String) {
-    if session.chat_log.len() >= 24 {
+    if session.chat_log.len() >= CHAT_KEEP {
         session.chat_log.pop_front();
     }
     session.chat_log.push_back(line);
@@ -2001,6 +2110,7 @@ fn receive_from_server(
     terrain_q: Query<Entity, With<Terrain>>,
     loadouts: Query<&Loadout>,
     ground: Res<GroundDetail>,
+    mut wins: ResMut<win::WinState>,
 ) {
     // Rebuild the terrain when the character's act changes (login or travel).
     let set_act = |commands: &mut Commands,
@@ -2025,6 +2135,9 @@ fn receive_from_server(
                 session.my_id = Some(entity_id);
                 session.class = character.class;
                 session.builder = None;
+                session.login_error = None;
+                // The browser gate (scripts/web_gate.py) reads this line.
+                info!("[beta] in world as {}", character.name);
                 set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
                 push_chat(&mut session, format!("Welcome to {}, {}!", character.act.as_str(), character.name));
                 session.sheet = Some(character);
@@ -2042,20 +2155,30 @@ fn receive_from_server(
             }
             ServerMsg::LoginRejected { reason } => {
                 if reason.contains("no character on this account") {
-                    // First launch on this Apple account: open the builder (C13).
+                    // First launch on this account: open the builder (C13).
+                    // Not an error to show a new player: no chat line.
                     if session.builder.is_none() {
                         session.builder = Some(Builder::default());
+                        info!("[beta] character builder open (new account)");
                     }
-                } else if let Some(b) = session.builder.as_mut() {
-                    b.submitted = false;
-                    b.error = Some(reason.clone());
+                } else {
+                    warn!("[net] login rejected: {reason}");
+                    if let Some(b) = session.builder.as_mut() {
+                        b.submitted = false;
+                        b.error = Some(reason.clone());
+                    } else {
+                        // No builder to show it in (an old cached build, a
+                        // second tab): the status notice says it instead.
+                        session.login_error = Some(reason.clone());
+                    }
+                    push_chat(&mut session, format!("Login rejected: {reason}"));
                 }
-                push_chat(&mut session, format!("Login rejected: {reason}"));
             }
             ServerMsg::Notice { text } => {
                 if text.starts_with("Discovered:") || text.contains("flagged for PvP") {
                     session.banner = Some((text.clone(), 5.0));
                 }
+                wins.on_notice(&text); // loot and vendor windows
                 push_chat(&mut session, text);
             }
             ServerMsg::Chat { from, text } => push_chat(&mut session, format!("{from}: {text}")),
@@ -2091,14 +2214,40 @@ fn receive_from_server(
                 }
                 combat.send(CombatEvt { kind, src, dst });
             }
+            ServerMsg::CastStart { ability, secs } => {
+                let now = time.elapsed_secs();
+                session.cast = (secs > 0.0).then(|| (ability, now, now + secs));
+                if secs > 0.0 {
+                    session.gcd = (now, now + 1.0);
+                }
+            }
+            ServerMsg::AbilityUsed { ability, cooldown } => {
+                let now = time.elapsed_secs();
+                // A cast-time ability already ran its global cooldown.
+                let was_cast = session.cast.take().is_some_and(|(id, _, _)| id == ability);
+                if !was_cast {
+                    session.gcd = (now, now + 1.0);
+                }
+                wins.on_ability(&ability, now); // buff icons
+                session.ability_cd.insert(ability, (now, now + cooldown));
+            }
             ServerMsg::Pong => {}
+            // beta-server-track (B05-B08): windows where there is one,
+            // chat text for the rest.
+            other => win::on_server_msg(other, &mut session, &mut wins),
         }
     }
 
-    if let Some(entities) = latest {
+    if let Some(mut entities) = latest {
         let my_id = session.my_id;
+        wins.radar(&entities, my_id); // minimap, markers, death prompt
         // Target frame: nearest living enemy within engage range.
         let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
+        // Nearest first, so when a whole crowd comes into view at once the
+        // rig budget goes to the players closest to us (B11).
+        if let Some((mx, my)) = me_pos {
+            entities.sort_by(|a, b| crowd::dist2(a, mx, my).total_cmp(&crowd::dist2(b, mx, my)));
+        }
         let nearest = me_pos.and_then(|(mx, my)| {
             entities
                 .iter()
@@ -2120,6 +2269,27 @@ fn receive_from_server(
         });
         let mut seen: HashSet<u64> = HashSet::with_capacity(entities.len());
         let mut map_updates: Vec<(u64, Option<Entity>)> = Vec::new();
+        // Crowd LOD is re-judged every snapshot: a stand-in that must change
+        // is dropped here and respawned by the loop below in the same pass.
+        let mut rigs = map.0.values().filter(|m| m.lod_cheap == Some(false)).count();
+        let mut lod_forced: HashMap<u64, bool> = HashMap::new();
+        if let Some((px, py)) = me_pos {
+            for e in entities.iter().filter(|e| e.kind == EntityKind::Player && e.health > 0) {
+                let Some(cheap) = map.0.get(&e.id).and_then(|m| m.lod_cheap) else { continue };
+                let dist = Vec2::new(e.x - px, e.y - py).length();
+                if let Some(want) = lod_swap(cheap, dist, rigs) {
+                    if let Some(m) = map.0.remove(&e.id) {
+                        commands.entity(m.root).despawn_recursive();
+                    }
+                    if want {
+                        rigs -= 1;
+                    } else {
+                        rigs += 1;
+                    }
+                    lod_forced.insert(e.id, want);
+                }
+            }
+        }
         for e in &entities {
             seen.insert(e.id);
             let is_me = Some(e.id) == my_id;
@@ -2192,9 +2362,18 @@ fn receive_from_server(
                 None => {
                     let cheap = e.kind == EntityKind::Player
                         && !is_me
-                        && me_pos.map_or(false, |(px, py)| {
-                            Vec2::new(e.x - px, e.y - py).length() > RIG_LOD_RADIUS
-                        });
+                        && match lod_forced.get(&e.id) {
+                            Some(want) => *want,
+                            None => {
+                                let c = me_pos.map_or(false, |(px, py)| {
+                                    lod_initial(Vec2::new(e.x - px, e.y - py).length(), rigs)
+                                });
+                                if !c {
+                                    rigs += 1;
+                                }
+                                c
+                            }
+                        };
                     let m = spawn_visual(&mut commands, &assets, &asset_server, e, is_me, session.act, cheap);
                     if e.kind == EntityKind::Player {
                         commands
@@ -2242,19 +2421,20 @@ fn send_input(
     orbit: Res<Orbit>,
     session: Res<Session>,
     time: Res<Time>,
-    mut cooldowns: ResMut<Cooldowns>,
     mut last_dir: Local<(i8, i8)>,
     mut last_yaw: Local<f32>,
     colliders: Res<PropColliders>,
     q_me: Query<&Transform, With<PlayerTag>>,
+    menu_open: Res<menu::MenuOpen>,
 ) {
     // Ground-plane position of the local player, for prop collision tests.
     let me_pos = q_me
         .get_single()
         .map(|t| Vec2::new(t.translation.x, t.translation.z))
         .unwrap_or(Vec2::ZERO);
-    // While chat is active, game keys are disabled.
-    if session.chat_active {
+    // While chat, the dev console or the builder owns the keyboard, game keys
+    // are disabled (typing "heal" in the console used to press H and E).
+    if session.typing() {
         // Still send zero movement if we were moving.
         if *last_dir != (0, 0) {
             *last_dir = (0, 0);
@@ -2301,7 +2481,8 @@ fn send_input(
     if keys.just_pressed(KeyCode::KeyE) {
         tx.send(ClientMsg::Talk);
     }
-    if keys.just_pressed(KeyCode::KeyM) {
+    // Mount moved from M to H when M became the world map (classic binding).
+    if keys.just_pressed(KeyCode::KeyH) {
         tx.send(ClientMsg::Mount);
     }
     // Tame the current target (C07): needs a lasso and a weakened tameable
@@ -2311,244 +2492,21 @@ fn send_input(
             tx.send(ClientMsg::Tame { target });
         }
     }
-    if let Some(class) = session.class {
-        let [a, b] = class_abilities(class);
-        if keys.just_pressed(KeyCode::Digit1) {
-            tx.send(ClientMsg::Cast { ability: a.into() });
-            cooldowns.trigger(1, now);
-        }
-        if keys.just_pressed(KeyCode::Digit2) {
-            tx.send(ClientMsg::Cast { ability: b.into() });
-            cooldowns.trigger(2, now);
+    // Action bar (B03): keys 1-9 and 0 cast the class kit in slot order.
+    // The server decides; its `AbilityUsed` reply starts the cooldown sweep.
+    // Not while the escape menu, builder or dev console owns the keyboard.
+    let keys_free = !menu_open.0 && session.builder.is_none() && session.dev_input.is_none();
+    if let Some(class) = session.class.filter(|_| keys_free) {
+        let bar = class_bar(class);
+        for (key, ab) in BAR_KEYS.iter().zip(bar.iter()) {
+            if keys.just_pressed(*key) {
+                tx.send(ClientMsg::Cast { ability: ab.id.into() });
+            }
         }
     }
     // (Classless in-world F1–F4 pick removed — class is chosen in the
     // character builder now, C13.)
 }
-
-/// Marker for builder UI root and rotating preview rig (C13).
-#[derive(Component)]
-struct BuilderUi;
-/// Ability-icon slot in the builder (0/1 = the class's two abilities).
-#[derive(Component)]
-struct BuilderAbilityIcon(u8);
-#[derive(Component)]
-struct BuilderPreview {
-    look: [u32; 3],
-}
-
-/// Character-builder screen (C13): name typing, F1–F4 class, F5 lineage,
-/// Left/Right body model, Up/Down skin, F6 hair, Enter to create. Keeps a
-/// rotating rig preview in the empty pre-login world.
-#[allow(clippy::too_many_arguments)]
-fn builder_screen(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut kb_events: EventReader<KeyboardInput>,
-    mut session: ResMut<Session>,
-    tx: Res<NetTx>,
-    time: Res<Time>,
-    asset_server: Res<AssetServer>,
-    ui_root: Query<Entity, With<BuilderUi>>,
-    mut ui_text: Query<&mut Text, With<BuilderUi>>,
-    mut ui_icons: Query<(&BuilderAbilityIcon, &mut ImageNode)>,
-    mut preview: Query<(Entity, &BuilderPreview, &mut Transform)>,
-) {
-    let apple_id = session.apple_id.clone();
-    let Some(b) = session.builder.as_mut() else {
-        // Builder closed: clear any leftovers (screen + preview).
-        for e in &ui_root {
-            commands.entity(e).despawn_recursive();
-        }
-        for (e, _, _) in &preview {
-            commands.entity(e).despawn_recursive();
-        }
-        kb_events.clear();
-        return;
-    };
-
-    // ── Input ────────────────────────────────────────────────────────────
-    for ev in kb_events.read() {
-        if !ev.state.is_pressed() {
-            continue;
-        }
-        if let bevy::input::keyboard::Key::Character(ref c) = ev.logical_key {
-            if b.name.len() < 24 && c.chars().all(|ch| ch.is_alphanumeric()) {
-                b.name.push_str(c);
-            }
-        } else if ev.logical_key == bevy::input::keyboard::Key::Backspace {
-            b.name.pop();
-        }
-    }
-    for (key, class) in [
-        (KeyCode::F1, Class::Warrior),
-        (KeyCode::F2, Class::Hunter),
-        (KeyCode::F3, Class::Priest),
-        (KeyCode::F4, Class::Mage),
-    ] {
-        if keys.just_pressed(key) {
-            b.class = class;
-        }
-    }
-    if keys.just_pressed(KeyCode::F5) {
-        b.faction = match b.faction.as_deref() {
-            None => Some("sethite".into()),
-            Some("sethite") => Some("cainite".into()),
-            _ => None,
-        };
-    }
-    if keys.just_pressed(KeyCode::ArrowRight) {
-        b.appearance[0] = (b.appearance[0] + 1) % 4;
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) {
-        b.appearance[0] = (b.appearance[0] + 3) % 4;
-    }
-    if keys.just_pressed(KeyCode::ArrowUp) {
-        b.appearance[1] = (b.appearance[1] + 1) % SKIN_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) {
-        b.appearance[1] = (b.appearance[1] + SKIN_CHOICES - 1) % SKIN_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::F6) {
-        b.appearance[2] = (b.appearance[2] + 1) % HAIR_CHOICES;
-    }
-    if keys.just_pressed(KeyCode::Enter) && !b.submitted && !b.name.trim().is_empty() {
-        b.submitted = true;
-        b.error = None;
-        tx.send(ClientMsg::Login {
-            proto: antediluvia_protocol::PROTOCOL_VERSION,
-            apple_id,
-            character_name: None,
-            create: Some(antediluvia_protocol::CharacterCreate {
-                name: b.name.trim().to_string(),
-                class: b.class,
-                faction: b.faction.clone(),
-                appearance: b.appearance,
-            }),
-        });
-    }
-
-    // ── Screen text ──────────────────────────────────────────────────────
-    let body_names = ["Knight", "Barbarian", "Rogue", "Mage"];
-    let text = format!(
-        "CREATE YOUR CHARACTER\n\n\
-         Name            {}_\n\
-         Class   F1-F4   {}  ({})\n\
-         Lineage F5      {}\n\n\
-         Body    Left/Right  {}  ({}/4)\n\
-         Skin    Up/Down     tone {} of {}\n\
-         Hair    F6          style {} of {}\n\n\
-         {} distinct looks before gear\n\n\
-         {}\n\
-         Press ENTER to walk the earth",
-        b.name,
-        b.class.as_str(),
-        match b.class {
-            Class::Warrior => "Savage Strike / War Cry",
-            Class::Hunter => "Piercing Shot / Trap",
-            Class::Priest => "Mend / Smite",
-            Class::Mage => "Firebolt / Frost Nova",
-        },
-        b.faction.as_deref().unwrap_or("undecided (choose at level 10)"),
-        body_names[b.appearance[0] as usize % 4],
-        b.appearance[0] % 4 + 1,
-        b.appearance[1] % SKIN_CHOICES + 1,
-        SKIN_CHOICES,
-        b.appearance[2] % HAIR_CHOICES + 1,
-        HAIR_CHOICES,
-        4 * SKIN_CHOICES * HAIR_CHOICES,
-        match (&b.error, b.submitted) {
-            (Some(e), _) => format!("!! {e}"),
-            (None, true) => "Creating...".into(),
-            _ => String::new(),
-        },
-    );
-    if let Ok(mut t) = ui_text.get_single_mut() {
-        **t = text;
-    } else if ui_root.is_empty() {
-        commands.spawn((
-            Text::new(text),
-            TextFont { font_size: 20.0, ..default() },
-            TextColor(Color::srgb(0.95, 0.9, 0.75)),
-            // Framed parchment-dark panel: bare text over the 3D world was
-            // unreadable against grass and props.
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(6.0),
-                top: Val::Percent(12.0),
-                padding: UiRect::all(Val::Px(26.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.06, 0.05, 0.04, 0.86)),
-            BorderColor(Color::srgb(0.72, 0.58, 0.30)),
-            BorderRadius::all(Val::Px(8.0)),
-            BuilderUi,
-        ));
-        // Ability-icon strip (Blender-rendered): the chosen class's two
-        // abilities, refreshed when F1–F4 changes the class.
-        commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Percent(6.0),
-                    top: Val::Percent(74.0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(10.0),
-                    ..default()
-                },
-                BuilderUi,
-            ))
-            .with_children(|row| {
-                for slot in 0u8..2 {
-                    row.spawn((
-                        ImageNode::default(),
-                        Node { width: Val::Px(64.0), height: Val::Px(64.0), ..default() },
-                        BuilderAbilityIcon(slot),
-                    ));
-                }
-            });
-    }
-    // Keep the icon strip in sync with the selected class.
-    let [a0, a1] = class_abilities(b.class);
-    for (icon, mut img) in ui_icons.iter_mut() {
-        let name = if icon.0 == 0 { a0 } else { a1 };
-        let handle = asset_server.load(format!("sprites/icons/{name}.png"));
-        if img.image != handle {
-            img.image = handle;
-        }
-    }
-
-    // ── Rotating preview rig ─────────────────────────────────────────────
-    let want = b.appearance;
-    let mut have = false;
-    for (e, p, mut t) in &mut preview {
-        if p.look != want {
-            commands.entity(e).despawn_recursive();
-        } else {
-            have = true;
-            t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 0.8);
-        }
-    }
-    if !have {
-        let file = [
-            "models/characters/Knight.glb",
-            "models/characters/Barbarian.glb",
-            "models/characters/Rogue.glb",
-            "models/characters/Mage.glb",
-        ][want[0] as usize % 4];
-        let (hue, light) = skin_hue(want[1]);
-        commands.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))),
-            Transform::from_translation(Vec3::new(0.0, 0.0, 0.0))
-                .with_scale(Vec3::splat(CHAR_SCALE)),
-            BuilderPreview { look: want },
-            TintRig { hue, light, hair_hue: Some(hair_hue(want[2])) },
-            HairStyle { style: want[2], hue: hair_hue(want[2]) },
-        ));
-    }
-}
-
 /// Dev console (C14): backquote toggles a one-line command input on dev
 /// accounts. Commands: tp X Y | give ITEM [N] | level N | heal | spawn TAG |
 /// kill | god | xp N | questdone ID | time T | travel ACT. Server re-checks authorization.
@@ -2653,7 +2611,14 @@ struct AutoCmd {
     next_at: f32,
 }
 
-fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>) {
+fn dev_autocmd(
+    time: Res<Time>,
+    ac: Option<ResMut<AutoCmd>>,
+    tx: Res<NetTx>,
+    mut wins: ResMut<win::WinState>,
+    mut session: ResMut<Session>,
+    mut orbit: ResMut<Orbit>,
+) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
     if now < ac.next_at {
@@ -2663,7 +2628,27 @@ fn dev_autocmd(time: Res<Time>, ac: Option<ResMut<AutoCmd>>, tx: Res<NetTx>) {
         info!("[autocmd] {line}");
         // A leading '/' means "type this into chat"; anything else is a dev
         // console line. Lets a scripted run drive party/bank/mail/trade too.
-        if line.starts_with('/') {
+        if let Some(arg) = line.strip_prefix("look ") {
+            // "look random", "look name Enoch", "look create": drive the
+            // character builder in a windowless run.
+            if let Some(b) = session.builder.as_mut() {
+                look::builder::autocmd(b, arg);
+            }
+        } else if let Some(arg) = line.strip_prefix("cam ") {
+            // "cam 1400 0.9": pull the camera back for a crowd shot (B11).
+            if let Some((dist, pitch)) = crowd::parse_cam(arg) {
+                orbit.dist = dist;
+                if let Some(p) = pitch {
+                    orbit.pitch = p;
+                }
+            }
+        } else if let Some(arg) = line.strip_prefix("ui ") {
+            // "ui bags", "ui only map", "ui close", "ui menu": open windows
+            // without a key press (windowless screenshot runs).
+            for m in wins.autocmd(arg, session.act) {
+                tx.send(m);
+            }
+        } else if line.starts_with('/') {
             dispatch_chat_line(&line, &tx);
         } else {
             dispatch_dev_line(&line, &tx);
@@ -2678,6 +2663,7 @@ fn chat_input(
     mut kb_events: EventReader<KeyboardInput>,
     mut session: ResMut<Session>,
     tx: Res<NetTx>,
+    wins: Res<win::WinState>,
 ) {
     if session.builder.is_some() || session.dev_input.is_some() {
         return; // builder (C13) or dev console (C14) owns the keyboard
@@ -2687,7 +2673,8 @@ fn chat_input(
             // Send the message if non-empty, then close chat.
             let text = session.chat_input.trim().to_string();
             if !text.is_empty() {
-                dispatch_chat_line(&text, &tx);
+                // On a channel tab, plain text goes to that channel.
+                dispatch_chat_line(&win::chattabs::route(&text, wins.chat_tab), &tx);
             }
             session.chat_input.clear();
             session.chat_active = false;
@@ -2739,7 +2726,17 @@ pub fn dispatch_chat_line(text: &str, tx: &NetTx) {
     {
         {
                 // Slash commands (P1): party management from the chat box.
-                if let Some(name) = text.strip_prefix("/party ") {
+                if track_ui::slash(&text, tx) {
+                    // beta-server-track commands (boards, raid, channels, ...).
+                } else if let Some(id) = text.strip_prefix("/cast ") {
+                    // /cast <ability_id> - same as pressing its bar key (B03).
+                    tx.send(ClientMsg::Cast { ability: id.trim().to_string() });
+                } else if let Some(name) = text.strip_prefix("/class ") {
+                    // /class <name> - one-time pick for a classless character.
+                    if let Some(class) = class_from_str(name) {
+                        tx.send(ClientMsg::SelectClass { class });
+                    }
+                } else if let Some(name) = text.strip_prefix("/party ") {
                     tx.send(ClientMsg::PartyInvite { player: name.trim().to_string() });
                 } else if text == "/paccept" {
                     tx.send(ClientMsg::PartyAccept);
@@ -3009,9 +3006,11 @@ fn mouse_click_attack(
     session: Res<Session>,
     menu_open: Res<menu::MenuOpen>,
     tx: Res<NetTx>,
+    wins: Res<win::WinState>,
 ) {
-    // The character builder, menu, and chat own the input while they're up.
-    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active || menu_open.0 {
+    // The character builder, menu, and chat own the input while they're up;
+    // so does a window under the pointer (a click on a button is not a swing).
+    if session.builder.is_some() || session.dev_input.is_some() || session.chat_active || menu_open.0 || wins.pointer_busy {
         motion.clear();
         return;
     }
@@ -3178,15 +3177,20 @@ fn smooth_motion(
     map: Res<EntityMap>,
     mut models: Query<&mut Transform, Without<NetTarget>>,
 ) {
-    let k = 1.0 - (-14.0 * time.delta_secs()).exp();
+    let dt = time.delta_secs();
+    let k_rig = 1.0 - (-crowd::ease_rate(false) * dt).exp();
+    let k_far = 1.0 - (-crowd::ease_rate(true) * dt).exp();
     for (target, mut t, ent) in &mut roots {
+        let mirrored = map.0.get(&ent.0);
+        // Block figures are updated at 2.5 Hz: glide, do not dart (B11).
+        let k = if mirrored.is_some_and(|m| m.lod_cheap == Some(true)) { k_far } else { k_rig };
         let d = target.pos - t.translation;
         if d.length_squared() > 200.0 * 200.0 {
             t.translation = target.pos; // teleport/travel: snap, don't glide
         } else {
             t.translation += d * k;
         }
-        if let Some(m) = map.0.get(&ent.0).and_then(|m| m.model) {
+        if let Some(m) = mirrored.and_then(|m| m.model) {
             if let Ok(mut mt) = models.get_mut(m) {
                 let want = Quat::from_rotation_y(-target.rot);
                 mt.rotation = mt.rotation.slerp(want, k);
@@ -3300,5 +3304,98 @@ mod collision_tests {
     fn zero_input_stays_zero() {
         let c = wall_at(0.0, 0.0, 50.0);
         assert_eq!(deflect_around_props(Vec2::ZERO, &Vec2::ZERO, &c), Vec2::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod crowd_lod_tests {
+    use super::*;
+
+    /// Review regression: the stand-in follows the distance, with a gap
+    /// between the two radii, and never exceeds the rig budget.
+    #[test]
+    fn lod_follows_distance_with_hysteresis_and_a_budget() {
+        // A block figure that walks up to you becomes a rig.
+        assert_eq!(lod_swap(true, 50.0, 0), Some(false));
+        // Not while the budget is full.
+        assert_eq!(lod_swap(true, 50.0, MAX_PLAYER_RIGS), None);
+        // A rig that walks away becomes a block figure.
+        assert_eq!(lod_swap(false, RIG_LOD_RADIUS * 2.0, 5), Some(true));
+        // Between the radii nothing changes, whichever it is.
+        for d in [RIG_LOD_RADIUS * 0.85, RIG_LOD_RADIUS, RIG_LOD_RADIUS * 1.2] {
+            assert_eq!(lod_swap(true, d, 0), None, "{d}");
+            assert_eq!(lod_swap(false, d, 0), None, "{d}");
+        }
+        // Already right: no respawn.
+        assert_eq!(lod_swap(false, 10.0, 0), None);
+        assert_eq!(lod_swap(true, 2000.0, 0), None);
+        // First sight.
+        assert!(!lod_initial(100.0, 0));
+        assert!(lod_initial(100.0, MAX_PLAYER_RIGS), "budget full: block figure even when near");
+        assert!(lod_initial(RIG_LOD_RADIUS + 1.0, 0));
+        // 1000 players on one spot: walking the swap rule over all of them
+        // settles at the budget, not at 1000 rigs.
+        let mut rigs = 0;
+        for _ in 0..1000 {
+            if lod_swap(true, 20.0, rigs) == Some(false) {
+                rigs += 1;
+            }
+        }
+        assert_eq!(rigs, MAX_PLAYER_RIGS);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_owner_tests {
+    use super::*;
+
+    /// Review regression: the dev console and the builder's name field own
+    /// the keyboard exactly like the chat line does.
+    #[test]
+    fn typing_blocks_game_keys_for_chat_console_and_builder() {
+        let mut s = Session::default();
+        assert!(!s.typing());
+        s.chat_active = true;
+        assert!(s.typing());
+        s.chat_active = false;
+        s.dev_input = Some("hea".into());
+        assert!(s.typing());
+        s.dev_input = None;
+        s.builder = Some(Builder::default());
+        assert!(s.typing());
+        s.builder = None;
+        assert!(!s.typing());
+    }
+}
+
+#[cfg(test)]
+mod quaternius_rig_tests {
+    /// Animation count of a .glb, read straight from its JSON chunk.
+    fn clip_count(path: &std::path::Path) -> usize {
+        let b = std::fs::read(path).unwrap_or_else(|_| panic!("missing {}", path.display()));
+        let n = u32::from_le_bytes(b[12..16].try_into().unwrap()) as usize;
+        let json = std::str::from_utf8(&b[20..20 + n]).unwrap();
+        let Some(i) = json.find("\"animations\":[") else { return 0 };
+        json[i..].matches("\"channels\"").count()
+    }
+
+    /// Every new-rig clip index must exist, or Bevy silently plays nothing.
+    #[test]
+    fn new_rig_clip_indices_exist() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let mut checked = 0;
+        for tag in ["wild_boar", "aurochs_calf", "sheep", "camel", "horse"] {
+            let (file, clips, _) = super::beast_rig(tag).unwrap();
+            assert!(file.starts_with("models/beasts/"), "{tag} -> {file}");
+            assert!(clip_count(&root.join(file)) > *clips.iter().max().unwrap(), "{file}");
+            checked += 1;
+        }
+        for f in std::fs::read_dir(root.join("models/humanoids")).unwrap().flatten() {
+            if f.path().extension().is_some_and(|e| e == "glb") {
+                assert!(clip_count(&f.path()) > 13, "{}", f.path().display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20);
     }
 }

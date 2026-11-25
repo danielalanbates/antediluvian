@@ -1,5 +1,30 @@
 # Web play — smallest safe path to game-live-on-batesai.org
 
+## Open beta at /play/ (owner decision 2026-11-24; supersedes the gates below)
+
+- **Public, no password gate:** the game is an open beta at
+  `https://batesai.org/play/` (the `/antediluvia` landing page links it). The
+  private `/dev` site and its key are no longer a precondition for a release.
+- **No Sign in with Apple, ever** (the owner left the Apple Developer
+  Program): identity is a random per-browser id in `localStorage`
+  (`antediluvia_id`, new ids 128-bit) and a per-machine id in the macOS app.
+  See `archive/apple-sign-in/README.md`.
+- **Server URL:** the bundle sets `window.ANTEDILUVIA_SERVER = ''`, so the
+  client derives `wss://<page host>/ws`: on `batesai.org/play/` that is
+  `wss://batesai.org/ws` (`functions/ws.js` -> production shard). `?server=`
+  and `?name=` only work on a page served from localhost (the local gate); the
+  public client ignores them.
+- **Old cached clients:** `index.html` loads `pkg/*?v=<build stamp>`, so a new
+  page never runs an old engine; a client older than the server gets the
+  server's "protocol version mismatch" and shows "A new version of
+  Antediluvia is out" with a Refresh button (`crates/client-bevy/src/beta.rs`).
+  `index.html` itself must be served revalidated (Pages default).
+- **Gates:** local `scripts/web_gate.py --builder ...` on the exact bundle,
+  then after deploy `scripts/web_gate.py --url https://batesai.org/play/
+  --builder --secs 200 --out ... --log ...` (no key; it creates a real test
+  character on the production shard). Before a server deploy, run
+  `antediluvia-server --check-db` on a copy of the production DB.
+
 Branch: `feature/web-play` (from `origin/main`). Status: recon + build
 verification + edge-config drafts done; **no live changes made**.
 
@@ -79,7 +104,7 @@ Rollback: Pages deployment history → previous deployment (seconds). The old
 4. **The dev site** (docs/beta/DEV_SITE.md) — same approvals, plus the dev
    systemd unit and cookie-gate middleware; draft proxy in
    `web/cloudflare/dev-ws.js`.
-5. **Apple login** — deferred, not attempted (needs his Apple Developer account).
+5. ~~Apple login~~ dropped for good on 2026-11-24 (no Apple Developer Program).
 
 ## Risks
 

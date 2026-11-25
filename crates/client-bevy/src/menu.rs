@@ -1,7 +1,7 @@
 //! In-game menu (Escape): character summary, world-PvP opt-in/out, help, and
 //! a developer section for dev-allowlisted accounts (C14).
 //!
-//! Client-side only — every button maps to an existing `ClientMsg` and the
+//! Client-side only - every button maps to an existing `ClientMsg` and the
 //! server re-authorizes each one. The menu is rebuilt fresh on every open so
 //! labels (PvP state, dev section) are never stale.
 
@@ -27,6 +27,8 @@ pub(crate) enum MenuCmd {
     TogglePvp,
     Dev(DevCmd),
     Travel(Act),
+    /// B10: join or leave the battleground queue.
+    Bg(bool),
 }
 
 // ─── Design tokens (match ui.rs) ─────────────────────────────────────────────
@@ -39,7 +41,6 @@ const GOLD: Color = Color::srgb(0.98, 0.90, 0.55);
 const BTN: Color = Color::srgb(0.16, 0.16, 0.20);
 const BTN_HOVER: Color = Color::srgb(0.24, 0.24, 0.30);
 const BTN_BORDER: Color = Color::srgb(0.45, 0.40, 0.28);
-const DEV_ACCENT: Color = Color::srgb(0.95, 0.55, 0.30);
 
 /// Escape toggles the menu. Chat, the character builder, and the dev console
 /// own the keyboard while they're up, so the menu stays out of their way.
@@ -49,9 +50,23 @@ pub(crate) fn menu_toggle(
     session: Res<Session>,
     mut menu_open: ResMut<MenuOpen>,
     roots: Query<Entity, With<MenuRoot>>,
+    mut wins: ResMut<crate::win::WinState>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) {
-        return;
+    // `ui menu` (scripted, windowless verification) opens the menu as
+    // Escape would.
+    let forced = wins.want_menu;
+    if forced {
+        wins.want_menu = false;
+    }
+    if !forced {
+        if !keys.just_pressed(KeyCode::Escape) {
+            return;
+        }
+        // Escape closes the topmost window first; only with none open does
+        // it reach the game menu.
+        if wins.esc_consumed {
+            return;
+        }
     }
     if session.builder.is_some() || session.chat_active || session.dev_input.is_some() {
         return;
@@ -90,6 +105,10 @@ pub(crate) fn menu_buttons(
                 tx.send(ClientMsg::Travel { act: *act });
                 close_menu(&mut commands, &mut menu_open, &roots);
             }
+            MenuCmd::Bg(join) => {
+                tx.send(if *join { ClientMsg::BgQueue } else { ClientMsg::BgLeave });
+                close_menu(&mut commands, &mut menu_open, &roots);
+            }
         }
     }
 }
@@ -111,7 +130,7 @@ fn build_menu(commands: &mut Commands, session: &Session) {
             let class = s.class.map(|c| c.as_str()).unwrap_or("classless");
             let lineage = s.faction.as_deref().unwrap_or("undecided");
             (
-                format!("{} — level {} {}", s.name, s.level, class),
+                format!("{} - level {} {}", s.name, s.level, class),
                 format!(
                     "Lineage: {}   Gold: {}   World PvP: {}",
                     lineage,
@@ -134,6 +153,8 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                 ..default()
             },
             BackgroundColor(DIM),
+            // Above the classic windows (`win`), which rebuild while open.
+            GlobalZIndex(50),
             MenuRoot,
         ))
         .with_children(|dim| {
@@ -144,7 +165,7 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                     row_gap: Val::Px(8.0),
                     padding: UiRect::all(Val::Px(22.0)),
                     min_width: Val::Px(380.0),
-                    max_width: Val::Px(520.0),
+                    max_width: Val::Px(640.0),
                     ..default()
                 },
                 BackgroundColor(PANEL),
@@ -172,11 +193,12 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                     &mut *panel,
                     MenuCmd::TogglePvp,
                     if pvp_on {
-                        "World PvP: ON — click to opt out"
+                        "World PvP: ON - click to opt out"
                     } else {
-                        "World PvP: OFF — click to opt in"
+                        "World PvP: OFF - click to opt in"
                     },
                     GOLD,
+                    false,
                 );
                 panel.spawn((
                     Text::new("Enemy capital lands flag you for PvP while you stand in them, opt-in or not."),
@@ -184,83 +206,49 @@ fn build_menu(commands: &mut Commands, session: &Session) {
                     TextColor(TEXT_DIM),
                 ));
 
+                // ── B10 battleground ──
+                menu_button(&mut *panel, MenuCmd::Bg(true), "Battleground: queue for the Relic of Seth", GOLD, false);
+                menu_button(&mut *panel, MenuCmd::Bg(false), "Battleground: leave the queue or the field", TEXT_DIM, false);
+
                 // ── Developer section (dev-allowlisted accounts only) ──
                 if session.is_dev {
-                    panel.spawn((
-                        Text::new("— DEVELOPER —"),
-                        TextFont { font_size: 14.0, ..default() },
-                        TextColor(DEV_ACCENT),
-                    ));
-                    let dev_rows: &[(&str, MenuCmd)] = &[
-                        ("God mode (toggle)", MenuCmd::Dev(DevCmd::Godmode)),
-                        ("Heal", MenuCmd::Dev(DevCmd::Heal)),
-                        ("Level 60", MenuCmd::Dev(DevCmd::SetLevel { level: 60 })),
-                        ("+1,000 XP", MenuCmd::Dev(DevCmd::GiveXp { amount: 1000 })),
-                        (
-                            "Spawn dire wolf",
-                            MenuCmd::Dev(DevCmd::SpawnMob { tag: "dire_wolf".into() }),
-                        ),
-                        ("Slay target", MenuCmd::Dev(DevCmd::KillTarget)),
-                        ("Noon", MenuCmd::Dev(DevCmd::TimeOfDay { t: 0.3 })),
-                        ("Midnight", MenuCmd::Dev(DevCmd::TimeOfDay { t: 0.0 })),
-                    ];
-                    for (label, cmd) in dev_rows {
-                        menu_button(&mut *panel, cmd.clone(), label, DEV_ACCENT);
-                    }
-                    panel.spawn((
-                        Text::new("Travel:"),
-                        TextFont { font_size: 13.0, ..default() },
-                        TextColor(TEXT),
-                    ));
-                    // Travel buttons sit in one wrapping row.
-                    panel
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: Val::Px(6.0),
-                            row_gap: Val::Px(6.0),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            for act in Act::ALL {
-                                menu_button(&mut *row, MenuCmd::Travel(act), act.as_str(), TEXT_DIM);
-                            }
-                        });
-                    panel.spawn((
-                        Text::new("Full console: ` key.  xp N | questdone ID | give | tp | spawn | …"),
-                        TextFont { font_size: 12.0, ..default() },
-                        TextColor(TEXT_DIM),
-                    ));
+                    crate::win::devpanel::build(panel);
                 }
 
                 // ── Help ──
                 panel.spawn((
-                    Text::new("— HELP —"),
+                    Text::new("- HELP -"),
                     TextFont { font_size: 14.0, ..default() },
                     TextColor(GOLD),
                 ));
                 panel.spawn((
                     Text::new(
-                        "WASD move · click attack · 1/2 abilities · E talk ·\n\
-                         /pvp toggle PvP · /duel NAME duel · /lineage sethite|cainite (10+)\n\
-                         Party: /pinvite NAME (nearby members share XP) · Guild: /ginvite NAME",
+                        "WASD move | click attack | 1-0 abilities | E talk | H mount\n\
+                         F notice board or flight master where you stand\n\
+                         B bags | C character | L quest log | P spellbook\n\
+                         M map | O social | Esc closes the top window\n\
+                         /pvp | /duel NAME | /lineage sethite|cainite (10+)\n\
+                         /party NAME shares XP nearby | /ginvite NAME\n\
+                         /bg queue | /bg leave | /bgbuy ITEM (honor, at an inn)",
                     ),
                     TextFont { font_size: 12.0, ..default() },
                     TextColor(TEXT),
                 ));
 
-                menu_button(&mut *panel, MenuCmd::Close, "Return to the world", GOLD);
+                menu_button(&mut *panel, MenuCmd::Close, "Return to the world", GOLD, false);
             });
         });
 }
 
-/// One menu button: bordered node + label.
-fn menu_button(parent: &mut ChildBuilder, cmd: MenuCmd, label: &str, accent: Color) {
+/// One menu button: bordered node + label. `compact` is the small form the
+/// developer panel packs into rows.
+pub(crate) fn menu_button(parent: &mut ChildBuilder, cmd: MenuCmd, label: &str, accent: Color, compact: bool) {
+    let (pad, font) = if compact { (UiRect::axes(Val::Px(8.0), Val::Px(4.0)), 12.0) } else { (UiRect::axes(Val::Px(14.0), Val::Px(8.0)), 15.0) };
     parent
         .spawn((
             Button,
             Node {
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                padding: pad,
                 justify_content: JustifyContent::Center,
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
@@ -273,7 +261,7 @@ fn menu_button(parent: &mut ChildBuilder, cmd: MenuCmd, label: &str, accent: Col
             b.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 15.0,
+                    font_size: font,
                     ..default()
                 },
                 TextColor(accent),

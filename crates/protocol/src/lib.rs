@@ -2,8 +2,10 @@
 //!
 //! Types shared between the authoritative server and any client. The transport
 //! is a WebSocket carrying newline-free JSON frames (one `ClientMsg` /
-//! `ServerMsg` per WebSocket text message). Binary framing can be layered on
-//! later without touching game logic — these enums stay the message contract.
+//! `ServerMsg` per WebSocket text message). World snapshots alone may travel
+//! as binary delta frames instead (`wire`, asked for in `Login`); the client
+//! turns them back into `ServerMsg::Snapshot`, so these enums stay the
+//! message contract.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +15,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -36,16 +38,37 @@ pub enum Class {
     Hunter,
     Priest,
     Mage,
+    /// Knife-fighter of the land of Nod (B09).
+    Wanderer,
+    /// Armored preacher of righteousness (B09).
+    Herald,
+    /// Keeper of the ground (B09).
+    Warden,
+    /// Student of the Watchers' forbidden lore (B09).
+    Occultist,
 }
 
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Warrior, Class::Hunter, Class::Priest, Class::Mage];
+    pub const ALL: [Class; 8] = [
+        Class::Warrior,
+        Class::Hunter,
+        Class::Priest,
+        Class::Mage,
+        Class::Wanderer,
+        Class::Herald,
+        Class::Warden,
+        Class::Occultist,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Class::Warrior => "warrior",
             Class::Hunter => "hunter",
             Class::Priest => "priest",
             Class::Mage => "mage",
+            Class::Wanderer => "wanderer",
+            Class::Herald => "herald",
+            Class::Warden => "warden",
+            Class::Occultist => "occultist",
         }
     }
 }
@@ -105,7 +128,7 @@ pub enum EntityKind {
 }
 
 /// A single entity as broadcast to clients in a snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityState {
     pub id: EntityId,
     pub kind: EntityKind,
@@ -136,6 +159,10 @@ pub struct EntityState {
     /// Builder appearance [body, skin, hair] (players; C13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<[u32; 3]>,
+    /// Packed character look (players): see `look::Look`. One number, so a
+    /// crowd of players costs little in every snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<u64>,
     /// Riding a mount (players; C06).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mounted: bool,
@@ -160,6 +187,12 @@ pub struct CharacterSheet {
     pub max_health: i32,
     pub mana: i32,
     pub max_mana: i32,
+    /// Stamina pool (B03): spent by warrior/hunter/wanderer abilities. Old
+    /// saves load as 0/0 and are topped up to a full pool on spawn.
+    #[serde(default)]
+    pub stamina: i32,
+    #[serde(default)]
+    pub max_stamina: i32,
     pub inventory: Vec<String>,
     // ── WoW-style systems (all defaulted so v1 saves still load) ──
     /// Chosen class; `None` until the player picks one.
@@ -213,6 +246,10 @@ pub struct CharacterSheet {
     /// Appearance indices from the character builder (C13): [body, skin, hair].
     #[serde(default)]
     pub appearance: [u32; 3],
+    /// Packed character look (`look::Look`): face, hair, skin, build, height,
+    /// markings, eyes, mantle and dye. Clamped by the server on creation.
+    #[serde(default)]
+    pub look: u64,
     /// Unix timestamp of last logout (used to calculate sleep/rest).
     #[serde(default)]
     pub last_logout: Option<u64>,
@@ -225,6 +262,10 @@ pub struct CharacterSheet {
     /// Equipped gear: slot ("weapon"/"chest") → item id.
     #[serde(default)]
     pub equipment: std::collections::BTreeMap<String, String>,
+    // ── beta-server-track (B06) ──
+    /// Item wear: item id → durability points remaining. Absent = pristine.
+    #[serde(default)]
+    pub durability: std::collections::BTreeMap<String, u32>,
 }
 
 /// First-time character creation payload (C13). Sent inside `Login`; the
@@ -239,6 +280,9 @@ pub struct CharacterCreate {
     /// Appearance indices: [body rig, skin tint, hair tint].
     #[serde(default)]
     pub appearance: [u32; 3],
+    /// Packed `look::Look`. The server clamps it; never trusted as sent.
+    #[serde(default)]
+    pub look: u64,
 }
 
 /// Developer commands (C14) — server-gated on a dev-account allowlist; the
@@ -266,16 +310,27 @@ pub enum DevCmd {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
-    /// First message on a connection. Authenticates an account via Apple ID.
-    /// If creating a new account, a character name must be provided.
+    /// First message on a connection: names the account and, for a new
+    /// account, the character to create.
     Login {
         proto: u32,
+        /// The account id: an opaque per-player string (`local-<uuid>` from
+        /// the macOS launcher, `web_<hex>` from browser storage, `test_...`
+        /// from tooling). The field name is historical: Sign in with Apple
+        /// was dropped on 2026-11-24 and nothing here is Apple-shaped. It
+        /// stays `apple_id` on the wire and in the DB so existing clients and
+        /// saved accounts keep working.
         apple_id: String,
         /// Legacy pre-C13 creation path — ignored when `create` is present.
         character_name: Option<String>,
         /// First-time character builder payload (C13).
         #[serde(default)]
         create: Option<CharacterCreate>,
+        /// Snapshot wire this connection wants (B11): `wire::WIRE_JSON` (0,
+        /// the default: text `Snapshot` messages, at most 150 entities) or
+        /// `wire::WIRE_BINARY` (binary delta frames, see `wire`).
+        #[serde(default)]
+        wire: u8,
     },
     /// Desired movement direction this tick, as a unit-ish vector. The server
     /// clamps magnitude and applies speed — the client never sets position.
@@ -290,7 +345,7 @@ pub enum ClientMsg {
     SelectClass { class: Class },
     /// Cast a class ability by id (e.g. "heroic_strike"). Targeting is
     /// server-side: offensive abilities hit what's in front / in range,
-    /// heals target self.
+    /// friendly ones land on the caster (or the nearby party).
     Cast { ability: String },
     /// Spend one talent point on a talent id (e.g. "warrior_power").
     LearnTalent { talent: String },
@@ -363,6 +418,75 @@ pub enum ClientMsg {
     AuctionBrowse,
     /// Liveness; server replies `Pong`.
     Ping,
+    /// Binary wire only (B11): the last frame did not decode or was out of
+    /// sequence; send a keyframe. Rate-limited by the server.
+    Resync,
+    // ── beta-server-track: B05 quest boards ─────────────────────────────
+    /// List the generated quests posted at the POI/cave you stand in.
+    /// Reply: `ServerMsg::QuestBoard`.
+    QuestBoard,
+    /// Accept a board quest by id (must stand at its POI/cave).
+    QuestAccept { id: String },
+    /// Turn in a finished board quest (at its POI/cave, the act inn, or for
+    /// deliveries the destination).
+    QuestTurnIn { id: String },
+    /// Drop any active quest (board or authored).
+    QuestAbandon { id: String },
+    // ── beta-server-track: B07 social ───────────────────────────────────
+    /// Form a raid (you become leader). A raid holds up to 40.
+    RaidCreate,
+    RaidInvite { player: String },
+    RaidAccept,
+    RaidLeave,
+    /// Leader only.
+    RaidKick { player: String },
+    RaidChat { text: String },
+    /// Chat channels: "general", "trade", "lfg", "zone" (your current act).
+    ChannelJoin { channel: String },
+    ChannelLeave { channel: String },
+    ChannelSay { channel: String, text: String },
+    /// Reply: `ServerMsg::Channels`.
+    ChannelList,
+    /// Private message to an online character.
+    Whisper { to: String, text: String },
+    FriendAdd { player: String },
+    FriendRemove { player: String },
+    IgnoreAdd { player: String },
+    IgnoreRemove { player: String },
+    /// Reply: `ServerMsg::Friends`.
+    FriendList,
+    /// Play an emote ("wave", "bow", ...), optionally at a named player.
+    Emote {
+        emote: String,
+        #[serde(default)]
+        target: Option<String>,
+    },
+    /// Who is online; optional name/class/act/guild substring filter.
+    Who {
+        #[serde(default)]
+        filter: Option<String>,
+    },
+    // ── beta-server-track: B08 travel ───────────────────────────────────
+    /// Ask the flight master for known routes. Reply: `ServerMsg::FlightPaths`.
+    FlightList,
+    /// Fly to a discovered node id (must stand at a discovered node).
+    FlightTake { node: String },
+    /// While dead: respawn now at the nearest graveyard at half health.
+    ReleaseSpirit,
+    // ── beta-server-track: B06 items ────────────────────────────────────
+    /// Repair all worn gear at the inn (gold cost).
+    Repair,
+    /// Rarity + durability for everything you carry or wear, plus the
+    /// repair quote. Reply: `ServerMsg::Gear`.
+    GearInfo,    // ── B10 battleground ────────────────────────────────────────────────
+    /// Join the queue for the Relic of Seth (from anywhere; the Esc menu,
+    /// the battlemaster or `/bg`). Leaving the match returns you to where
+    /// you queued.
+    BgQueue,
+    /// Leave the queue, or leave the match you are in.
+    BgLeave,
+    /// Buy a battlemaster ware for honor (at an inn).
+    BgBuy { item: String },
 }
 
 // ─── Server → Client ─────────────────────────────────────────────────────────
@@ -400,5 +524,51 @@ pub enum ServerMsg {
     /// A combat event in the player's zone: `src` swung/cast/was hit/died.
     /// Drives remote-entity animations; safe to ignore.
     Event { act: Act, kind: EventKind, src: EntityId, dst: Option<EntityId> },
+    /// The player began a cast-time ability (B03): show a cast bar for `secs`.
+    /// `secs == 0.0` means the cast in progress was interrupted.
+    CastStart { ability: String, secs: f32 },
+    /// One of the player's abilities fired (B03): start its `cooldown` sweep
+    /// (and the global cooldown) on the action bar.
+    AbilityUsed { ability: String, cooldown: f32 },
     Pong,
+    // ── beta-server-track (B05/B06/B07/B08) ─────────────────────────────
+    /// Generated quests posted at the POI/cave the player stands in.
+    QuestBoard { place: String, quests: Vec<BoardQuest> },
+    /// Raid roster (empty members = you left / it disbanded).
+    RaidInfo { leader: String, members: Vec<String> },
+    /// A line on a chat channel ("general", "trade", "lfg", "zone", "raid").
+    ChannelMsg { channel: String, from: String, text: String },
+    /// Channel membership (reply to `ChannelList` and after join/leave).
+    Channels { joined: Vec<String>, available: Vec<String> },
+    /// A private message (echoed to the sender too).
+    Whisper { from: String, to: String, text: String },
+    /// Friends (with presence) and the ignore list.
+    Friends { friends: Vec<FriendEntry>, ignored: Vec<String> },
+    /// An emote performed nearby; `text` is the ready-to-print line.
+    Emote { from: String, emote: String, text: String },
+    /// Reply to `Who` (capped; `total` is the uncapped match count).
+    WhoList { players: Vec<WhoEntry>, total: u32 },
+    /// Flight master routes; `here` is the node you are standing at.
+    FlightPaths { here: Option<String>, nodes: Vec<FlightNode> },
+    /// Entering an act or a named sub-zone: draw the zone-in banner.
+    ZoneBanner {
+        act: Act,
+        name: String,
+        subtitle: String,
+        level_min: u32,
+        level_max: u32,
+        /// True when this place force-flags the player for PvP.
+        pvp: bool,
+    },
+    /// Rarity + durability of carried/worn items and the repair quote.
+    Gear { items: Vec<ItemInfo>, repair_cost: u32 },
+    /// Battleground queue / match / scoreboard state (B10).
+    BgState { info: BgInfo },
 }
+
+// ── beta-server-track payload types ─────────────────────────────────────────
+mod track;
+pub use track::*;
+pub mod look;
+pub use look::Look;
+pub mod wire;

@@ -7,7 +7,11 @@
 //! spawns the player, drains `ClientMsg`s into `World`'s public verbs, steps
 //! the sim at the fixed tick rate, and emits `Welcome`/`Snapshot`/`Stats`/
 //! `Notice`/`Event` back to Bevy. Multiplayer-only messages (guild, auction,
-//! mail, trade, party, duels) reply with a friendly notice in solo play.
+//! mail, trade, party, duels, raids, channels, whispers, friends) reply with
+//! a friendly notice in solo play; boards, flight masters, repair, spirit
+//! release and zone banners run on the same sim calls the server uses. The
+//! match in `apply` is exhaustive on purpose: a new `ClientMsg` does not
+//! compile until solo play decides what to do with it.
 //!
 //! Persistence is per-session for now (localStorage save/load is a wasm
 //! follow-up); the character comes from the builder payload each launch.
@@ -36,16 +40,21 @@ pub fn start_local(
 
             // Build the character from the builder payload (or a default so the
             // world is always playable), spawn it, and welcome the client.
-            let (name, class, faction, appearance) = match create {
+            let (name, class, faction, appearance, look) = match create {
                 Some(c) => (
-                    if c.name.trim().is_empty() { display_name.clone() } else { c.name },
+                    antediluvia_sim::names::validate_name(&c.name).unwrap_or_else(|_| display_name.clone()),
                     Some(c.class),
                     c.faction,
                     [c.appearance[0].min(3), c.appearance[1].min(15), c.appearance[2].min(11)],
+                    antediluvia_protocol::Look::sanitize(c.look),
                 ),
-                None => (display_name.clone(), None, None, [0, 0, 0]),
+                None => {
+                    let seed = antediluvia_protocol::Look::seed_for_name(&display_name);
+                    (display_name.clone(), None, None, [(seed % 4) as u32, 0, 0], antediluvia_protocol::Look::random(seed).pack())
+                }
             };
-            let sheet = new_character_with(&name, class, faction, appearance);
+            let mut sheet = new_character_with(&name, class, faction, appearance);
+            sheet.look = look;
             let mut act = sheet.act;
             let mut me: EntityId = world.spawn_player(1, sheet.clone());
 
@@ -59,6 +68,7 @@ pub fn start_local(
             let mut next = Instant::now();
             let start = Instant::now();
             let mut ticks: u64 = 0;
+            let mut region: Option<(antediluvia_protocol::Act, String)> = None;
 
             loop {
                 // Drain all pending client messages.
@@ -89,6 +99,14 @@ pub fn start_local(
                             dirty = true;
                         }
                         SimEvent::Info { text, .. } => send(ServerMsg::Notice { text }),
+                        SimEvent::CastStart { ability, secs, .. } => {
+                            send(ServerMsg::CastStart { ability: ability.to_string(), secs });
+                        }
+                        SimEvent::AbilityUsed { ability, cooldown, .. } => {
+                            send(ServerMsg::AbilityUsed { ability: ability.to_string(), cooldown });
+                            dirty = true;
+                        }
+                        SimEvent::Vitals { .. } => dirty = true,
                         SimEvent::Combat { act: a, kind, src, dst } => {
                             send(ServerMsg::Event { act: a, kind, src, dst });
                         }
@@ -98,6 +116,13 @@ pub fn start_local(
                 if dirty {
                     if let Some(s) = world.player_sheet(act, me) {
                         send(ServerMsg::Stats { character: s });
+                    }
+                }
+
+                // Zone-in banners, checked four times a second like the server.
+                if ticks % 5 == 0 {
+                    if let Some(b) = zone_banner(&world, act, me, &mut region) {
+                        send(b);
                     }
                 }
 
@@ -217,8 +242,126 @@ fn apply(
         ClientMsg::BankGold { amount } => { match world.bank_gold(a, me, amount) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Stable { item } => { match world.stable_mount(a, me, &item, true) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Unstable { item } => { match world.stable_mount(a, me, &item, false) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } => false,
+        // Solo play has no wire: snapshots are handed over as values, so a
+        // keyframe request has nothing to mend.
+        ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } | ClientMsg::Resync => false,
+        // ── beta-server-track (B05-B08), same sim calls as the server ──
+        ClientMsg::QuestBoard => {
+            match world.board(a, me) {
+                Ok((place, quests)) => send(ServerMsg::QuestBoard { place, quests }),
+                Err(t) => notice(t),
+            }
+            false
+        }
+        ClientMsg::QuestAccept { id } => { match world.board_accept(a, me, &id) { Ok(t) | Err(t) => notice(t) }; true }
+        ClientMsg::QuestTurnIn { id } => { match world.board_turn_in(a, me, &id) { Ok(t) | Err(t) => notice(t) }; true }
+        ClientMsg::QuestAbandon { id } => { match world.abandon_quest(a, me, &id) { Ok(t) | Err(t) => notice(t) }; true }
+        ClientMsg::FlightList => {
+            match world.flight_list(a, me) {
+                Ok((here, nodes)) => send(ServerMsg::FlightPaths { here, nodes }),
+                Err(t) => notice(t),
+            }
+            true // standing at a node discovers it
+        }
+        ClientMsg::FlightTake { node } => {
+            match world.flight_take(a, me, &node) {
+                Ok(f) => {
+                    let moved = f.entity != me || f.act != a;
+                    *act = f.act;
+                    *me_ref = f.entity;
+                    notice(f.text);
+                    if moved {
+                        // Same contract as Travel: a new entity id needs a
+                        // fresh Welcome or the client's own id goes stale.
+                        if let Some(sheet) = world.player_sheet(f.act, f.entity) {
+                            send(ServerMsg::Welcome { entity_id: f.entity, character: sheet, is_dev: true });
+                        }
+                    }
+                }
+                Err(t) => notice(t),
+            }
+            true
+        }
+        ClientMsg::ReleaseSpirit => { match world.release_spirit(a, me) { Ok(t) | Err(t) => notice(t) }; true }
+        ClientMsg::Repair => {
+            match world.repair(a, me) { Ok(t) | Err(t) => notice(t) };
+            if let Some((items, repair_cost)) = world.gear_info(a, me) {
+                send(ServerMsg::Gear { items, repair_cost });
+            }
+            true
+        }
+        ClientMsg::GearInfo => {
+            if let Some((items, repair_cost)) = world.gear_info(a, me) {
+                send(ServerMsg::Gear { items, repair_cost });
+            }
+            false
+        }
+        // Alone in the world: you are the whole list.
+        ClientMsg::Who { .. } => {
+            if let Some(s) = world.player_sheet(a, me) {
+                let entry = antediluvia_protocol::WhoEntry {
+                    name: s.name,
+                    level: s.level,
+                    class: s.class.map(|c| c.as_str().to_string()),
+                    act: a,
+                    guild: s.guild,
+                };
+                send(ServerMsg::WhoList { players: vec![entry], total: 1 });
+            }
+            false
+        }
+        ClientMsg::Emote { emote, target } => {
+            let name = world.player_sheet(a, me).map(|s| s.name).unwrap_or_else(|| "You".into());
+            match antediluvia_sim::social::emote_text(&emote, &name, target.as_deref()) {
+                Some(text) => send(ServerMsg::Emote { from: name, emote, text }),
+                None => notice(format!("Unknown emote: {emote}")),
+            }
+            false
+        }
+        // B10: a battleground needs other players and a server.
+        ClientMsg::BgQueue | ClientMsg::BgLeave | ClientMsg::BgBuy { .. } => {
+            notice("Battlegrounds need a server: not available in solo play.".into());
+            false
+        }
+        ClientMsg::FriendList => { send(ServerMsg::Friends { friends: Vec::new(), ignored: Vec::new() }); false }
+        ClientMsg::ChannelList => { send(ServerMsg::Channels { joined: Vec::new(), available: Vec::new() }); false }
+        // Other people are needed for these.
+        ClientMsg::RaidCreate | ClientMsg::RaidInvite { .. } | ClientMsg::RaidAccept | ClientMsg::RaidLeave
+        | ClientMsg::RaidKick { .. } | ClientMsg::RaidChat { .. }
+        | ClientMsg::ChannelJoin { .. } | ClientMsg::ChannelLeave { .. } | ClientMsg::ChannelSay { .. }
+        | ClientMsg::Whisper { .. }
+        | ClientMsg::FriendAdd { .. } | ClientMsg::FriendRemove { .. }
+        | ClientMsg::IgnoreAdd { .. } | ClientMsg::IgnoreRemove { .. } => {
+            notice("Not available in solo play.".into()); false
+        }
     }
+}
+
+/// Zone-in banner for solo play: the same region lookup and "quiet" rule as
+/// the server (stepping back out of a place into open country is not an
+/// arrival). `last` is the (act, region key) the banner was last drawn for.
+fn zone_banner(
+    world: &World,
+    act: antediluvia_protocol::Act,
+    me: EntityId,
+    last: &mut Option<(antediluvia_protocol::Act, String)>,
+) -> Option<ServerMsg> {
+    let pos = world.player_pos(act, me)?;
+    let faction = world.sheet_of(act, me).and_then(|s| s.faction.as_deref());
+    let r = antediluvia_sim::travel::region_at(act, pos, faction);
+    if last.as_ref().is_some_and(|(a, k)| *a == act && *k == r.key) {
+        return None;
+    }
+    let quiet = r.key.starts_with("act:") && last.as_ref().is_some_and(|(a, _)| *a == act);
+    *last = Some((act, r.key));
+    (!quiet).then_some(ServerMsg::ZoneBanner {
+        act,
+        name: r.name,
+        subtitle: r.subtitle,
+        level_min: r.level_min,
+        level_max: r.level_max,
+        pvp: r.pvp,
+    })
 }
 
 /// Silence unused-import warnings when compiled without the wasm entry.
