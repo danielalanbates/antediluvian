@@ -40,11 +40,55 @@ impl NetTx {
 /// Inbound channel from the server. Stored as a non-send resource.
 pub struct NetRx(pub UnboundedReceiver<ServerMsg>);
 
-/// The `Login` every connection opens with, pre-serialized.
-fn login_json(apple_id: String, character_name: Option<String>) -> Option<String> {
+/// State of the one socket this client opens, for the status notice
+/// (`crate::beta`). A process-wide atomic rather than a resource: both
+/// transports set it from their own callbacks or thread, and the native and
+/// browser builds keep `start_network`'s signature unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    /// Dialling; no answer yet.
+    Connecting,
+    /// Socket open.
+    Open,
+    /// Was open, then closed (server restart, network drop).
+    Closed,
+    /// Never opened (bad URL, server down, proxy refused).
+    Failed,
+}
+
+static LINK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn link() -> Link {
+    match LINK.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Link::Open,
+        2 => Link::Closed,
+        3 => Link::Failed,
+        _ => Link::Connecting,
+    }
+}
+
+pub fn set_link(l: Link) {
+    let v = match l {
+        Link::Connecting => 0,
+        Link::Open => 1,
+        Link::Closed => 2,
+        Link::Failed => 3,
+    };
+    LINK.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The socket went away: `Closed` if it had opened, else `Failed`.
+fn mark_down() {
+    set_link(if link() == Link::Open || link() == Link::Closed { Link::Closed } else { Link::Failed });
+}
+
+/// The `Login` every connection opens with, pre-serialized. The account id
+/// travels in the protocol's `apple_id` field (a historical name: it is any
+/// opaque per-player id, see `crate::launch_config`).
+fn login_json(account_id: String, character_name: Option<String>) -> Option<String> {
     serde_json::to_string(&ClientMsg::Login {
         proto: PROTOCOL_VERSION,
-        apple_id,
+        apple_id: account_id,
         character_name,
         create: None,
         wire: wanted_wire(),
@@ -117,10 +161,11 @@ mod native {
 
     pub fn start_network(
         url: String,
-        apple_id: String,
+        account_id: String,
         character_name: Option<String>,
     ) -> (NetTx, NetRx) {
         install_crypto_provider();
+        set_link(Link::Connecting);
         let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
         let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
 
@@ -142,15 +187,17 @@ mod native {
                         Ok(x) => x,
                         Err(e) => {
                             eprintln!("[net] connect to {url} failed: {e}");
+                            set_link(Link::Failed);
                             return;
                         }
                     };
                     println!("[net] connected to {url}");
+                    set_link(Link::Open);
                     let (mut sink, mut stream) = ws.split();
                     let mut decode = Inbound::default();
 
                     // Authenticate immediately.
-                    if let Some(txt) = login_json(apple_id, character_name) {
+                    if let Some(txt) = login_json(account_id, character_name) {
                         let _ = sink.send(Message::Text(txt.into())).await;
                     }
 
@@ -198,6 +245,7 @@ mod native {
                         }
                     }
                     println!("[net] disconnected");
+                    mark_down();
                 });
             })
             .expect("spawn network thread");
@@ -238,11 +286,12 @@ mod web {
 
     pub fn start_network(
         url: String,
-        apple_id: String,
+        account_id: String,
         character_name: Option<String>,
     ) -> (NetTx, NetRx) {
         let (tx_client, mut rx_client) = unbounded_channel::<ClientMsg>();
         let (tx_server, rx_server) = unbounded_channel::<ServerMsg>();
+        set_link(Link::Connecting);
 
         let ws = match WebSocket::new(&url) {
             Ok(ws) => ws,
@@ -250,6 +299,7 @@ mod web {
                 // Nothing to connect to: hand back live-but-silent channels so
                 // the app still boots and can show the failure in its UI.
                 error!("[net] could not open {url}: {e:?}");
+                set_link(Link::Failed);
                 return (NetTx(tx_client), NetRx(rx_server));
             }
         };
@@ -259,7 +309,7 @@ mod web {
 
         let pending: Pending = Rc::new(RefCell::new(Vec::new()));
         // Authenticate as soon as the socket is writable.
-        if let Some(txt) = login_json(apple_id, character_name) {
+        if let Some(txt) = login_json(account_id, character_name) {
             pending.borrow_mut().push(txt);
         }
 
@@ -303,6 +353,7 @@ mod web {
             let url_open = url.clone();
             let on_open = Closure::<dyn FnMut(JsValue)>::new(move |_| {
                 info!("[net] connected to {url_open}");
+                set_link(Link::Open);
                 flush(&ws_open, &pending_open);
             });
             ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
@@ -318,6 +369,7 @@ mod web {
 
             let on_close = Closure::<dyn FnMut(CloseEvent)>::new(move |e: CloseEvent| {
                 info!("[net] disconnected (code {} {})", e.code(), e.reason());
+                mark_down();
             });
             ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
             on_close.forget();

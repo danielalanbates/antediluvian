@@ -151,12 +151,13 @@ pub fn name_status(name: &str) -> Result<String, &'static str> {
 }
 
 /// The login message for the current choices, or why it cannot be sent.
-pub fn create_message(b: &Builder, apple_id: &str) -> Result<ClientMsg, &'static str> {
+/// The account id rides in the protocol's historical `apple_id` field.
+pub fn create_message(b: &Builder, account_id: &str) -> Result<ClientMsg, &'static str> {
     let name = name_status(&b.name)?;
     let look = b.look.clamped();
     Ok(ClientMsg::Login {
         proto: antediluvia_protocol::PROTOCOL_VERSION,
-        apple_id: apple_id.to_string(),
+        apple_id: account_id.to_string(),
         character_name: None,
         create: Some(CharacterCreate {
             name,
@@ -298,7 +299,19 @@ fn spawn_screen(commands: &mut Commands) {
             BuilderUi,
         ))
         .with_children(|p| {
-            label(p, "Create your character", 28.0, GOLD, None);
+            // Title with the open-beta tag beside it, and the beta's one
+            // promise underneath: a new player reads both before anything else.
+            p.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.0),
+                ..default()
+            })
+            .with_children(|r| {
+                label(r, "Create your character", 28.0, GOLD, None);
+                crate::beta::tag(r, 13.0);
+            });
+            label(p, crate::beta::NOTE, 12.0, crate::beta::NOTE_COLOR, None);
             label(p, "Type a name.  Up / Down pick a line,  Left / Right change it,  or click the arrows.", 12.0, DIM, None);
             // Name line.
             p.spawn(Node {
@@ -419,7 +432,7 @@ pub fn builder_screen(
     mut preview: Query<(Entity, &BuilderPreview, &mut Transform, &mut LookRig), Without<crate::MainCamera>>,
     mut cam: Query<&mut Transform, (With<crate::MainCamera>, Without<BuilderPreview>)>,
 ) {
-    let apple_id = session.apple_id.clone();
+    let account_id = session.account_id.clone();
     let act = session.act;
     let Some(b) = session.builder.as_mut() else {
         for e in &ui_root {
@@ -502,7 +515,7 @@ pub fn builder_screen(
     }
 
     if submit && !b.submitted {
-        match create_message(b, &apple_id) {
+        match create_message(b, &account_id) {
             Ok(msg) => {
                 b.submitted = true;
                 b.error = None;
