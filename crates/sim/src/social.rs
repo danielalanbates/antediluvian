@@ -503,6 +503,9 @@ mod tests {
             s.max_health = 1_000_000;
             s.health = 1_000_000;
             s.quests.insert("serpents_in_the_garden".into(), 0);
+            // Isolation: discovery XP from a nearby POI is not kill credit.
+            s.discovered = crate::pois::pois_for_act(Act::Eden).map(|p| p.name.clone())
+                .chain(crate::caves::caves_for_act(Act::Eden).map(|c| c.name.clone())).collect();
             ids.push(w.spawn_player(owner, s));
             if (2..=40).contains(&owner) {
                 book.invite(1, owner).unwrap();

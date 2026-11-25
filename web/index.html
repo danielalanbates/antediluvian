@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="description" content="Antediluvia — a browser MMORPG. Explore the pre-flood world, fight mobs, and level up, right in your browser." />
+    <meta name="description" content="Antediluvia — a browser MMORPG in open beta. Explore the pre-flood world, fight mobs, and level up, right in your browser." />
     <meta name="theme-color" content="#0a0e14" />
     <title>Antediluvia</title>
     <style>
@@ -61,6 +61,18 @@
         transition: width 0.3s ease;
       }
       #hint { color: #55606d; font-size: 13px; max-width: 34em; }
+      .beta {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 4px;
+        background: #f9c74f;
+        color: #14110c;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+      #beta-note { color: #c9c2a8; font-size: 14px; max-width: 34em; }
+      #build { color: #3b4552; font-size: 11px; }
       a { color: #00d9ff; }
       .fail { color: #ff6b6b; }
       #retry {
@@ -81,6 +93,11 @@
   <body>
     <div id="boot">
       <h1>Antediluvia</h1>
+      <span class="beta">OPEN BETA</span>
+      <div id="beta-note">
+        Progress may be reset. Report bugs to
+        <a href="mailto:help@batesai.org">help@batesai.org</a>.
+      </div>
       <div id="bar"><i></i></div>
       <div id="status">Loading…</div>
       <div id="hint">
@@ -88,6 +105,7 @@
         cached afterwards. WASD to move, mouse to look, Enter to chat.
       </div>
       <button id="retry" type="button">Try again</button>
+      <div id="build"></div>
     </div>
 
     <script type="module">
@@ -96,10 +114,14 @@
       const BUILD_STAMP = '__BUILD_STAMP__';
 
       // The shard the client should dial. Left unset, the client derives
-      // wss://<this-host>/ws, which is what we want in production; it is
-      // declared here so a deploy can point at a different shard without a
-      // rebuild.
+      // wss://<this-host>/ws: on https://batesai.org/play/ that is
+      // wss://batesai.org/ws, the production proxy. It is declared here so a
+      // deploy can point at a different shard without a rebuild. (A `?server=`
+      // query only works on a page served from localhost: the browser gate.)
       window.ANTEDILUVIA_SERVER = '';
+
+      // Quote this in bug reports; it names the exact engine build.
+      document.getElementById('build').textContent = `build ${BUILD_STAMP}`;
 
       const statusEl = document.getElementById('status');
       const barEl = document.querySelector('#bar > i');

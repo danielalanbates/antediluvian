@@ -13,11 +13,14 @@
 //!
 //! The server world is top-down 2D; it maps into 3D as (x, height, y).
 //!
-//! Usage: antediluvia-client-bevy [name] [ws-url]
-//!   defaults: name="Adam", url="ws://127.0.0.1:8787"
+//! Usage: antediluvia-client-bevy <account-id> [name] [ws-url]
+//!   defaults: url="ws://127.0.0.1:8787"; no name opens the character builder
+//!   for a new account (the macOS launcher passes only the account id).
 
 mod atmosphere;
+mod beta;
 mod castbar;
+mod crowd;
 mod track_ui;
 mod audio;
 mod ambient;
@@ -76,28 +79,33 @@ use std::time::Duration;
 
 /// Where this client connects and who it logs in as, resolved before Bevy
 /// starts. Native takes it from argv; the browser takes it from the host page.
+///
+/// `account_id` is an opaque per-player id: `local-<uuid>` from the macOS
+/// launcher (`scripts/app/launcher.sh`), `web_<hex>` from browser storage.
+/// It goes over the wire in the protocol's `apple_id` field, a historical
+/// name kept for compatibility; there is no Sign in with Apple.
 struct LaunchConfig {
-    apple_id: String,
+    account_id: String,
     url: String,
     character_name: Option<String>,
 }
 
 const DEFAULT_URL: &str = "ws://127.0.0.1:8787";
 
-/// Native: `antediluvia-client-bevy [name] [ws-url]`, either order-ish — an
-/// argument that looks like a URL is treated as one, otherwise as a character
-/// name.
+/// Native: `antediluvia-client-bevy <account-id> [name] [ws-url]` — after the
+/// account id, an argument that looks like a URL is treated as one, otherwise
+/// as a character name (test tooling; players use the builder).
 #[cfg(not(target_arch = "wasm32"))]
 fn launch_config() -> LaunchConfig {
     let mut args = std::env::args().skip(1);
-    let apple_id = args.next().unwrap_or_else(|| "apple_user_1".into());
+    let account_id = args.next().unwrap_or_else(|| "local_user_1".into());
     let url_or_name = args.next().unwrap_or_else(|| DEFAULT_URL.into());
     let (character_name, url) = if is_ws_url(&url_or_name) {
         (None, url_or_name)
     } else {
         (Some(url_or_name), args.next().unwrap_or_else(|| DEFAULT_URL.into()))
     };
-    LaunchConfig { apple_id, url, character_name }
+    LaunchConfig { account_id, url, character_name }
 }
 
 /// Browser: there is no argv. The server comes from `window.ANTEDILUVIA_SERVER`
@@ -109,7 +117,19 @@ fn launch_config() -> LaunchConfig {
     use wasm_bindgen::JsValue;
 
     let window = web_sys::window();
+    // `?server=` and `?name=` are test hooks (the browser gate, local play),
+    // honoured only on a page served from this machine. On the public page a
+    // shared link must not be able to point the client at another server: the
+    // account id is the player's only credential, and that server could log in
+    // with it.
+    let local_page = window
+        .as_ref()
+        .and_then(|w| w.location().hostname().ok())
+        .is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "[::1]");
     let query = |key: &str| -> Option<String> {
+        if !local_page {
+            return None;
+        }
         let search = window.as_ref()?.location().search().ok()?;
         let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
         params.get(key).filter(|v| !v.is_empty())
@@ -136,24 +156,34 @@ fn launch_config() -> LaunchConfig {
         .unwrap_or_else(|| DEFAULT_URL.into());
 
     let character_name = query("name");
-    // Without Sign in with Apple in the browser yet, identity is a per-browser
-    // random id kept in localStorage so a returning player keeps their save.
-    let apple_id = window
-        .as_ref()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|store| {
-            if let Ok(Some(id)) = store.get_item("antediluvia_id") {
-                if !id.is_empty() {
-                    return Some(id);
-                }
+    // Identity: a random per-browser account id kept in localStorage, so a
+    // returning player keeps their character. It is the only credential, so a
+    // new id carries 128 random bits. Ids stored by older builds (`web_` + 8
+    // hex) are kept as they are, so nobody loses a character.
+    let fresh = || {
+        let mut b = [0u8; 16];
+        if getrandom::fill(&mut b).is_err() {
+            for x in b.iter_mut() {
+                *x = (js_sys::Math::random() * 256.0) as u8;
             }
-            let id = format!("web_{:08x}", (js_sys::Math::random() * 4294967295.0) as u32);
-            store.set_item("antediluvia_id", &id).ok()?;
-            Some(id)
-        })
-        .unwrap_or_else(|| "web_guest".into());
+        }
+        format!("web_{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
+    };
+    let account_id = match window.as_ref().and_then(|w| w.local_storage().ok().flatten()) {
+        Some(store) => match store.get_item("antediluvia_id") {
+            Ok(Some(id)) if !id.is_empty() => id,
+            _ => {
+                let id = fresh();
+                let _ = store.set_item("antediluvia_id", &id);
+                id
+            }
+        },
+        // Site data blocked: a session-only id. Never a shared fallback id,
+        // which would put every such player on one account.
+        None => fresh(),
+    };
 
-    LaunchConfig { apple_id, url, character_name }
+    LaunchConfig { account_id, url, character_name }
 }
 
 fn is_ws_url(s: &str) -> bool {
@@ -309,23 +339,24 @@ fn main() {
         return;
     }
 
-    let LaunchConfig { apple_id, url, character_name } = launch_config();
+    let LaunchConfig { account_id, url, character_name } = launch_config();
 
     // Start the network thread before the app so login is already in flight.
-    let display_name = character_name.clone().unwrap_or_else(|| apple_id.clone());
-    let apple_id_for_session = apple_id.clone();
+    let display_name = character_name.clone().unwrap_or_else(|| account_id.clone());
+    let account_id_for_session = account_id.clone();
 
     #[cfg(not(target_arch = "wasm32"))]
     let (tx, rx) = if url == "local" || std::env::var("ANTEDILUVIA_LOCAL").is_ok() {
         // Embedded single-player: run the World in-process.
         // A default character is used unless one is created in the builder.
+        net::set_link(net::Link::Open);
         local::start_local(display_name.clone(), None)
     } else {
-        start_network(url, apple_id, character_name)
+        start_network(url, account_id, character_name)
     };
     // The browser has no in-process server to fall back to.
     #[cfg(target_arch = "wasm32")]
-    let (tx, rx) = start_network(url, apple_id, character_name);
+    let (tx, rx) = start_network(url, account_id, character_name);
 
     // Asset root: ANTEDILUVIA_ASSETS env override (app bundle), else the
     // workspace-level assets/ dir, independent of cwd.
@@ -391,6 +422,7 @@ fn main() {
         .add_plugins(shots::ShotsPlugin)
         .add_plugins(perf::PerfPlugin)
         .add_plugins(win::WinPlugin)
+        .add_plugins(beta::BetaPlugin)
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .init_resource::<lighting::EnvMaps>()
         .add_systems(Update, (lighting::apply_env_map, lighting::drift_ripples))
@@ -430,13 +462,14 @@ fn main() {
         .insert_resource(PropColliders::default())
         .insert_resource(Session {
             name: display_name,
-            apple_id: apple_id_for_session,
+            account_id: account_id_for_session,
             ..default()
         })
         .insert_resource(menu::MenuOpen::default())
         .add_event::<CombatEvt>()
         .add_systems(Startup, castbar::spawn_cast_bar)
         .add_systems(Update, castbar::update_cast_bar)
+        .add_systems(Update, crowd::log_crowd)
         .add_systems(Startup, (setup, init_vfx, init_equip_assets, init_audio_assets, grass::init_grass, ambient::init_ambient))
         .add_systems(
             Update,
@@ -603,8 +636,12 @@ pub struct Session {
     pub target_id: Option<u64>,
     /// Big centered announcement (text, seconds remaining).
     pub banner: Option<(String, f32)>,
-    /// Apple account id this session logs in with (C13 re-login from builder).
-    pub apple_id: String,
+    /// Account id this session logs in with (C13 re-login from builder);
+    /// see `LaunchConfig`.
+    pub account_id: String,
+    /// Why the server refused a login made outside the builder (shown by
+    /// `beta::update_status`; cleared on Welcome).
+    pub login_error: Option<String>,
     /// Character-builder state; `Some` while the create screen is up (C13).
     pub builder: Option<Builder>,
     /// Account has dev rights (server-advised, C14).
@@ -647,7 +684,8 @@ impl Default for Session {
             time_of_day: 0.5,
             target: None,
             target_id: None,
-            apple_id: String::new(),
+            account_id: String::new(),
+            login_error: None,
             is_dev: false,
             dev_input: None,
             banner: None,
@@ -1925,8 +1963,9 @@ fn spawn_visual(
         }
     };
 
-    // Health-bar nameplate for anything that fights or lives.
-    if matches!(e.kind, EntityKind::Player | EntityKind::Enemy | EntityKind::Wildlife) {
+    // Health bar for anything that fights or lives; in a crowd only the
+    // players drawn as full rigs carry one (B11, see `crowd`).
+    if crowd::wants_health_bar(e.kind, cheap) {
         let mut fill = Entity::PLACEHOLDER;
         commands.entity(root).with_children(|p| {
             p.spawn((
@@ -1953,16 +1992,19 @@ fn spawn_visual(
     }
 
     // Floating gold name over NPCs, WoW-style, so the Elder, Innkeeper and
-    // Quartermaster can be told apart at a glance.
-    if e.kind == EntityKind::Npc {
+    // Quartermaster can be told apart at a glance; pale blue names over the
+    // other players near enough to be full rigs (B11: bounded by the rig
+    // budget, block figures have none).
+    if let Some(colour) = crowd::name_plate(e.kind, is_me, cheap) {
         if let Some(name) = e.name.as_deref() {
+            let height = if e.kind == EntityKind::Npc { NAME_HEIGHT } else { PLAYER_NAME_HEIGHT };
             commands.spawn((
                 Text::new(name),
                 TextFont { font_size: 15.0, ..default() },
-                TextColor(Color::srgb(1.0, 0.84, 0.25)),
+                TextColor(colour),
                 Node { position_type: PositionType::Absolute, ..default() },
                 Visibility::Hidden,
-                NameLabel { root, chars: name.chars().count() as f32 },
+                NameLabel { root, chars: name.chars().count() as f32, height },
             ));
         }
     }
@@ -1979,10 +2021,14 @@ fn spawn_visual(
 struct NameLabel {
     root: Entity,
     chars: f32,
+    /// Height above the root where the name floats.
+    height: f32,
 }
 
-/// Height above the root where names float (above the rig's head).
+/// Height above the root where NPC names float (above the rig's head).
 const NAME_HEIGHT: f32 = 80.0;
+/// Player names sit just above the health bar.
+const PLAYER_NAME_HEIGHT: f32 = BAR_HEIGHT + 14.0;
 /// Past this camera distance names are hidden, as in WoW.
 const NAME_RANGE: f32 = 900.0;
 
@@ -1999,7 +2045,7 @@ fn update_name_labels(
             commands.entity(ent).despawn_recursive();
             continue;
         };
-        let world = root.translation() + Vec3::Y * NAME_HEIGHT;
+        let world = root.translation() + Vec3::Y * label.height;
         let near = world.distance(cam_xf.translation()) < NAME_RANGE;
         match camera.world_to_viewport(cam_xf, world) {
             Ok(p) if near => {
@@ -2089,6 +2135,9 @@ fn receive_from_server(
                 session.my_id = Some(entity_id);
                 session.class = character.class;
                 session.builder = None;
+                session.login_error = None;
+                // The browser gate (scripts/web_gate.py) reads this line.
+                info!("[beta] in world as {}", character.name);
                 set_act(&mut commands, &mut session, &mut meshes, &mut materials, character.act);
                 push_chat(&mut session, format!("Welcome to {}, {}!", character.act.as_str(), character.name));
                 session.sheet = Some(character);
@@ -2106,15 +2155,21 @@ fn receive_from_server(
             }
             ServerMsg::LoginRejected { reason } => {
                 if reason.contains("no character on this account") {
-                    // First launch on this Apple account: open the builder (C13).
+                    // First launch on this account: open the builder (C13).
                     // Not an error to show a new player: no chat line.
                     if session.builder.is_none() {
                         session.builder = Some(Builder::default());
+                        info!("[beta] character builder open (new account)");
                     }
                 } else {
+                    warn!("[net] login rejected: {reason}");
                     if let Some(b) = session.builder.as_mut() {
                         b.submitted = false;
                         b.error = Some(reason.clone());
+                    } else {
+                        // No builder to show it in (an old cached build, a
+                        // second tab): the status notice says it instead.
+                        session.login_error = Some(reason.clone());
                     }
                     push_chat(&mut session, format!("Login rejected: {reason}"));
                 }
@@ -2183,11 +2238,16 @@ fn receive_from_server(
         }
     }
 
-    if let Some(entities) = latest {
+    if let Some(mut entities) = latest {
         let my_id = session.my_id;
         wins.radar(&entities, my_id); // minimap, markers, death prompt
         // Target frame: nearest living enemy within engage range.
         let me_pos = entities.iter().find(|e| Some(e.id) == my_id).map(|e| (e.x, e.y));
+        // Nearest first, so when a whole crowd comes into view at once the
+        // rig budget goes to the players closest to us (B11).
+        if let Some((mx, my)) = me_pos {
+            entities.sort_by(|a, b| crowd::dist2(a, mx, my).total_cmp(&crowd::dist2(b, mx, my)));
+        }
         let nearest = me_pos.and_then(|(mx, my)| {
             entities
                 .iter()
@@ -2557,6 +2617,7 @@ fn dev_autocmd(
     tx: Res<NetTx>,
     mut wins: ResMut<win::WinState>,
     mut session: ResMut<Session>,
+    mut orbit: ResMut<Orbit>,
 ) {
     let Some(mut ac) = ac else { return };
     let now = time.elapsed_secs();
@@ -2572,6 +2633,14 @@ fn dev_autocmd(
             // character builder in a windowless run.
             if let Some(b) = session.builder.as_mut() {
                 look::builder::autocmd(b, arg);
+            }
+        } else if let Some(arg) = line.strip_prefix("cam ") {
+            // "cam 1400 0.9": pull the camera back for a crowd shot (B11).
+            if let Some((dist, pitch)) = crowd::parse_cam(arg) {
+                orbit.dist = dist;
+                if let Some(p) = pitch {
+                    orbit.pitch = p;
+                }
             }
         } else if let Some(arg) = line.strip_prefix("ui ") {
             // "ui bags", "ui only map", "ui close", "ui menu": open windows
@@ -3108,15 +3177,20 @@ fn smooth_motion(
     map: Res<EntityMap>,
     mut models: Query<&mut Transform, Without<NetTarget>>,
 ) {
-    let k = 1.0 - (-14.0 * time.delta_secs()).exp();
+    let dt = time.delta_secs();
+    let k_rig = 1.0 - (-crowd::ease_rate(false) * dt).exp();
+    let k_far = 1.0 - (-crowd::ease_rate(true) * dt).exp();
     for (target, mut t, ent) in &mut roots {
+        let mirrored = map.0.get(&ent.0);
+        // Block figures are updated at 2.5 Hz: glide, do not dart (B11).
+        let k = if mirrored.is_some_and(|m| m.lod_cheap == Some(true)) { k_far } else { k_rig };
         let d = target.pos - t.translation;
         if d.length_squared() > 200.0 * 200.0 {
             t.translation = target.pos; // teleport/travel: snap, don't glide
         } else {
             t.translation += d * k;
         }
-        if let Some(m) = map.0.get(&ent.0).and_then(|m| m.model) {
+        if let Some(m) = mirrored.and_then(|m| m.model) {
             if let Ok(mut mt) = models.get_mut(m) {
                 let want = Quat::from_rotation_y(-target.rot);
                 mt.rotation = mt.rotation.slerp(want, k);

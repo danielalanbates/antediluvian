@@ -583,10 +583,11 @@ mod tests {
         let mut s = new_character("Rested");
         s.x = 2000.0;
         s.y = 0.0;
-        s.max_xp = 10_000;
+        s.level = 54; // B10 curve: 10,117 xp to the next level, no level-up below
+        s.max_xp = crate::progression::xp_to_next(54);
         s.last_logout = Some(0);
         let gained = accrue_offline_rest(&mut s, 3600 * 40);
-        assert_eq!(gained, 10_000 * 5 * 40 / 100 / 4);
+        assert_eq!(gained, crate::progression::xp_to_next(54) * 5 * 40 / 100 / 4);
         let id = w.spawn_player(1, s);
         w.dev_give_xp(Act::Eden, id, 300);
         let after = sheet(&w, Act::Eden, id);

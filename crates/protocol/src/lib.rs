@@ -2,8 +2,10 @@
 //!
 //! Types shared between the authoritative server and any client. The transport
 //! is a WebSocket carrying newline-free JSON frames (one `ClientMsg` /
-//! `ServerMsg` per WebSocket text message). Binary framing can be layered on
-//! later without touching game logic — these enums stay the message contract.
+//! `ServerMsg` per WebSocket text message). World snapshots alone may travel
+//! as binary delta frames instead (`wire`, asked for in `Login`); the client
+//! turns them back into `ServerMsg::Snapshot`, so these enums stay the
+//! message contract.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +15,7 @@ pub const WORLD_BOUNDS: f32 = 3600.0;
 
 /// Protocol version. Bump on any breaking change to the enums below; the server
 /// rejects a `Login` whose `proto` does not match.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// A broadcast combat event, for client-side animation of *remote* entities
 /// (swings, casts, hits, deaths). Purely cosmetic — carries no game state.
@@ -126,7 +128,7 @@ pub enum EntityKind {
 }
 
 /// A single entity as broadcast to clients in a snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityState {
     pub id: EntityId,
     pub kind: EntityKind,
@@ -308,16 +310,27 @@ pub enum DevCmd {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
-    /// First message on a connection. Authenticates an account via Apple ID.
-    /// If creating a new account, a character name must be provided.
+    /// First message on a connection: names the account and, for a new
+    /// account, the character to create.
     Login {
         proto: u32,
+        /// The account id: an opaque per-player string (`local-<uuid>` from
+        /// the macOS launcher, `web_<hex>` from browser storage, `test_...`
+        /// from tooling). The field name is historical: Sign in with Apple
+        /// was dropped on 2026-11-24 and nothing here is Apple-shaped. It
+        /// stays `apple_id` on the wire and in the DB so existing clients and
+        /// saved accounts keep working.
         apple_id: String,
         /// Legacy pre-C13 creation path — ignored when `create` is present.
         character_name: Option<String>,
         /// First-time character builder payload (C13).
         #[serde(default)]
         create: Option<CharacterCreate>,
+        /// Snapshot wire this connection wants (B11): `wire::WIRE_JSON` (0,
+        /// the default: text `Snapshot` messages, at most 150 entities) or
+        /// `wire::WIRE_BINARY` (binary delta frames, see `wire`).
+        #[serde(default)]
+        wire: u8,
     },
     /// Desired movement direction this tick, as a unit-ish vector. The server
     /// clamps magnitude and applies speed — the client never sets position.
@@ -405,6 +418,9 @@ pub enum ClientMsg {
     AuctionBrowse,
     /// Liveness; server replies `Pong`.
     Ping,
+    /// Binary wire only (B11): the last frame did not decode or was out of
+    /// sequence; send a keyframe. Rate-limited by the server.
+    Resync,
     // ── beta-server-track: B05 quest boards ─────────────────────────────
     /// List the generated quests posted at the POI/cave you stand in.
     /// Reply: `ServerMsg::QuestBoard`.
@@ -462,7 +478,15 @@ pub enum ClientMsg {
     Repair,
     /// Rarity + durability for everything you carry or wear, plus the
     /// repair quote. Reply: `ServerMsg::Gear`.
-    GearInfo,
+    GearInfo,    // ── B10 battleground ────────────────────────────────────────────────
+    /// Join the queue for the Relic of Seth (from anywhere; the Esc menu,
+    /// the battlemaster or `/bg`). Leaving the match returns you to where
+    /// you queued.
+    BgQueue,
+    /// Leave the queue, or leave the match you are in.
+    BgLeave,
+    /// Buy a battlemaster ware for honor (at an inn).
+    BgBuy { item: String },
 }
 
 // ─── Server → Client ─────────────────────────────────────────────────────────
@@ -538,6 +562,8 @@ pub enum ServerMsg {
     },
     /// Rarity + durability of carried/worn items and the repair quote.
     Gear { items: Vec<ItemInfo>, repair_cost: u32 },
+    /// Battleground queue / match / scoreboard state (B10).
+    BgState { info: BgInfo },
 }
 
 // ── beta-server-track payload types ─────────────────────────────────────────
@@ -545,3 +571,4 @@ mod track;
 pub use track::*;
 pub mod look;
 pub use look::Look;
+pub mod wire;

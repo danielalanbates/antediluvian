@@ -242,7 +242,9 @@ fn apply(
         ClientMsg::BankGold { amount } => { match world.bank_gold(a, me, amount) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Stable { item } => { match world.stable_mount(a, me, &item, true) { Ok(t) | Err(t) => notice(t) }; true }
         ClientMsg::Unstable { item } => { match world.stable_mount(a, me, &item, false) { Ok(t) | Err(t) => notice(t) }; true }
-        ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } => false,
+        // Solo play has no wire: snapshots are handed over as values, so a
+        // keyframe request has nothing to mend.
+        ClientMsg::Login { .. } | ClientMsg::SetAoi { .. } | ClientMsg::Resync => false,
         // ── beta-server-track (B05-B08), same sim calls as the server ──
         ClientMsg::QuestBoard => {
             match world.board(a, me) {
@@ -314,6 +316,11 @@ fn apply(
                 Some(text) => send(ServerMsg::Emote { from: name, emote, text }),
                 None => notice(format!("Unknown emote: {emote}")),
             }
+            false
+        }
+        // B10: a battleground needs other players and a server.
+        ClientMsg::BgQueue | ClientMsg::BgLeave | ClientMsg::BgBuy { .. } => {
+            notice("Battlegrounds need a server: not available in solo play.".into());
             false
         }
         ClientMsg::FriendList => { send(ServerMsg::Friends { friends: Vec::new(), ignored: Vec::new() }); false }

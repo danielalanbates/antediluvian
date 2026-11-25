@@ -239,7 +239,7 @@ fn build() -> Table {
             // Acceptance gate follows the curve characters actually reach
             // (see docs/beta/SERVER_TRACK): three steps per act.
             let tier = if dist < 1500.0 { 0 } else if dist < 2500.0 { 1 } else { 2 };
-            let min_level = 1 + ai as u32 * 3 + tier;
+            let min_level = crate::progression::quest_gate(act, tier);
             let slug = leak(format!("gq_{}_{}{}", act.as_str(), if an.cave { "c" } else { "p" }, &an.key[an.key.find(':').unwrap() + 1..]));
             let reward = |mult: f32| -> (u32, u32) {
                 let xp = ((40 + level * 10) as f32 * mult).round() as u32;
@@ -495,7 +495,13 @@ pub fn seed_camps(zone: &mut Zone, next_id: &mut EntityId) {
         for k in 0..CAMP_SIZE {
             let ang = (a.pos.x * 0.013 + a.pos.y * 0.007) + k as f32 * std::f32::consts::PI;
             let lim = WORLD_BOUNDS - 60.0;
-            let pos = (a.pos + Vec2::new(ang.cos(), ang.sin()) * CAMP_OFFSET).clamp(Vec2::splat(-lim), Vec2::splat(lim));
+            let at = |ang: f32| (a.pos + Vec2::new(ang.cos(), ang.sin()) * CAMP_OFFSET).clamp(Vec2::splat(-lim), Vec2::splat(lim));
+            // A guard never stands in a sanctuary (a POI beside a
+            // graveyard): turn it round the POI until it is clear.
+            let pos = (0..12)
+                .map(|i| at(ang + i as f32 * std::f32::consts::TAU / 12.0))
+                .find(|p| !crate::world::in_sanctuary(act, *p))
+                .unwrap_or_else(|| at(ang));
             let id = *next_id;
             *next_id += 1;
             let mut e = crate::world::st_make_enemy(id, pos, tag, act);
@@ -809,8 +815,7 @@ mod tests {
                 assert_eq!(g.def.giver, BOARD_GIVER);
                 assert!(g.def.side);
                 assert!((lo..=hi).contains(&g.level), "{} level {} outside {lo}-{hi}", g.def.id, g.level);
-                let ai = act_index(act) as u32;
-                assert!((1 + ai * 3..=3 + ai * 3).contains(&g.def.min_level), "{} min_level {}", g.def.id, g.def.min_level);
+                assert!((lo..=lo + 8).contains(&g.def.min_level), "{} min_level {}", g.def.id, g.def.min_level);
                 assert!(g.def.xp > 0 && g.def.gold > 0);
                 act_min = act_min.min(g.def.min_level);
             }
@@ -849,11 +854,11 @@ mod tests {
             assert_eq!(s.quests.len(), 1);
         }
         // Level gate, once the story gate is open.
-        let far = generated().iter().find(|g| g.def.act == Act::Hermon && g.def.min_level == 6).expect("a far Hermon quest");
+        let far = generated().iter().find(|g| g.def.act == Act::Hermon && g.def.min_level == 21).expect("a far Hermon quest");
         let mut w = World::new(5);
         let p = spawn(&mut w, Act::Hermon, anchors()[far.anchor].pos, &[act_finale(Act::Hermon)], 5);
-        assert!(w.board_accept(Act::Hermon, p, far.def.id).unwrap_err().contains("level 6"));
-        w.zones.get_mut(&Act::Hermon).unwrap().entities.get_mut(&p).unwrap().sheet.as_mut().unwrap().level = 6;
+        assert!(w.board_accept(Act::Hermon, p, far.def.id).unwrap_err().contains("level 21"));
+        w.zones.get_mut(&Act::Hermon).unwrap().entities.get_mut(&p).unwrap().sheet.as_mut().unwrap().level = 21;
         assert!(w.board_accept(Act::Hermon, p, far.def.id).is_ok());
     }
 
@@ -931,13 +936,18 @@ mod tests {
     /// Slay `n` mobs tagged `tag`, one at a time, standing beside each.
     fn slay(w: &mut World, act: Act, pid: EntityId, tag: &str, n: usize) {
         for _ in 0..n {
-            let (eid, epos) = {
-                let z = &w.zones[&act];
-                let e = z.entities.values().filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
+            let live = |w: &World| {
+                w.zones[&act].entities.values().filter(|e| e.kind == EntityKind::Enemy && e.health > 0)
                     .find(|e| e.tag.as_deref().is_some_and(|t| t.starts_with(tag)))
-                    .unwrap_or_else(|| panic!("no live {tag} in {act:?}"));
-                (e.id, e.pos)
+                    .map(|e| (e.id, e.pos))
             };
+            // Kills come back after a delay at their camp: wait for one.
+            let mut waited = 0;
+            while live(w).is_none() && waited < (crate::world::RESPAWN_DELAY_SECS.1 as usize + 1) * 20 {
+                w.step();
+                waited += 1;
+            }
+            let (eid, epos) = live(w).unwrap_or_else(|| panic!("no live {tag} in {act:?}"));
             {
                 let z = w.zones.get_mut(&act).unwrap();
                 z.entities.get_mut(&eid).unwrap().health = 1;
@@ -971,7 +981,7 @@ mod tests {
         let mut w = World::new(31);
         let g = generated().iter().find(|g| g.def.act == Act::Eden && g.kind == GenKind::Kill && anchors()[g.anchor].camp.is_some()).unwrap();
         let an = &anchors()[g.anchor];
-        let pid = spawn(&mut w, Act::Eden, an.pos, &["the_flaming_sword"], 3);
+        let pid = spawn(&mut w, Act::Eden, an.pos, &["the_flaming_sword"], 12);
         let Objective::Kill { target, count } = g.def.objective else { panic!() };
         assert!(w.board_turn_in(Act::Eden, pid, g.def.id).is_err(), "cannot turn in before accepting");
         w.board_accept(Act::Eden, pid, g.def.id).unwrap();
@@ -1003,7 +1013,7 @@ mod tests {
         let mut w = World::new(32);
         let g = generated().iter().find(|g| g.def.act == Act::Hermon && g.kind == GenKind::Collect && !anchors()[g.anchor].cave).unwrap();
         let an = &anchors()[g.anchor];
-        let pid = spawn(&mut w, Act::Hermon, an.pos, &[act_finale(Act::Hermon)], 9);
+        let pid = spawn(&mut w, Act::Hermon, an.pos, &[act_finale(Act::Hermon)], 24);
         let Objective::Collect { item, count, source } = g.def.objective else { panic!() };
         w.board_accept(Act::Hermon, pid, g.def.id).unwrap();
         slay(&mut w, Act::Hermon, pid, source, count as usize);
@@ -1022,7 +1032,7 @@ mod tests {
         let mut w = World::new(33);
         let ore = generated().iter().find(|g| g.def.act == Act::Eden && anchors()[g.anchor].cave && g.kind == GenKind::Collect).unwrap();
         let an = &anchors()[ore.anchor];
-        let pid = spawn(&mut w, Act::Eden, an.pos, &["the_flaming_sword"], 3);
+        let pid = spawn(&mut w, Act::Eden, an.pos, &["the_flaming_sword"], 12);
         let Objective::Collect { item, count, source } = ore.def.objective else { panic!() };
         w.board_accept(Act::Eden, pid, ore.def.id).unwrap();
         // Harvest ore nodes of this resource until the quest is satisfied.
@@ -1085,7 +1095,7 @@ mod tests {
         let an = &anchors()[g.anchor];
         let Objective::Explore { place } = g.def.objective else { panic!() };
         let target = anchor_by_key(place).unwrap();
-        let pid = spawn(&mut w, Act::Nephilim, an.pos, &[act_finale(Act::Nephilim)], 12);
+        let pid = spawn(&mut w, Act::Nephilim, an.pos, &[act_finale(Act::Nephilim)], 36);
         w.board_accept(Act::Nephilim, pid, g.def.id).unwrap();
         for _ in 0..25 {
             w.step();
@@ -1121,7 +1131,7 @@ mod tests {
         let an = &anchors()[g.anchor];
         let Objective::Deliver { item, to } = g.def.objective else { panic!() };
         let dest = anchor_by_key(to).unwrap();
-        let pid = spawn(&mut w, Act::Enoch, an.pos, &[act_finale(Act::Enoch)], 15);
+        let pid = spawn(&mut w, Act::Enoch, an.pos, &[act_finale(Act::Enoch)], 48);
         let count = |w: &World| sheet(w, Act::Enoch, pid).inventory.iter().filter(|i| i.as_str() == item).count();
         w.board_accept(Act::Enoch, pid, g.def.id).unwrap();
         assert_eq!(count(&w), 1);
@@ -1155,7 +1165,7 @@ mod tests {
         let mut w = World::new(36);
         let fin = act_finale(Act::Flood);
         let here: Vec<_> = generated().iter().filter(|g| g.def.act == Act::Flood).collect();
-        let pid = spawn(&mut w, Act::Flood, anchors()[here[0].anchor].pos, &[fin], 15);
+        let pid = spawn(&mut w, Act::Flood, anchors()[here[0].anchor].pos, &[fin], 60);
         // Not at that board.
         let elsewhere = here.iter().find(|g| anchors()[g.anchor].pos.distance(anchors()[here[0].anchor].pos) > 600.0).unwrap();
         assert!(w.board_accept(Act::Flood, pid, elsewhere.def.id).unwrap_err().contains("Go there"));

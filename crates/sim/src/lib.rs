@@ -7,6 +7,9 @@ pub mod economy;
 pub mod mobs;
 pub mod names;
 pub mod pois;
+pub mod progression;
+pub mod questbits;
+pub mod battleground;
 pub mod quests;
 pub mod world;
 // ── beta-server-track (B05-B08) ──

@@ -4,7 +4,8 @@
 # The bundle carries the release server + Bevy client + assets. Its launcher
 # (scripts/app/launcher.sh) starts a local server (DB in ~/Library/Application
 # Support/Antediluvia) unless one is already listening on 8787, runs the
-# client as $USER, and stops the server it started when the client exits.
+# client with this machine's account id (local_account_id, made by the
+# launcher), and stops the server it started when the client exits.
 #
 # Signing gotcha: ~/Documents is iCloud-synced, so the bundle keeps acquiring
 # FinderInfo/fileprovider xattrs that make codesign fail with "detritus not
@@ -13,10 +14,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 
-cargo build --release -j 4 -p antediluvia-server -p antediluvia-client-bevy
+cargo build --release -j "${CARGO_BUILD_JOBS:-4}" -p antediluvia-server -p antediluvia-client-bevy
 
 APP=dist/Antediluvia.app
-rm -rf "$APP"
+# Keep exactly one current bundle: archive the previous build, never delete it.
+if [ -d "$APP" ]; then
+  OLDV=$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo old)
+  mkdir -p dist/archive
+  mv "$APP" "dist/archive/Antediluvia-$OLDV-$(date +%Y%m%d%H%M).app"
+fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp scripts/app/Info.plist "$APP/Contents/"
 cp scripts/app/launcher.sh "$APP/Contents/MacOS/Antediluvia"
@@ -25,9 +31,16 @@ cp scripts/app/AppIcon.icns "$APP/Contents/Resources/"
 cp target/release/antediluvia-server target/release/antediluvia-client-bevy \
    "$APP/Contents/Resources/"
 
-# Sign in with Apple helper (real SIWA when the bundle is provisioned with the
-# applesignin entitlement; stable local UUID fallback otherwise).
-swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swift
+# Default shard baked into the bundle (beta builds point at the dev shard).
+# DEFAULT_SERVER=none builds a single-player bundle. Overrides at run time:
+# ANTEDILUVIA_SERVER env, then ~/Library/Application Support/Antediluvia/server_url.
+DEFAULT_SERVER="${DEFAULT_SERVER:-ws://159-54-191-177.sslip.io:8080}"
+if [ "$DEFAULT_SERVER" != "none" ]; then
+  printf '%s\n' "$DEFAULT_SERVER" > "$APP/Contents/Resources/default_server_url"
+fi
+
+# No Sign in with Apple helper any more (dropped 2026-11-24, see
+# archive/apple-sign-in/): the launcher makes the account id itself.
 # Bundle assets, but exclude the heavy gathered CC0 sets not yet referenced
 # (photoscan models + HDRIs) so the app stays small. The grass PBR textures
 # (textures/pbr) ARE used by the terrain, so they're kept.

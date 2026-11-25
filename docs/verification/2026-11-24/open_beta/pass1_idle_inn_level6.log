@@ -1,0 +1,13 @@
+[   0.1s] WELCOME QuestOne lvl 6 act eden at (53,60) hp 175/175
+[  30.0s] at (53,60) hp min 175/175 deaths 0 enemies in view 17 nearest 508
+[  60.1s] at (53,60) hp min 175/175 deaths 0 enemies in view 14 nearest 460
+[  90.1s] at (53,60) hp min 175/175 deaths 0 enemies in view 21 nearest 488
+[ 120.2s] at (53,60) hp min 175/175 deaths 0 enemies in view 17 nearest 468
+[ 150.2s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 439
+[ 180.3s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 391
+[ 210.4s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 443
+[ 240.5s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 506
+[ 270.6s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 491
+[ 300.6s] at (53,60) hp min 175/175 deaths 0 enemies in view 22 nearest 431
+IDLE-RESULT name=QuestOne secs=330 deaths=0 min_hp=175/175 attacks_on_me=0 final=(53,60)
+IDLE-OK

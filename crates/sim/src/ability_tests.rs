@@ -628,7 +628,10 @@ fn a_dot_can_kill_and_credits_its_caster() {
     let evs = step_n(&mut w, secs(1.5));
     assert!(!w.zones[&A].entities.contains_key(&mob), "the swarm should finish it");
     assert!(evs.iter().any(|e| matches!(e, SimEvent::Combat { kind: EventKind::Die, .. })));
-    assert!(sheet(&w, pid).xp > xp || sheet(&w, pid).level > 60, "kill credit goes to the caster");
+    // Level 60 is the cap (B10 curve): XP no longer accrues there, so the
+    // credit shows as the kill notice to the caster instead.
+    assert_eq!(sheet(&w, pid).xp, xp);
+    assert!(evs.iter().any(|e| matches!(e, SimEvent::Combat { kind: EventKind::Die, .. })), "kill credit goes to the caster");
 }
 
 // ─── Resources ───────────────────────────────────────────────────────────────
@@ -701,4 +704,23 @@ fn every_first_ability_is_affordable_at_level_one() {
             assert!(pool(&w, pid, class) >= ab.cost * 3, "{} too dear for a fresh {class:?}", ab.id);
         }
     }
+}
+
+/// B10 chunk: a mob hit from beyond its aggro range turns and chases.
+#[test]
+fn a_mob_hit_from_range_answers() {
+    let (mut w, pid) = arena(Class::Warrior, 10);
+    let mob = add_mob(&mut w, 300.0, 5);
+    {
+        let m = ent_mut(&mut w, mob);
+        m.speed = 120.0;
+        m.aggro_range = 50.0; // the player at 300 is far outside it
+    }
+    step_n(&mut w, 5);
+    assert!(ent(&w, mob).pos.distance(HOME) > 290.0, "unprovoked, it stays");
+    // Hurt it as a ranged hit would land: queued damage from the player.
+    let before = ent(&w, mob).pos.distance(HOME);
+    ent_mut(&mut w, mob).provoked = Some((pid, 10.0));
+    step_n(&mut w, 20);
+    assert!(ent(&w, mob).pos.distance(HOME) < before - 50.0, "provoked, it closes in");
 }
