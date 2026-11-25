@@ -121,6 +121,9 @@ pub fn words(s: &Status) -> (String, String, bool) {
     }
 }
 
+/// The in-world chip; hidden while the builder (which has its own) is up.
+#[derive(Component)]
+struct HudTag;
 #[derive(Component)]
 struct StatusRoot;
 #[derive(Component)]
@@ -134,7 +137,7 @@ pub struct BetaPlugin;
 
 impl Plugin for BetaPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn).add_systems(Update, (update_status, refresh_click));
+        app.add_systems(Startup, spawn).add_systems(Update, (update_status, refresh_click, hud_tag));
     }
 }
 
@@ -154,6 +157,7 @@ fn spawn(mut commands: Commands) {
             },
             // Under every window; plain nodes take no clicks.
             GlobalZIndex(-1),
+            HudTag,
         ))
         .with_children(|r| {
             tag(r, 11.0);
@@ -262,6 +266,15 @@ fn update_status(
         *v = if offer && cfg!(target_arch = "wasm32") { Visibility::Inherited } else { Visibility::Hidden };
     }
     *shown = Some(st);
+}
+
+fn hud_tag(session: Res<Session>, mut q: Query<&mut Visibility, With<HudTag>>) {
+    let want = if session.builder.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut q {
+        if *v != want {
+            *v = want;
+        }
+    }
 }
 
 fn refresh_click(q: Query<&Interaction, (Changed<Interaction>, With<RefreshButton>)>) {
