@@ -25,7 +25,7 @@ from having a good first hour.
 | PvP | opt-in flag, capital auto-flag, honor ticks, duels, Relic of Seth battleground (queue, lineage teams, relic, waves, honor ranks + battlemaster wares) | battleground instances, honor ranks/rewards |
 | Scale | 1,000 players drawn on one screen at 46-56 fps windowless; binary delta snapshots, 22.5 KB/s per client, tick avg 6-15 ms at 1,000 (B11, loopback only) | delta + binary snapshots for hosted 1000-in-zone |
 | Art | low-poly CC0 + procedural props/creatures; test-counted variety: 1473 mob silhouettes over mobs.json, 6956 distinct terrain/prop meshes over 5 acts | authored hero art (asset production, not code) |
-| Login | local UUID; SIWA helper without entitlement; builder with 207 look options, live preview, name rules | real Sign in with Apple (owner steps: `docs/beta/APPLE_SIGN_IN.md`) |
+| Login | per-machine id from the launcher (`local-<uuid>`), per-browser 128-bit id (`web_<hex>`); builder with 207 look options, live preview, name rules. Sign in with Apple dropped 2026-11-24 (no Apple Developer Program; `archive/apple-sign-in/`) | an account that survives a cleared browser (e-mail link or passkey); server-side check of the id |
 | Web | playable single + live shard, gate-checked deploys | same, auto-updated each safe release |
 
 ## Integration status (2026-11-23, branch `beta-b01-b09`, not pushed)
