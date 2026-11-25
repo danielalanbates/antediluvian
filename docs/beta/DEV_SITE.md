@@ -1,5 +1,9 @@
 # Private dev site — batesai.org/dev (Daniel, 2026-09-14)
 
+> 2026-11-24: the game is now an open beta at the public `/play/` with no
+> password gate (owner decision; `docs/beta/WEB_PLAY.md`). The dev site below
+> is optional, not a release precondition.
+
 **Rule:** no local test servers or local play-testing. Pre-release builds are
 tested only on the private dev site; /antediluvia gets a build only after it passes there.
 
