@@ -9,6 +9,14 @@
 #   web/dist/pkg/antediluvia.js    wasm-bindgen glue
 #   web/dist/pkg/*_bg.wasm         the engine
 #   web/dist/assets/               models, textures, audio, data
+#   web/dist/build.txt             build stamp + source commit (for deploy notes)
+#
+# Cache busting: index.html loads pkg/ as pkg/<file>?v=<stamp>, the stamp being
+# a hash of the engine, so a host may cache pkg/ forever and a browser can
+# never pair a new page with an old engine. index.html itself must be served
+# revalidated (Cloudflare Pages' default, max-age=0). The page derives its
+# server from its own host (wss://<host>/ws), so one bundle serves any host;
+# a client older than the server is told to refresh (crates/client-bevy/src/beta.rs).
 #
 # Cloudflare Pages rejects any single file over 25 MB, which an unoptimized
 # wasm build exceeds — the wasm-release profile plus wasm-opt is what keeps it
@@ -78,7 +86,11 @@ echo "==> copying loader and assets"
 # can cache pkg/ indefinitely and a rebuild still busts it.
 STAMP=$(shasum -a 256 "$OUT/pkg/antediluvia_bg.wasm" | cut -c1-12)
 sed "s/__BUILD_STAMP__/$STAMP/g" "$ROOT/web/index.html" > "$OUT/index.html"
+grep -q "__BUILD_STAMP__" "$OUT/index.html" && { echo "FAIL: stamp not applied" >&2; exit 1; }
 echo "    build stamp: $STAMP"
+COMMIT=$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+DIRTY=$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+dirty" || true)
+printf 'stamp %s\ncommit %s%s\nbuilt %s\n' "$STAMP" "$COMMIT" "$DIRTY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUT/build.txt"
 # Same exclusions as make_app.sh: assets/ holds 3.2 GB of gathered CC0 source
 # models the game does not reference yet. Shipping the lot would be a 3.3 GB
 # download. Keep this list in step with make_app.sh.
@@ -97,4 +109,12 @@ if [ "$size" -gt "$MAX_BYTES" ]; then
   echo "FAIL: wasm is ${size} bytes, over the ${MAX_BYTES}-byte host limit." >&2
   exit 1
 fi
-echo "OK: under the 25 MB per-file host limit."
+# The limit is per file, so check every file, not only the engine.
+big=$(find "$OUT" -type f -size +$((MAX_BYTES / 1024))k)
+if [ -n "$big" ]; then
+  echo
+  echo "FAIL: over the ${MAX_BYTES}-byte host limit:" >&2
+  echo "$big" >&2
+  exit 1
+fi
+echo "OK: every file ($(find "$OUT" -type f | wc -l | tr -d ' ')) is under the 25 MB per-file host limit."
