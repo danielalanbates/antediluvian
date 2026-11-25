@@ -155,7 +155,7 @@ with sync_playwright() as p:
         if a.expect_status and any(f"[beta] status: {a.expect_status}" in l for l in lines):
             expected = time.time()
             print("saw expected status", a.expect_status, "at", round(expected - t0), "s", flush=True)
-            time.sleep(8)  # let the notice render before the shot
+            pg.wait_for_timeout(8000)  # let the notice render before the shot
             break
         if entered and time.time() - entered >= a.secs:
             break
@@ -163,7 +163,9 @@ with sync_playwright() as p:
             break
         if not a.expect_status and any(BAD_STATUS.search(l) for l in lines):
             break
-        time.sleep(5)
+        # Not time.sleep: the sync API only delivers console events while a
+        # Playwright call runs, and the builder flow waits on a console line.
+        pg.wait_for_timeout(5000)
     pg.screenshot(path=a.out)
     b.close()
 
