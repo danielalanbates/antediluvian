@@ -6,6 +6,13 @@
 //!
 //! Usage: antediluvia-client [name] [ws-url]
 //!   defaults: name="Adam", url="ws://127.0.0.1:8787"
+//!
+//! Existing-account check (save-migration test on a copy of a real DB):
+//! `ANTEDILUVIA_ACCOUNT_ID=<id> ANTEDILUVIA_CHECK=1 antediluvia-client x <url>`
+//! logs in to that account without creating anything, prints one
+//! `CHECK-LOGIN-OK ...` line about the character (never its name), waits until
+//! it appears in a snapshot (`CHECK-IN-WORLD`), then disconnects cleanly so
+//! the server saves it.
 
 use antediluvia_protocol::{ClientMsg, EntityKind, ServerMsg, PROTOCOL_VERSION};
 use futures_util::{SinkExt, StreamExt};
@@ -26,16 +33,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let name = args.next().unwrap_or_else(|| "Adam".into());
     let url = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
 
+    let account = std::env::var("ANTEDILUVIA_ACCOUNT_ID").ok().filter(|s| !s.is_empty());
+    let check = std::env::var("ANTEDILUVIA_CHECK").is_ok();
+
     let (ws, _) = tokio_tungstenite::connect_async(&url).await?;
-    println!("connected to {url} as {name}");
+    if !check {
+        println!("connected to {url} as {name}");
+    }
     let (mut write, mut read) = ws.split();
 
     let send = |m: &ClientMsg| serde_json::to_string(m).unwrap();
     write
         .send(Message::Text(send(&ClientMsg::Login {
             proto: PROTOCOL_VERSION,
-            apple_id: format!("test_{name}"),
-            character_name: Some(name.clone()),
+            // The protocol's historical name for the account id.
+            apple_id: account.clone().unwrap_or_else(|| format!("test_{name}")),
+            // An existing account: never fall back to creating a character.
+            character_name: if account.is_some() { None } else { Some(name.clone()) },
             create: None,
             wire: 0, // JSON snapshots: this tool prints them
         }).into()))
@@ -66,6 +80,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(m) => m,
             Err(_) => continue,
         };
+        if check {
+            // Counts and numbers only: this runs against copies of real saves.
+            match msg {
+                ServerMsg::Welcome { entity_id, character: c, .. } => {
+                    my_id = Some(entity_id);
+                    println!(
+                        "CHECK-LOGIN-OK level={} xp={}/{} act={} x={:.1} y={:.1} hp={}/{} inv={} gold={} class={} quests={} done={} equip={}",
+                        c.level, c.xp, c.max_xp, c.act.as_str(), c.x, c.y, c.health, c.max_health,
+                        c.inventory.len(), c.gold, c.class.is_some(), c.quests.len(), c.quests_done.len(), c.equipment.len()
+                    );
+                }
+                ServerMsg::LoginRejected { reason } => {
+                    println!("CHECK-LOGIN-REJECTED {reason}");
+                    break;
+                }
+                ServerMsg::Snapshot { entities, .. } => {
+                    if my_id.is_some_and(|me| entities.iter().any(|e| e.id == me)) {
+                        println!("CHECK-IN-WORLD entities={}", entities.len());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         match msg {
             ServerMsg::Welcome { entity_id, character, .. } => {
                 my_id = Some(entity_id);

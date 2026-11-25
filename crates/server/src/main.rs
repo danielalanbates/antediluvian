@@ -90,6 +90,17 @@ async fn main() -> anyhow::Result<()> {
     let db = Db::open(&db_path)?;
     tracing::info!("persistence: {db_path}");
 
+    // `--check-db`: open (and so migrate) the DB, load every account the way
+    // a login does, print counts and exit; nonzero if anything failed. Run it
+    // on a copy of the production DB before deploying a new server.
+    if std::env::args().any(|a| a == "--check-db") {
+        let a = db.audit()?;
+        println!("{a:#?}");
+        let ok = a.load_errors == 0 && a.ext_unreadable == 0 && a.act_unknown == 0 && a.loaded == a.accounts;
+        println!("CHECK-DB {}", if ok { "OK" } else { "FAIL" });
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
     let (tx, rx) = mpsc::unbounded_channel::<GameCmd>();
 
     // Game loop task.
@@ -207,7 +218,7 @@ async fn game_loop(mut rx: mpsc::UnboundedReceiver<GameCmd>, db: Db) -> anyhow::
     Ok(())
 }
 
-/// Dev-account allowlist (C14): apple_ids from ANTEDILUVIA_DEV_ACCOUNTS
+/// Dev-account allowlist (C14): account ids from ANTEDILUVIA_DEV_ACCOUNTS
 /// (comma-separated) plus optional dev_accounts.txt (one per line, # comments).
 fn dev_accounts() -> &'static std::collections::HashSet<String> {
     static SET: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
@@ -322,13 +333,16 @@ fn handle_client_msg(
                 }
             };
             if proto != PROTOCOL_VERSION {
-                return reject(conns, "protocol version mismatch");
+                // Clients match on the first three words; the rest is for
+                // older clients, which print the reason as it is.
+                return reject(conns, "protocol version mismatch - a new version of Antediluvia is out: refresh the page (or update the app)");
             }
             if conns.get(&id).map(|c| c.logged_in).unwrap_or(false) {
                 return reject(conns, "already logged in");
             }
 
-            // Load or create the character via apple_id
+            // Load or create the character via the account id (the
+            // protocol's historical `apple_id` field; any opaque string).
             let mut newborn = false;
             let mut sheet = match db.load_by_apple_id(&apple_id) {
                 Ok(Some(mut s)) => {
@@ -435,7 +449,7 @@ fn handle_client_msg(
                     c.send(ServerMsg::Notice { text: "The gate of the garden closes behind you, and the flaming sword turns every way. You are clothed in skins - mercy's first gift. A Sentinel waits by the gate; the road runs west.".into() });
                 }
             }
-            tracing::info!(conn = id, %name, act = act.as_str(), "login (apple_id={apple_id})");
+            tracing::info!(conn = id, %name, act = act.as_str(), "login (account={apple_id})");
         }
         ClientMsg::Move { dx, dy } => {
             if let Some(c) = conns.get(&id) {

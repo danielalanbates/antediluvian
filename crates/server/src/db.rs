@@ -214,7 +214,8 @@ impl Db {
         Ok(row)
     }
 
-    /// Load a character by apple_id, or `None` if this Apple ID hasn't created a character.
+    /// Load a character by account id (stored in the historical `apple_id`
+    /// column), or `None` if this account has not created a character.
     pub fn load_by_apple_id(&self, apple_id: &str) -> Result<Option<CharacterSheet>> {
         let row = self
             .conn
@@ -427,6 +428,65 @@ fn parse_act(s: &str) -> Act {
         "enoch" => Act::Enoch,
         "flood" => Act::Flood,
         _ => Act::Eden,
+    }
+}
+
+/// What `antediluvia-server --check-db` found. Counts only: the tool runs on
+/// copies of the production DB and its output may be pasted into notes.
+#[derive(Debug, Default)]
+pub struct DbAudit {
+    pub accounts: usize,
+    /// Rows with an account id (a player can log in to them).
+    pub with_account_id: usize,
+    pub loaded: usize,
+    pub load_errors: usize,
+    /// `ext` JSON that does not parse. `load` would silently reset class,
+    /// gold, quests and the rest to defaults, so this must be 0.
+    pub ext_unreadable: usize,
+    /// `act` strings `parse_act` does not know (they load as Eden).
+    pub act_unknown: usize,
+    /// Sheets the XP-curve migration will change on their next login.
+    pub xp_migrations: usize,
+    pub levels: std::collections::BTreeMap<u32, usize>,
+    pub guilds: i64,
+    pub mail: i64,
+    pub auctions: i64,
+}
+
+impl Db {
+    /// Load every account the way a login does and count what would go wrong.
+    pub fn audit(&self) -> Result<DbAudit> {
+        let mut a = DbAudit::default();
+        let rows: Vec<(String, bool, String, String)> = {
+            let mut st = self.conn.prepare("SELECT name_key, apple_id IS NOT NULL, act, ext FROM accounts")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            it.collect::<rusqlite::Result<_>>()?
+        };
+        for (key, has_id, act, ext) in rows {
+            a.accounts += 1;
+            a.with_account_id += has_id as usize;
+            if serde_json::from_str::<SheetExt>(&ext).is_err() {
+                a.ext_unreadable += 1;
+            }
+            if !["eden", "hermon", "nephilim", "enoch", "flood"].contains(&act.as_str()) {
+                a.act_unknown += 1;
+            }
+            match self.load(&key) {
+                Ok(Some(mut s)) => {
+                    a.loaded += 1;
+                    if antediluvia_sim::progression::migrate_sheet(&mut s) {
+                        a.xp_migrations += 1;
+                    }
+                    *a.levels.entry(s.level).or_default() += 1;
+                }
+                _ => a.load_errors += 1,
+            }
+        }
+        let count = |t: &str| -> Result<i64> { Ok(self.conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))?) };
+        a.guilds = count("guilds")?;
+        a.mail = count("mail")?;
+        a.auctions = count("auctions")?;
+        Ok(a)
     }
 }
 
