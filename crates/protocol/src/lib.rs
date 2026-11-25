@@ -310,10 +310,16 @@ pub enum DevCmd {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
-    /// First message on a connection. Authenticates an account via Apple ID.
-    /// If creating a new account, a character name must be provided.
+    /// First message on a connection: names the account and, for a new
+    /// account, the character to create.
     Login {
         proto: u32,
+        /// The account id: an opaque per-player string (`local-<uuid>` from
+        /// the macOS launcher, `web_<hex>` from browser storage, `test_...`
+        /// from tooling). The field name is historical: Sign in with Apple
+        /// was dropped on 2026-11-24 and nothing here is Apple-shaped. It
+        /// stays `apple_id` on the wire and in the DB so existing clients and
+        /// saved accounts keep working.
         apple_id: String,
         /// Legacy pre-C13 creation path — ignored when `create` is present.
         character_name: Option<String>,

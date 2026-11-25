@@ -4,7 +4,8 @@
 # The bundle carries the release server + Bevy client + assets. Its launcher
 # (scripts/app/launcher.sh) starts a local server (DB in ~/Library/Application
 # Support/Antediluvia) unless one is already listening on 8787, runs the
-# client as $USER, and stops the server it started when the client exits.
+# client with this machine's account id (local_account_id, made by the
+# launcher), and stops the server it started when the client exits.
 #
 # Signing gotcha: ~/Documents is iCloud-synced, so the bundle keeps acquiring
 # FinderInfo/fileprovider xattrs that make codesign fail with "detritus not
@@ -38,9 +39,8 @@ if [ "$DEFAULT_SERVER" != "none" ]; then
   printf '%s\n' "$DEFAULT_SERVER" > "$APP/Contents/Resources/default_server_url"
 fi
 
-# Sign in with Apple helper (real SIWA when the bundle is provisioned with the
-# applesignin entitlement; stable local UUID fallback otherwise).
-swiftc -O -o "$APP/Contents/Resources/apple-signin" scripts/app/AppleSignIn.swift
+# No Sign in with Apple helper any more (dropped 2026-11-24, see
+# archive/apple-sign-in/): the launcher makes the account id itself.
 # Bundle assets, but exclude the heavy gathered CC0 sets not yet referenced
 # (photoscan models + HDRIs) so the app stays small. The grass PBR textures
 # (textures/pbr) ARE used by the terrain, so they're kept.
